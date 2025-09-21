@@ -5,7 +5,7 @@ Organize your audiobook library with confidence. BookBot is a sleek, powerful, a
 ## Badges & Status
 
 <p align="center">
-<a href="https://github.com/itsbryanman/BookBot/actions"><img src="https://img.shields.io/github/actions/workflow/status/itsbryanman/BookBot/ci.yml?style=for-the-badge&logo=githubactions&logoColor=white" alt="Build Status"></a>
+<a href="https://github.com/itsbryanman/BookBot/actions"><img src="https://img.shields.io/github/actions/workflow/status/itsbryanman/BookBot/ci.yml?branch=main&style=for-the-badge&logo=githubactions&logoColor=white" alt="Build Status"></a>
 <a href="https://img.shields.io/github/languages/top/itsbryanman/BookBot"><img src="https://img.shields.io/github/languages/top/itsbryanman/BookBot?style=for-the-badge&logo=python&logoColor=white" alt="Language"></a>
 <a href="https://github.com/itsbryanman/BookBot/blob/main/LICENSE"><img src="https://img.shields.io/github/license/itsbryanman/BookBot?style=for-the-badge&color=brightgreen" alt="License: MIT"></a>
 <a href="https://github.com/itsbryanman/BookBot/releases"><img src="https://img.shields.io/github/v/release/itsbryanman/BookBot?style=for-the-badge&logo=github&logoColor=white" alt="Latest Release"></a>
