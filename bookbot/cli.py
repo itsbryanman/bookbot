@@ -416,6 +416,43 @@ def provider_set_marketplace(ctx: click.Context, marketplace: str) -> None:
 
 
 @cli.command()
+@click.argument('shell', type=click.Choice(['bash', 'zsh', 'fish', 'all']))
+@click.option('--output-dir', '-o', type=click.Path(path_type=Path),
+              help='Output directory for completion files')
+@click.pass_context
+def completions(ctx: click.Context, shell: str, output_dir: Optional[Path]) -> None:
+    """Generate shell completion scripts."""
+    try:
+        import subprocess
+        from pathlib import Path as PathlibPath
+
+        # Get the script path
+        script_path = PathlibPath(__file__).parent.parent / "scripts" / "completions.py"
+
+        if not script_path.exists():
+            click.echo("Error: Completion generator script not found", err=True)
+            sys.exit(1)
+
+        # Build command
+        cmd = [sys.executable, str(script_path), shell]
+        if output_dir:
+            cmd.extend(['--output-dir', str(output_dir)])
+
+        # Run the completion generator
+        result = subprocess.run(cmd, capture_output=True, text=True)
+
+        if result.returncode == 0:
+            click.echo(result.stdout)
+        else:
+            click.echo(f"Error generating completions: {result.stderr}", err=True)
+            sys.exit(1)
+
+    except Exception as e:
+        click.echo(f"Error generating completions: {e}", err=True)
+        sys.exit(1)
+
+
+@cli.command()
 @click.option('--days', type=int, default=30, help='Show transactions from last N days')
 @click.pass_context
 def history(ctx: click.Context, days: int) -> None:

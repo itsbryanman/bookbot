@@ -46,8 +46,27 @@ clean:  ## Clean build artifacts and cache
 build:  ## Build distribution packages
 	python -m build
 
+package:  ## Build and test packages thoroughly
+	python scripts/package.py
+
+binary:  ## Build single-file binary
+	python scripts/build_binary.py
+
+completions:  ## Generate shell completion scripts
+	mkdir -p completions
+	python scripts/completions.py all --output-dir completions
+
 test-install:  ## Test installation from built package
 	pip install dist/*.whl --force-reinstall
+
+release-patch:  ## Release new patch version
+	python scripts/release.py patch
+
+release-minor:  ## Release new minor version
+	python scripts/release.py minor
+
+release-major:  ## Release new major version
+	python scripts/release.py major
 
 demo:  ## Run demo with sample data
 	@echo "Creating sample audiobook structure..."

@@ -49,6 +49,11 @@ dev = [
 conversion = [
     "ffmpeg-python>=0.2.0",
 ]
+build = [
+    "build>=0.10.0",
+    "twine>=4.0.0",
+    "pyinstaller>=5.0.0",
+]
 
 [project.scripts]
 bookbot = "bookbot.cli:main"
