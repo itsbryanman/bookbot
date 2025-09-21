@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "bookbot"
-version = "0.1.0"
+version = "0.1.1"
 description = "A cross-platform TUI audiobook renamer and organizer"
 readme = "README.md"
 license = {text = "MIT"}
@@ -83,6 +83,8 @@ disallow_untyped_decorators = true
 [tool.ruff]
 target-version = "py310"
 line-length = 88
+
+[tool.ruff.lint]
 select = [
     "E",  # pycodestyle errors
     "W",  # pycodestyle warnings
