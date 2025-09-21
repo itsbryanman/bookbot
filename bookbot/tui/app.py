@@ -1,12 +1,10 @@
 """Main TUI application for BookBot."""
 
-import asyncio
 from pathlib import Path
-from typing import List
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Container, Horizontal, Vertical
+from textual.containers import Container, Horizontal
 from textual.widgets import Button, Footer, Header, Label, TabbedContent, TabPane
 
 from ..config.manager import ConfigManager
@@ -15,11 +13,15 @@ from ..core.models import AudiobookSet
 from ..providers.openlibrary import OpenLibraryProvider
 from .screens import (
     ConversionScreen,
+    DRMLoginScreen,
+    LoginFailure,
+    LoginSuccess,
     MatchReviewScreen,
     PreviewScreen,
     ScanResultsScreen,
-    SourceSelectionScreen
+    SourceSelectionScreen,
 )
+
 
 
 class BookBotApp(App):
@@ -57,11 +59,11 @@ class BookBotApp(App):
         ("ctrl+r", "refresh", "Refresh"),
     ]
 
-    def __init__(self, config_manager: ConfigManager, source_folders: List[Path]):
+    def __init__(self, config_manager: ConfigManager, source_folders: list[Path]):
         super().__init__()
         self.config_manager = config_manager
         self.source_folders = source_folders
-        self.audiobook_sets: List[AudiobookSet] = []
+        self.audiobook_sets: list[AudiobookSet] = []
         self.provider = OpenLibraryProvider()
 
         # Application state
@@ -78,35 +80,25 @@ class BookBotApp(App):
             with TabbedContent(initial="scan"):
                 with TabPane("Source Selection", id="source"):
                     yield SourceSelectionScreen(
-                        self.config_manager,
-                        self.source_folders,
-                        id="source_screen"
+                        self.config_manager, self.source_folders, id="source_screen"
                     )
 
                 with TabPane("Scan Results", id="scan"):
-                    yield ScanResultsScreen(
-                        self.config_manager,
-                        id="scan_screen"
-                    )
+                    yield ScanResultsScreen(self.config_manager, id="scan_screen")
 
                 with TabPane("Match Review", id="match"):
                     yield MatchReviewScreen(
-                        self.config_manager,
-                        self.provider,
-                        id="match_screen"
+                        self.config_manager, self.provider, id="match_screen"
                     )
 
                 with TabPane("Preview", id="preview"):
-                    yield PreviewScreen(
-                        self.config_manager,
-                        id="preview_screen"
-                    )
+                    yield PreviewScreen(self.config_manager, id="preview_screen")
 
                 with TabPane("Convert", id="convert"):
-                    yield ConversionScreen(
-                        self.config_manager,
-                        id="convert_screen"
-                    )
+                    yield ConversionScreen(self.config_manager, id="convert_screen")
+
+                with TabPane("DRM Removal", id="drm_tab"):
+                    yield DRMLoginScreen(id="drm_login_screen")
 
         with Container(classes="status"):
             yield Label("Ready", id="status_label")
@@ -131,6 +123,18 @@ class BookBotApp(App):
         if self.source_folders:
             self.post_message(self.StartScan())
 
+    async def on_drm_login_screen_login_success(self, message: LoginSuccess) -> None:
+        """Handle successful DRM login."""
+        self.update_status("Successfully logged into Audible.")
+        # Optionally, switch to a different screen or enable DRM-related features
+        # For now, just update the status
+        self.query_one(TabbedContent).active = "drm_tab"
+
+    async def on_drm_login_screen_login_failure(self, message: LoginFailure) -> None:
+        """Handle failed DRM login."""
+        self.update_status(f"Audible login failed: {message.error}")
+        self.query_one(TabbedContent).active = "drm_tab"
+
     def update_status(self, message: str) -> None:
         """Update the status label."""
         status_label = self.query_one("#status_label", Label)
@@ -138,17 +142,19 @@ class BookBotApp(App):
 
     class StartScan(App.Message):
         """Message to start scanning."""
+
         pass
 
     class ScanComplete(App.Message):
         """Message when scanning is complete."""
 
-        def __init__(self, audiobook_sets: List[AudiobookSet]):
+        def __init__(self, audiobook_sets: list[AudiobookSet]):
             super().__init__()
             self.audiobook_sets = audiobook_sets
 
     class MatchesFound(App.Message):
         """Message when matches are found."""
+
         pass
 
     async def on_button_pressed(self, event: Button.Pressed) -> None:
@@ -202,7 +208,9 @@ class BookBotApp(App):
             tabbed_content = self.query_one(TabbedContent)
             tabbed_content.active = "scan"
 
-            self.update_status(f"Scan complete: Found {len(self.audiobook_sets)} audiobook set(s)")
+            self.update_status(
+                f"Scan complete: Found {len(self.audiobook_sets)} audiobook set(s)"
+            )
 
         except Exception as e:
             self.update_status(f"Scan failed: {e}")

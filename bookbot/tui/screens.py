@@ -1,25 +1,93 @@
 """TUI screens for BookBot."""
 
-import asyncio
+import webbrowser
 from pathlib import Path
-from typing import List, Optional
 
 from textual.app import ComposeResult
-from textual.containers import Container, Horizontal, Vertical
-from textual.widgets import Button, DataTable, Label, Static, Input, Select, Checkbox, ProgressBar
-from textual.widget import Widget
+from textual.containers import Container, Horizontal
 from textual.message import Message
+from textual.screen import Screen
+from textual.widgets import (
+    Button,
+    Checkbox,
+    DataTable,
+    Input,
+    Label,
+    ProgressBar,
+    Select,
+    Static,
+)
 
 from ..config.manager import ConfigManager
 from ..core.models import AudiobookSet
 from ..core.operations import TransactionManager
+from ..drm.audible_client import AudibleAuthClient
 from ..providers.base import MetadataProvider
+
+
+class LoginSuccess(Message):
+    """Posted on successful login."""
+
+
+class LoginFailure(Message):
+    """Posted on login failure."""
+
+    def __init__(self, error: str) -> None:
+        super().__init__()
+        self.error = error
+
+
+class DRMLoginScreen(Screen):
+    """Screen for handling Audible DRM login."""
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.auth_client = AudibleAuthClient()
+
+    def compose(self) -> ComposeResult:
+        yield Container(
+            Label("Audible Authentication", classes="section-title"),
+            Static(
+                "To remove DRM from Audible audiobooks, you need to authenticate with your Audible account. "
+                "This process will open a browser window for you to log in securely.",
+                classes="description",
+            ),
+            Static("", id="user_code_display"),
+            Button("Begin Login", id="begin_login", variant="primary"),
+            id="drm_login_container",
+        )
+
+    async def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "begin_login":
+            await self.begin_auth()
+
+    @work
+    async def begin_auth(self) -> None:
+        """Start the authentication process."""
+        self.query_one("#begin_login", Button).disabled = True
+        user_code_display = self.query_one("#user_code_display", Static)
+        user_code_display.update("Requesting device code...")
+
+        try:
+            device_code_response = self.auth_client.get_device_code()
+            webbrowser.open(device_code_response.verification_uri)
+            user_code_display.update(
+                f"Please enter this code in your browser: [b]{device_code_response.user_code}[/b]"
+            )
+            self.auth_client.poll_for_token()
+            self.post_message(LoginSuccess())
+        except Exception as e:
+            self.post_message(LoginFailure(str(e)))
+            user_code_display.update(f"An error occurred: {e}")
+            self.query_one("#begin_login", Button).disabled = False
 
 
 class SourceSelectionScreen(Static):
     """Screen for selecting source directories."""
 
-    def __init__(self, config_manager: ConfigManager, source_folders: List[Path], **kwargs):
+    def __init__(
+        self, config_manager: ConfigManager, source_folders: list[Path], **kwargs
+    ):
         super().__init__(**kwargs)
         self.config_manager = config_manager
         self.source_folders = source_folders
@@ -42,13 +110,13 @@ class ScanResultsScreen(Static):
     def __init__(self, config_manager: ConfigManager, **kwargs):
         super().__init__(**kwargs)
         self.config_manager = config_manager
-        self.audiobook_sets: List[AudiobookSet] = []
+        self.audiobook_sets: list[AudiobookSet] = []
 
     def compose(self):
         yield Label("Scan Results", classes="section-title")
         yield DataTable(id="scan_results_table")
 
-    def set_audiobook_sets(self, audiobook_sets: List[AudiobookSet]):
+    def set_audiobook_sets(self, audiobook_sets: list[AudiobookSet]):
         """Set the audiobook sets to display."""
         self.audiobook_sets = audiobook_sets
 
@@ -60,30 +128,36 @@ class ScanResultsScreen(Static):
 
         # Add rows
         for audiobook_set in audiobook_sets:
-            warnings = f"{len(audiobook_set.warnings)} warning(s)" if audiobook_set.warnings else "None"
+            warnings = (
+                f"{len(audiobook_set.warnings)} warning(s)"
+                if audiobook_set.warnings
+                else "None"
+            )
             table.add_row(
                 audiobook_set.source_path.name,
                 str(audiobook_set.total_tracks),
                 str(audiobook_set.disc_count),
                 audiobook_set.raw_title_guess or "Unknown",
-                warnings
+                warnings,
             )
 
 
 class MatchReviewScreen(Static):
     """Screen for reviewing metadata matches."""
 
-    def __init__(self, config_manager: ConfigManager, provider: MetadataProvider, **kwargs):
+    def __init__(
+        self, config_manager: ConfigManager, provider: MetadataProvider, **kwargs
+    ):
         super().__init__(**kwargs)
         self.config_manager = config_manager
         self.provider = provider
-        self.audiobook_sets: List[AudiobookSet] = []
+        self.audiobook_sets: list[AudiobookSet] = []
 
     def compose(self):
         yield Label("Metadata Matches", classes="section-title")
         yield DataTable(id="matches_table")
 
-    async def find_matches(self, audiobook_sets: List[AudiobookSet]):
+    async def find_matches(self, audiobook_sets: list[AudiobookSet]):
         """Find matches for audiobook sets."""
         self.audiobook_sets = audiobook_sets
 
@@ -102,16 +176,19 @@ class MatchReviewScreen(Static):
 
                 table.add_row(
                     audiobook_set.raw_title_guess or "Unknown",
-                    f"{best_match.identity.title} - {', '.join(best_match.identity.authors)}",
+                    (
+                        f"{best_match.identity.title} - "
+                        f"{', '.join(best_match.identity.authors)}"
+                    ),
                     f"{best_match.confidence:.2f}",
-                    "✓ Accept" if best_match.confidence > 0.85 else "⚠ Review"
+                    "✓ Accept" if best_match.confidence > 0.85 else "⚠ Review",
                 )
             else:
                 table.add_row(
                     audiobook_set.raw_title_guess or "Unknown",
                     "No matches found",
                     "0.00",
-                    "❌ Manual"
+                    "❌ Manual",
                 )
 
 
@@ -121,13 +198,13 @@ class PreviewScreen(Static):
     def __init__(self, config_manager: ConfigManager, **kwargs):
         super().__init__(**kwargs)
         self.config_manager = config_manager
-        self.audiobook_sets: List[AudiobookSet] = []
+        self.audiobook_sets: list[AudiobookSet] = []
 
     def compose(self):
         yield Label("Preview Changes", classes="section-title")
         yield DataTable(id="preview_table")
 
-    def set_audiobook_sets(self, audiobook_sets: List[AudiobookSet]):
+    def set_audiobook_sets(self, audiobook_sets: list[AudiobookSet]):
         """Set audiobook sets and generate preview."""
         self.audiobook_sets = audiobook_sets
 
@@ -136,6 +213,7 @@ class PreviewScreen(Static):
         table.add_columns("Current Name", "Proposed Name", "Status")
 
         from ..core.templates import TemplateEngine
+
         template_engine = TemplateEngine()
 
         for audiobook_set in audiobook_sets:
@@ -159,6 +237,7 @@ class PreviewScreen(Static):
             transaction_manager = TransactionManager(self.config_manager)
 
             from ..core.templates import TemplateEngine
+
             template_engine = TemplateEngine()
 
             # Create rename plan
@@ -175,19 +254,23 @@ class PreviewScreen(Static):
 
                     if new_filename != track.src_path.name:
                         new_path = track.src_path.parent / new_filename
-                        rename_operations.append({
-                            'operation': 'rename',
-                            'source': track.src_path,
-                            'destination': new_path,
-                            'audiobook_set': audiobook_set,
-                            'track': track
-                        })
+                        rename_operations.append(
+                            {
+                                "operation": "rename",
+                                "source": track.src_path,
+                                "destination": new_path,
+                                "audiobook_set": audiobook_set,
+                                "track": track,
+                            }
+                        )
 
             if not rename_operations:
                 return True  # No operations needed
 
             # Execute operations in transaction
-            transaction_id = await transaction_manager.execute_operations(rename_operations)
+            transaction_id = await transaction_manager.execute_operations(
+                rename_operations
+            )
 
             # Update table to show completion
             table = self.query_one("#preview_table", DataTable)
@@ -196,7 +279,7 @@ class PreviewScreen(Static):
             table.add_row(
                 f"Renamed {len(rename_operations)} files",
                 "✓ Success",
-                transaction_id[:8] + "..."
+                transaction_id[:8] + "...",
             )
 
             return True
@@ -216,7 +299,7 @@ class ConversionScreen(Static):
     def __init__(self, config_manager: ConfigManager, **kwargs):
         super().__init__(**kwargs)
         self.config_manager = config_manager
-        self.audiobook_sets: List[AudiobookSet] = []
+        self.audiobook_sets: list[AudiobookSet] = []
         self.conversion_in_progress = False
 
     class ConversionComplete(Message):
@@ -239,13 +322,17 @@ class ConversionScreen(Static):
 
             with Horizontal():
                 yield Label("Audio Quality:")
-                yield Select([
-                    ("High Quality (192k)", "192k"),
-                    ("Standard (128k)", "128k"),
-                    ("Compressed (64k)", "64k"),
-                    ("VBR High", "vbr5"),
-                    ("VBR Standard", "vbr4")
-                ], value="128k", id="quality_select")
+                yield Select(
+                    [
+                        ("High Quality (192k)", "192k"),
+                        ("Standard (128k)", "128k"),
+                        ("Compressed (64k)", "64k"),
+                        ("VBR High", "vbr5"),
+                        ("VBR Standard", "vbr4"),
+                    ],
+                    value="128k",
+                    id="quality_select",
+                )
 
             with Horizontal():
                 yield Checkbox("Normalize Audio", False, id="normalize_check")
@@ -263,7 +350,7 @@ class ConversionScreen(Static):
             yield Button("Start Conversion", id="start_conversion", variant="primary")
             yield Button("Cancel", id="cancel_conversion", disabled=True)
 
-    def set_audiobook_sets(self, audiobook_sets: List[AudiobookSet]) -> None:
+    def set_audiobook_sets(self, audiobook_sets: list[AudiobookSet]) -> None:
         """Set the audiobook sets for conversion."""
         self.audiobook_sets = audiobook_sets
 
@@ -284,7 +371,7 @@ class ConversionScreen(Static):
                 audiobook_set.raw_title_guess or "Unknown",
                 str(audiobook_set.total_tracks),
                 output_name,
-                "⏳ Pending"
+                "⏳ Pending",
             )
 
         # Enable conversion button if we have audiobooks
@@ -309,7 +396,11 @@ class ConversionScreen(Static):
         normalize_check = self.query_one("#normalize_check", Checkbox)
         cover_art_check = self.query_one("#cover_art_check", Checkbox)
 
-        output_dir = Path(output_dir_input.value) if output_dir_input.value else Path.cwd() / "converted"
+        output_dir = (
+            Path(output_dir_input.value)
+            if output_dir_input.value
+            else Path.cwd() / "converted"
+        )
         quality = quality_select.value
         normalize = normalize_check.value
         include_cover = cover_art_check.value
@@ -358,14 +449,18 @@ class ConversionScreen(Static):
                 if not self.conversion_in_progress:  # Check for cancellation
                     break
 
-                self.update_status(f"Converting {audiobook_set.raw_title_guess or 'Unknown'}...")
+                self.update_status(
+                    f"Converting {audiobook_set.raw_title_guess or 'Unknown'}..."
+                )
 
                 # Update table row status
                 table.update_cell(f"row{i}", "Status", "🔄 Converting")
 
                 try:
                     # Perform conversion
-                    success = await pipeline.convert_audiobook_set(audiobook_set, conv_config)
+                    success = await pipeline.convert_audiobook_set(
+                        audiobook_set, conv_config
+                    )
 
                     if success:
                         table.update_cell(f"row{i}", "Status", "✅ Complete")
@@ -373,17 +468,23 @@ class ConversionScreen(Static):
                         table.update_cell(f"row{i}", "Status", "❌ Failed")
 
                 except Exception as e:
-                    table.update_cell(f"row{i}", "Status", f"❌ Error: {str(e)[:20]}...")
+                    table.update_cell(
+                        f"row{i}", "Status", f"❌ Error: {str(e)[:20]}..."
+                    )
 
                 # Update progress
                 progress_bar.progress = i + 1
 
             if self.conversion_in_progress:
                 self.update_status("Conversion completed!")
-                self.post_message(self.ConversionComplete(True, "All conversions completed"))
+                self.post_message(
+                    self.ConversionComplete(True, "All conversions completed")
+                )
             else:
                 self.update_status("Conversion cancelled")
-                self.post_message(self.ConversionComplete(False, "Conversion was cancelled"))
+                self.post_message(
+                    self.ConversionComplete(False, "Conversion was cancelled")
+                )
 
         except ImportError:
             self.update_status("Error: FFmpeg is required for conversion")

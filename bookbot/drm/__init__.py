@@ -1,7 +1,8 @@
-"""DRM removal functionality for BookBot."""
+"""
+DRM removal utilities for BookBot.
+"""
 
-from .detector import DRMDetector
-from .remover import DRMRemover
-from .models import DRMInfo, DRMType
+from . import secure_storage
+from .audible_client import AudibleAuthClient
 
-__all__ = ["DRMDetector", "DRMRemover", "DRMInfo", "DRMType"]
+__all__ = ["AudibleAuthClient", "secure_storage"]
