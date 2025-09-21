@@ -30,10 +30,10 @@ Messy audiobook folders are a thing of the past. BookBot was built to solve the 
 
 ## Features
 
-### 🔒 Safe & Reversible Operations
+### Safe & Reversible Operations
 A "dry-run" by default workflow means you preview every change. All file operations are atomic (all-or-nothing) and logged, allowing you to undo any transaction with a simple command.
 
-### 🧠 Smart Metadata Matching
+### Smart Metadata Matching
 Integrates seamlessly with multiple providers:
 - **Open Library** (default, free): Comprehensive book database
 - **Google Books**: Extensive catalog with rich metadata (API key required)
@@ -42,29 +42,29 @@ Integrates seamlessly with multiple providers:
 
 Uses fuzzy string matching for impressive accuracy across all providers.
 
-### 🎨 Flexible Naming Templates
+###  Flexible Naming Templates
 Fully customizable filename and folder structures using a simple token system (e.g., `{AuthorLastFirst}/{Title} ({Year})`).
 
-### 💿 Multi-Disc & Complex Collection Support
+###  Multi-Disc & Complex Collection Support
 Intelligently parses disc numbers from folder or file names to correctly handle even the most complex audiobook sets.
 
-### 🔓 DRM Removal
+###  DRM Removal
 Built-in support for removing DRM from supported formats:
 - **Audible AAX files** (requires activation bytes)
 - Detection and handling of various DRM types
 - Safe conversion to DRM-free formats
 
-### 📱 M4B Conversion Pipeline
+###  M4B Conversion Pipeline
 An optional feature to merge audiobook tracks into a single M4B file, powered by FFmpeg. Features include:
 - Smart encoding (stream-copying AAC tracks, transcoding others)
 - Automatic chapter marker generation from track boundaries
 - Complete metadata tagging, including cover art
 - Optional EBU R128 loudness normalization for a consistent listening experience
 
-### 💻 Cross-Platform TUI
+###  Cross-Platform TUI
 A clean, modern, and intuitive terminal interface built with Textual that works flawlessly on Windows, macOS, and Linux.
 
-### ⚙️ Configuration Profiles
+###  Configuration Profiles
 Switch between pre-configured setups for different use cases like safe (rename only), full (rename & tag), and plex (optimized for Plex Media Server).
 
 ## Quick Start
