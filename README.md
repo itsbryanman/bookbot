@@ -1,3 +1,6 @@
+<p align="center">
+  <img src=".github/assets/BookBot.png" alt="BookBot Logo" width="200"/>
+</p>
 # BookBot: The Audiophile's Audiobook Organizer
 
 Organize your audiobook library with confidence. BookBot is a sleek, powerful, and safety-first TUI (Terminal User Interface) for renaming, organizing, and converting your audiobook collection. Built for audiobook lovers who crave order, it combines smart metadata matching with a bulletproof file operation system.
