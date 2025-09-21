@@ -6,12 +6,12 @@ Organize your audiobook library with confidence. BookBot is a sleek, powerful, a
 
 <p align="center">
 <a href="https://github.com/itsbryanman/BookBot/actions"><img src="https://img.shields.io/github/actions/workflow/status/itsbryanman/BookBot/ci.yml?style=for-the-badge&logo=githubactions&logoColor=white" alt="Build Status"></a>
-<a href="https://pypi.org/project/bookbot/"><img src="https://img.shields.io/pypi/v/bookbot?style=for-the-badge&logo=pypi&logoColor=white&color=blue" alt="PyPI Version"></a>
-<a href="https://pypi.org/project/bookbot/"><img src="https://img.shields.io/pypi/pyversions/bookbot?style=for-the-badge&logo=python&logoColor=white" alt="Python Versions"></a>
+<a href="https://img.shields.io/github/languages/top/itsbryanman/BookBot"><img src="https://img.shields.io/github/languages/top/itsbryanman/BookBot?style=for-the-badge&logo=python&logoColor=white" alt="Language"></a>
 <a href="https://github.com/itsbryanman/BookBot/blob/main/LICENSE"><img src="https://img.shields.io/github/license/itsbryanman/BookBot?style=for-the-badge&color=brightgreen" alt="License: MIT"></a>
+<a href="https://github.com/itsbryanman/BookBot/releases"><img src="https://img.shields.io/github/v/release/itsbryanman/BookBot?style=for-the-badge&logo=github&logoColor=white" alt="Latest Release"></a>
 <br>
 <a href="https://github.com/psf/black"><img src="https://img.shields.io/badge/code%20style-black-000000.svg?style=for-the-badge&logo=python&logoColor=white" alt="Code Style: Black"></a>
-<a href="https://github.com/astral-sh/ruff"><img src="https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json&style=for-the-badge" alt="Linter: Ruff"></a>
+<a href="https://github.com/astral-sh/ruff"><img src="https://img.shields.io/badge/linter-ruff-FCC21B.svg?style=for-the-badge&logo=ruff&logoColor=white" alt="Linter: Ruff"></a>
 <a href="http://mypy-lang.org/"><img src="https://img.shields.io/badge/typed-mypy-blue.svg?style=for-the-badge&logo=python&logoColor=white" alt="Type Checking: Mypy"></a>
 <a href="https://github.com/itsbryanman/BookBot/"><img src="https://img.shields.io/github/stars/itsbryanman/BookBot?style=for-the-badge&logo=github&logoColor=white" alt="GitHub Stars"></a>
 </p>
@@ -42,29 +42,29 @@ Integrates seamlessly with multiple providers:
 
 Uses fuzzy string matching for impressive accuracy across all providers.
 
-###  Flexible Naming Templates
+### Flexible Naming Templates
 Fully customizable filename and folder structures using a simple token system (e.g., `{AuthorLastFirst}/{Title} ({Year})`).
 
-###  Multi-Disc & Complex Collection Support
+### Multi-Disc & Complex Collection Support
 Intelligently parses disc numbers from folder or file names to correctly handle even the most complex audiobook sets.
 
-###  DRM Removal
+### DRM Removal
 Built-in support for removing DRM from supported formats:
 - **Audible AAX files** (requires activation bytes)
 - Detection and handling of various DRM types
 - Safe conversion to DRM-free formats
 
-###  M4B Conversion Pipeline
+### M4B Conversion Pipeline
 An optional feature to merge audiobook tracks into a single M4B file, powered by FFmpeg. Features include:
 - Smart encoding (stream-copying AAC tracks, transcoding others)
 - Automatic chapter marker generation from track boundaries
 - Complete metadata tagging, including cover art
 - Optional EBU R128 loudness normalization for a consistent listening experience
 
-###  Cross-Platform TUI
+### Cross-Platform TUI
 A clean, modern, and intuitive terminal interface built with Textual that works flawlessly on Windows, macOS, and Linux.
 
-###  Configuration Profiles
+### Configuration Profiles
 Switch between pre-configured setups for different use cases like safe (rename only), full (rename & tag), and plex (optimized for Plex Media Server).
 
 ## Quick Start
@@ -91,64 +91,259 @@ The TUI will guide you through a simple, 4-step process:
 3. **Preview**: You see a full list of all proposed file and folder changes before anything is touched
 4. **Apply**: Once you confirm, BookBot executes the rename operations safely and atomically
 
-## Usage & Commands
+## Complete Feature Guide
 
-### Main Commands
-- `bookbot scan <folder>`: Scan a directory and print a summary of found audiobooks
-- `bookbot tui <folder...>`: Launch the interactive TUI for one or more folders
-- `bookbot convert <in> -o <out>`: Convert audiobooks to single M4B files
-- `bookbot undo <transaction-id>`: Revert a previously applied operation
+### Core Commands
 
-### DRM Commands
-- `bookbot drm detect <files...>`: Detect DRM protection on audio files
-- `bookbot drm remove <files...> -o <output>`: Remove DRM from supported files
-
-### Provider Management
-- `bookbot provider list`: List available metadata providers
-- `bookbot provider enable <provider>`: Enable a metadata provider
-- `bookbot provider disable <provider>`: Disable a metadata provider
-- `bookbot provider set-key googlebooks <api-key>`: Set Google Books API key
-
-### Configuration & Utilities
-- `bookbot config list`: List available configuration profiles
-- `bookbot config show [profile]`: Show the configuration for the current or a specific profile
-- `bookbot history`: Show a log of recent transactions
-- `bookbot --help`: Show detailed help for all commands and options
-
-## Configuration & Templates
-
-BookBot is powerful out-of-the-box but highly customizable via TOML configuration files.
-
-### Profiles
-Profiles are an easy way to switch between different settings. For example, to run in Plex-optimized mode:
-
+#### Scanning and Organization
 ```bash
-bookbot tui --profile plex /path/to/audiobooks
+# Basic scan of a directory
+bookbot scan /path/to/audiobooks
+
+# Scan with custom profile
+bookbot scan /path/to/audiobooks --profile plex
+
+# Scan without tagging
+bookbot scan /path/to/audiobooks --no-tag
+
+# Scan with custom template
+bookbot scan /path/to/audiobooks --template audible
+
+# Scan with language preference
+bookbot scan /path/to/audiobooks --lang es
 ```
 
-### Metadata Providers
-Configure which metadata sources to use:
-
+#### Interactive TUI
 ```bash
-# List available providers
+# Launch TUI for single folder
+bookbot tui /path/to/audiobooks
+
+# Launch TUI for multiple folders
+bookbot tui /folder1 /folder2 /folder3
+
+# Launch TUI with specific profile
+bookbot tui /path/to/audiobooks --profile plex
+```
+
+#### M4B Conversion
+```bash
+# Basic conversion
+bookbot convert /input/folder -o /output/folder
+
+# High quality conversion with VBR
+bookbot convert /input/folder -o /output/folder --vbr 5
+
+# Conversion with audio normalization
+bookbot convert /input/folder -o /output/folder --normalize
+
+# Conversion without cover art
+bookbot convert /input/folder -o /output/folder --no-art
+
+# Dry run to see conversion plan
+bookbot convert /input/folder -o /output/folder --dry-run
+```
+
+### DRM Management
+
+#### Detection
+```bash
+# Detect DRM on individual files
+bookbot drm detect file1.aax file2.m4a
+
+# Detect DRM recursively in directories
+bookbot drm detect /audiobook/folder --recursive
+
+# Detect DRM on all audio files in current directory
+bookbot drm detect *.{mp3,m4a,aax,aaxc}
+```
+
+#### Removal
+```bash
+# Remove DRM from AAX files (requires activation bytes)
+bookbot drm remove file.aax --activation-bytes XXXXXXXX
+
+# Remove DRM with custom output directory
+bookbot drm remove *.aax -o /output/folder --activation-bytes XXXXXXXX
+
+# Dry run to see what would be processed
+bookbot drm remove *.aax --dry-run --activation-bytes XXXXXXXX
+
+# Process entire directory recursively
+bookbot drm remove /folder --recursive --activation-bytes XXXXXXXX
+```
+
+### Provider Management
+
+#### Configuration
+```bash
+# List all available providers and their status
 bookbot provider list
 
 # Enable Google Books (requires API key)
-bookbot provider set-key googlebooks YOUR_API_KEY
+bookbot provider set-key googlebooks YOUR_API_KEY_HERE
+bookbot provider enable googlebooks
 
-# Set Audible marketplace
-bookbot provider set-marketplace UK
+# Enable LibriVox for public domain books
+bookbot provider enable librivox
+
+# Enable Audible metadata
+bookbot provider enable audible
+
+# Set Audible marketplace region
+bookbot provider set-marketplace UK  # or US, CA, AU, FR, DE, IT, ES, JP, IN
+
+# Disable a provider
+bookbot provider disable audible
 ```
 
-### Naming Templates
-Customize file and folder names using a rich set of tokens in your config file or directly on the command line.
+### Configuration Management
 
-**Example Template:**
-- Folder: `{AuthorLastFirst}/{SeriesName}/{SeriesIndex} - {Title} ({Year})`
-- File: `{DiscPad}{TrackPad} - {Title}`
+#### Profiles
+```bash
+# List available configuration profiles
+bookbot config list
 
-**Available Tokens:**
-`{Author}`, `{AuthorLastFirst}`, `{Title}`, `{ShortTitle}`, `{SeriesName}`, `{SeriesIndex}`, `{Year}`, `{Language}`, `{Narrator}`, `{DiscPad}`, `{TrackPad}`, `{Disc}`, `{Track}`, `{TrackTitle}`, `{ISBN}`.
+# Show current configuration
+bookbot config show
+
+# Show specific profile configuration
+bookbot config show plex
+
+# Reset configuration to defaults
+bookbot config reset
+```
+
+#### Available Profiles
+- **default**: Standard audiobook naming
+- **plex**: Plex Media Server optimized naming
+- **audible**: Audible-style naming with narrator
+- **series**: Series-focused organization
+- **safe**: Rename only, no tagging
+- **full**: Complete rename and tag operations
+
+### Advanced Features
+
+#### Transaction Management
+```bash
+# View operation history
+bookbot history
+
+# View history for specific time period
+bookbot history --days 7
+
+# Undo a specific transaction
+bookbot undo abc123def
+
+# Undo most recent transaction
+bookbot undo $(bookbot history --days 1 | head -1 | cut -d' ' -f1)
+```
+
+#### Shell Completions
+```bash
+# Generate completions for your shell
+bookbot completions bash > /etc/bash_completion.d/bookbot
+bookbot completions zsh > ~/.zsh/completions/_bookbot
+bookbot completions fish > ~/.config/fish/completions/bookbot.fish
+
+# Generate all completions to a directory
+bookbot completions all -o ./completions
+```
+
+### Template System
+
+#### Available Tokens
+- `{Author}`: Primary author name
+- `{AuthorLastFirst}`: Author in "Last, First" format
+- `{Title}`: Book title
+- `{ShortTitle}`: Abbreviated title
+- `{SeriesName}`: Series name if available
+- `{SeriesIndex}`: Book number in series
+- `{Year}`: Publication year
+- `{Language}`: Book language
+- `{Narrator}`: Audiobook narrator
+- `{DiscPad}`: Zero-padded disc number
+- `{TrackPad}`: Zero-padded track number
+- `{Disc}`: Disc number
+- `{Track}`: Track number
+- `{TrackTitle}`: Individual track/chapter title
+- `{ISBN}`: ISBN identifier
+
+#### Template Examples
+```bash
+# Folder templates
+"{AuthorLastFirst}/{Title} ({Year})"
+# Result: "Sanderson, Brandon/The Way of Kings (2010)"
+
+"{SeriesName}/{SeriesIndex} - {Title}"
+# Result: "The Stormlight Archive/01 - The Way of Kings"
+
+"{Author}/{SeriesName} {SeriesIndex} - {Title} ({Narrator})"
+# Result: "Brandon Sanderson/The Stormlight Archive 01 - The Way of Kings (Michael Kramer)"
+
+# File templates
+"{DiscPad}{TrackPad} - {TrackTitle}"
+# Result: "0101 - Prologue"
+
+"Chapter {TrackPad} - {Title}"
+# Result: "Chapter 01 - The Way of Kings"
+
+"{Author} - {Title} - {TrackPad}"
+# Result: "Brandon Sanderson - The Way of Kings - 01"
+```
+
+### TUI Navigation
+
+#### Keyboard Shortcuts
+- **Tab/Shift+Tab**: Navigate between screens
+- **Enter**: Confirm selections
+- **Escape**: Cancel operations
+- **Ctrl+C**: Quit application
+- **Ctrl+H**: Show help
+- **Ctrl+S**: Save configuration
+- **Ctrl+R**: Refresh current view
+
+#### TUI Workflow Screens
+1. **Source Selection**: Choose and configure source directories
+2. **Scan Results**: Review discovered audiobook sets and warnings
+3. **Match Review**: Examine metadata matches and confidence scores
+4. **Preview**: See proposed changes before applying
+5. **Convert**: Configure and execute M4B conversion
+
+### Troubleshooting
+
+#### Common Issues
+```bash
+# If Google Books isn't working
+bookbot provider list  # Check if API key is set
+bookbot provider set-key googlebooks YOUR_KEY
+
+# If FFmpeg is missing for conversion
+# Install FFmpeg on your system first
+sudo apt install ffmpeg  # Ubuntu/Debian
+brew install ffmpeg      # macOS
+choco install ffmpeg     # Windows
+
+# If activation bytes are needed for AAX files
+# Extract from your Audible account using tools like:
+# - audible-activator
+# - AAXtoMP3
+# Then use: bookbot drm remove file.aax --activation-bytes XXXXXXXX
+
+# Clear cache if metadata seems stale
+rm -rf ~/.cache/bookbot/
+
+# Reset configuration if issues persist
+bookbot config reset
+```
+
+#### Debug Mode
+```bash
+# Run with verbose logging
+bookbot --log debug.log scan /path/to/audiobooks
+
+# Check transaction logs
+bookbot history --days 30
+```
 
 ## Alternative Installation Methods
 
@@ -165,6 +360,9 @@ git clone https://github.com/itsbryanman/BookBot.git
 cd BookBot
 pip install -e .
 ```
+
+### Binary Releases
+Download pre-built binaries from the [releases page](https://github.com/itsbryanman/BookBot/releases) for Windows, macOS, and Linux.
 
 ## Contributing
 
@@ -189,9 +387,20 @@ pytest
 ```
 
 4. **Run pre-commit checks** before submitting a PR:
-This will format, lint, and type-check your code.
 ```bash
 make pre-commit
+```
+
+### Available Make Commands
+```bash
+make help          # Show all available commands
+make install-dev   # Install development dependencies
+make test          # Run test suite
+make lint          # Run linting
+make format        # Format code
+make build         # Build packages
+make binary        # Build single-file executable
+make completions   # Generate shell completions
 ```
 
 ## Credits & Acknowledgements
