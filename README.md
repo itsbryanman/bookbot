@@ -1,5 +1,5 @@
 <p align="center">
-  <img src=".github/assets/BookBot.png" alt="BookBot Logo" width="200"/>
+  <img src=".github/assets/bookBot.png" alt="BookBot Logo" width="200"/>
 </p>
 # BookBot: The Audiophile's Audiobook Organizer
 
