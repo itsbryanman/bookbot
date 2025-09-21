@@ -83,14 +83,33 @@ class ConversionConfig(BaseModel):
         return Path(v) if isinstance(v, str) else v
 
 
+class GoogleBooksConfig(BaseModel):
+    """Google Books API configuration."""
+    enabled: bool = False
+    api_key: Optional[str] = None
+
+class LibriVoxConfig(BaseModel):
+    """LibriVox configuration."""
+    enabled: bool = True
+
+class AudibleConfig(BaseModel):
+    """Audible configuration."""
+    enabled: bool = True
+    marketplace: str = "US"  # US, UK, CA, AU, FR, DE, IT, ES, JP, IN
+
 class ProviderConfig(BaseModel):
     """Metadata provider configuration."""
-    enabled_providers: List[str] = Field(default_factory=lambda: ["openlibrary"])
+    priority_order: List[str] = Field(default_factory=lambda: ["openlibrary", "googlebooks", "librivox", "audible"])
     cache_enabled: bool = True
     cache_size_mb: int = 100
     rate_limit_delay: float = 0.1
     request_timeout: int = 30
     language_preference: str = "en"
+
+    # Provider-specific configurations
+    google_books: GoogleBooksConfig = Field(default_factory=GoogleBooksConfig)
+    librivox: LibriVoxConfig = Field(default_factory=LibriVoxConfig)
+    audible: AudibleConfig = Field(default_factory=AudibleConfig)
 
 
 class Config(BaseModel):

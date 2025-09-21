@@ -283,6 +283,138 @@ def config_reset(ctx: click.Context) -> None:
     click.echo("Configuration reset to defaults")
 
 
+@cli.group()
+def provider() -> None:
+    """Metadata provider management commands."""
+    pass
+
+
+@provider.command('list')
+@click.pass_context
+def provider_list(ctx: click.Context) -> None:
+    """List available metadata providers."""
+    try:
+        from .providers.manager import ProviderManager
+
+        config_manager = ctx.obj['config_manager']
+        provider_manager = ProviderManager(config_manager)
+
+        providers_info = provider_manager.list_providers()
+
+        click.echo("Available metadata providers:")
+        click.echo("")
+
+        for provider_id, info in providers_info.items():
+            status_icon = "✅" if info["status"] == "enabled" else "❌"
+            click.echo(f"{status_icon} {info['name']} ({provider_id})")
+            click.echo(f"   Description: {info['description']}")
+            click.echo(f"   Requires API Key: {info['requires_api_key']}")
+
+            if provider_id == "googlebooks" and info.get("api_key_provided") is False:
+                click.echo("   ⚠️  API key not configured - provider disabled")
+            elif provider_id == "audible" and "marketplace" in info:
+                click.echo(f"   Marketplace: {info['marketplace']}")
+
+            click.echo("")
+
+    except ImportError as e:
+        click.echo(f"Error: Missing dependency: {e}", err=True)
+        sys.exit(1)
+
+
+@provider.command('enable')
+@click.argument('provider_name', type=str)
+@click.pass_context
+def provider_enable(ctx: click.Context, provider_name: str) -> None:
+    """Enable a metadata provider."""
+    config_manager = ctx.obj['config_manager']
+    config = config_manager.load_config()
+
+    provider_name = provider_name.lower()
+
+    if provider_name == "googlebooks":
+        if not config.providers.google_books.api_key:
+            click.echo("Error: Google Books requires an API key. Set it first with:")
+            click.echo("  bookbot provider set-key googlebooks YOUR_API_KEY")
+            sys.exit(1)
+        config.providers.google_books.enabled = True
+    elif provider_name == "librivox":
+        config.providers.librivox.enabled = True
+    elif provider_name == "audible":
+        config.providers.audible.enabled = True
+    elif provider_name == "openlibrary":
+        click.echo("OpenLibrary is always enabled as the default provider")
+        return
+    else:
+        click.echo(f"Error: Unknown provider '{provider_name}'")
+        click.echo("Available providers: googlebooks, librivox, audible")
+        sys.exit(1)
+
+    config_manager.save_config(config)
+    click.echo(f"Provider '{provider_name}' enabled")
+
+
+@provider.command('disable')
+@click.argument('provider_name', type=str)
+@click.pass_context
+def provider_disable(ctx: click.Context, provider_name: str) -> None:
+    """Disable a metadata provider."""
+    config_manager = ctx.obj['config_manager']
+    config = config_manager.load_config()
+
+    provider_name = provider_name.lower()
+
+    if provider_name == "openlibrary":
+        click.echo("Error: OpenLibrary cannot be disabled (it's the default provider)")
+        sys.exit(1)
+    elif provider_name == "googlebooks":
+        config.providers.google_books.enabled = False
+    elif provider_name == "librivox":
+        config.providers.librivox.enabled = False
+    elif provider_name == "audible":
+        config.providers.audible.enabled = False
+    else:
+        click.echo(f"Error: Unknown provider '{provider_name}'")
+        sys.exit(1)
+
+    config_manager.save_config(config)
+    click.echo(f"Provider '{provider_name}' disabled")
+
+
+@provider.command('set-key')
+@click.argument('provider_name', type=str)
+@click.argument('api_key', type=str)
+@click.pass_context
+def provider_set_key(ctx: click.Context, provider_name: str, api_key: str) -> None:
+    """Set API key for a provider."""
+    config_manager = ctx.obj['config_manager']
+    config = config_manager.load_config()
+
+    provider_name = provider_name.lower()
+
+    if provider_name == "googlebooks":
+        config.providers.google_books.api_key = api_key
+        config.providers.google_books.enabled = True
+        config_manager.save_config(config)
+        click.echo("Google Books API key set and provider enabled")
+    else:
+        click.echo(f"Error: Provider '{provider_name}' does not require an API key")
+        sys.exit(1)
+
+
+@provider.command('set-marketplace')
+@click.argument('marketplace', type=click.Choice(['US', 'UK', 'CA', 'AU', 'FR', 'DE', 'IT', 'ES', 'JP', 'IN']))
+@click.pass_context
+def provider_set_marketplace(ctx: click.Context, marketplace: str) -> None:
+    """Set Audible marketplace."""
+    config_manager = ctx.obj['config_manager']
+    config = config_manager.load_config()
+
+    config.providers.audible.marketplace = marketplace.upper()
+    config_manager.save_config(config)
+    click.echo(f"Audible marketplace set to {marketplace}")
+
+
 @cli.command()
 @click.option('--days', type=int, default=30, help='Show transactions from last N days')
 @click.pass_context
@@ -305,6 +437,164 @@ def history(ctx: click.Context, days: int) -> None:
                   f"{transaction['timestamp']} - "
                   f"{transaction['operation_count']} operations - "
                   f"{status}{undo_info}")
+
+
+@cli.group()
+def drm() -> None:
+    """DRM detection and removal commands."""
+    pass
+
+
+@drm.command('detect')
+@click.argument('files', nargs=-1, type=click.Path(exists=True, path_type=Path))
+@click.option('--recursive', '-r', is_flag=True, help='Scan directories recursively')
+@click.pass_context
+def drm_detect(ctx: click.Context, files: tuple[Path, ...], recursive: bool) -> None:
+    """Detect DRM protection on audio files."""
+    if not files:
+        click.echo("Error: At least one file or directory must be specified", err=True)
+        sys.exit(1)
+
+    try:
+        from .drm.detector import DRMDetector
+
+        detector = DRMDetector()
+
+        # Collect all files to scan
+        files_to_scan = []
+        for path in files:
+            if path.is_file():
+                files_to_scan.append(path)
+            elif path.is_dir() and recursive:
+                # Scan directory for audio files
+                audio_extensions = {'.mp3', '.m4a', '.m4b', '.aax', '.aaxc', '.flac', '.ogg', '.opus', '.aac', '.wav'}
+                for file_path in path.rglob('*'):
+                    if file_path.suffix.lower() in audio_extensions:
+                        files_to_scan.append(file_path)
+
+        if not files_to_scan:
+            click.echo("No audio files found to scan")
+            return
+
+        protected_count = 0
+        total_count = len(files_to_scan)
+
+        click.echo(f"Scanning {total_count} file(s) for DRM protection...")
+
+        for file_path in files_to_scan:
+            drm_info = detector.detect_drm(file_path)
+
+            status_icon = "🔒" if drm_info.is_protected else "✅"
+            click.echo(f"{status_icon} {file_path.name}: {drm_info.drm_type.value}")
+
+            if drm_info.is_protected:
+                protected_count += 1
+                if drm_info.metadata:
+                    for key, value in drm_info.metadata.items():
+                        click.echo(f"    {key}: {value}")
+
+        click.echo(f"\nSummary: {protected_count}/{total_count} files have DRM protection")
+
+    except ImportError as e:
+        click.echo(f"Error: Missing dependency: {e}", err=True)
+        sys.exit(1)
+    except Exception as e:
+        click.echo(f"Error during DRM detection: {e}", err=True)
+        sys.exit(1)
+
+
+@drm.command('remove')
+@click.argument('files', nargs=-1, type=click.Path(exists=True, path_type=Path))
+@click.option('-o', '--output-dir', type=click.Path(path_type=Path),
+              help='Output directory for DRM-free files')
+@click.option('--activation-bytes', type=str,
+              help='Audible activation bytes for AAX files')
+@click.option('--dry-run', is_flag=True, help='Show what would be done without removing DRM')
+@click.option('--recursive', '-r', is_flag=True, help='Process directories recursively')
+@click.pass_context
+def drm_remove(ctx: click.Context, files: tuple[Path, ...], output_dir: Optional[Path],
+               activation_bytes: Optional[str], dry_run: bool, recursive: bool) -> None:
+    """Remove DRM protection from audio files."""
+    if not files:
+        click.echo("Error: At least one file or directory must be specified", err=True)
+        sys.exit(1)
+
+    try:
+        from .drm.remover import DRMRemover
+        from .drm.detector import DRMDetector
+
+        detector = DRMDetector()
+        remover = DRMRemover(activation_bytes=activation_bytes)
+
+        # Check ffmpeg availability
+        if not remover.check_ffmpeg_availability():
+            click.echo("Warning: FFmpeg with activation_bytes support not found. "
+                      "AAX DRM removal will not work.", err=True)
+
+        # Collect all files to process
+        files_to_process = []
+        for path in files:
+            if path.is_file():
+                files_to_process.append(path)
+            elif path.is_dir() and recursive:
+                audio_extensions = {'.mp3', '.m4a', '.m4b', '.aax', '.aaxc', '.flac', '.ogg', '.opus', '.aac', '.wav'}
+                for file_path in path.rglob('*'):
+                    if file_path.suffix.lower() in audio_extensions:
+                        files_to_process.append(file_path)
+
+        if not files_to_process:
+            click.echo("No audio files found to process")
+            return
+
+        # Create output directory if specified
+        if output_dir and not dry_run:
+            output_dir.mkdir(parents=True, exist_ok=True)
+
+        success_count = 0
+        error_count = 0
+
+        click.echo(f"Processing {len(files_to_process)} file(s)...")
+
+        for file_path in files_to_process:
+            # First detect DRM
+            drm_info = detector.detect_drm(file_path)
+
+            if not drm_info.is_protected:
+                click.echo(f"✅ {file_path.name}: No DRM protection")
+                success_count += 1
+                continue
+
+            if dry_run:
+                click.echo(f"🔒 {file_path.name}: Would remove {drm_info.drm_type.value} DRM")
+                continue
+
+            # Remove DRM
+            output_path = None
+            if output_dir:
+                output_path = output_dir / f"{file_path.stem}_no_drm.m4a"
+
+            result = remover.remove_drm(file_path, output_path, activation_bytes)
+
+            if result.success:
+                click.echo(f"✅ {file_path.name}: DRM removed successfully")
+                if result.output_file:
+                    click.echo(f"    Output: {result.output_file}")
+                success_count += 1
+            else:
+                click.echo(f"❌ {file_path.name}: Failed - {result.error_message}")
+                error_count += 1
+
+        if dry_run:
+            click.echo(f"\nDry run completed. Found {len(files_to_process)} files to process.")
+        else:
+            click.echo(f"\nCompleted: {success_count} successful, {error_count} failed")
+
+    except ImportError as e:
+        click.echo(f"Error: Missing dependency: {e}", err=True)
+        sys.exit(1)
+    except Exception as e:
+        click.echo(f"Error during DRM removal: {e}", err=True)
+        sys.exit(1)
 
 
 def main() -> None:

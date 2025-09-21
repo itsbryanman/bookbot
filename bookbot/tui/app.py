@@ -115,6 +115,7 @@ class BookBotApp(App):
                 yield Button("Find Matches", id="find_matches", disabled=True)
                 yield Button("Preview Changes", id="preview_changes", disabled=True)
                 yield Button("Apply Changes", id="apply_changes", disabled=True)
+                yield Button("Convert to M4B", id="convert_m4b", disabled=True)
 
         yield Footer()
 
@@ -160,6 +161,8 @@ class BookBotApp(App):
             self.show_preview()
         elif event.button.id == "apply_changes":
             await self.apply_changes()
+        elif event.button.id == "convert_m4b":
+            self.show_conversion()
 
     async def on_start_scan(self, event: StartScan) -> None:
         """Handle start scan message."""
@@ -271,6 +274,9 @@ class BookBotApp(App):
 
             if success:
                 self.update_status("Changes applied successfully!")
+                # Enable conversion button after successful changes
+                convert_button = self.query_one("#convert_m4b", Button)
+                convert_button.disabled = False
             else:
                 self.update_status("Failed to apply changes")
 
@@ -280,6 +286,17 @@ class BookBotApp(App):
         finally:
             apply_button.disabled = False
             apply_button.label = "Apply Changes"
+
+    def show_conversion(self) -> None:
+        """Show M4B conversion screen."""
+        convert_screen = self.query_one("#convert_screen", ConversionScreen)
+        convert_screen.set_audiobook_sets(self.audiobook_sets)
+
+        # Switch to conversion tab
+        tabbed_content = self.query_one(TabbedContent)
+        tabbed_content.active = "convert"
+
+        self.update_status("Configure conversion settings and start conversion")
 
     def action_help(self) -> None:
         """Show help dialog."""
