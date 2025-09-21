@@ -34,11 +34,11 @@ class AudioFileScanner:
     ]
 
     DISC_PATTERNS = [
-        re.compile(r'disc?\s*(\d+)', re.IGNORECASE),
-        re.compile(r'cd\s*(\d+)', re.IGNORECASE),
-        re.compile(r'book\s*(\d+)', re.IGNORECASE),
-        re.compile(r'volume\s*(\d+)', re.IGNORECASE),
-        re.compile(r'vol\s*(\d+)', re.IGNORECASE),
+        re.compile(r'^disc(?:\s*|[-_])?(\d+)$', re.IGNORECASE),
+        re.compile(r'^cd(?:\s*|[-_])?(\d+)$', re.IGNORECASE),
+        re.compile(r'^book\s*(\d+)$', re.IGNORECASE),
+        re.compile(r'^volume\s*(\d+)$', re.IGNORECASE),
+        re.compile(r'^vol\.?\s*(\d+)$', re.IGNORECASE),
     ]
 
     def __init__(self, recursive: bool = True, max_depth: int = 5):
@@ -124,13 +124,15 @@ class AudioFileScanner:
             source_path, tracks
         )
 
+        disc_count = max(disc_numbers) if disc_numbers else 1
+
         audiobook_set = AudiobookSet(
             source_path=source_path,
             raw_title_guess=title_guess,
             author_guess=author_guess,
             series_guess=series_guess,
             volume_guess=volume_guess,
-            disc_count=len(disc_numbers) if disc_numbers else 1,
+            disc_count=disc_count,
             total_tracks=len(tracks),
             total_duration=total_duration if total_duration > 0 else None,
             tracks=tracks
@@ -255,11 +257,52 @@ class AudioFileScanner:
         except Exception:
             return None, None, None, None
 
+    def _normalize_numeric_tag(self, value: object) -> int | None:
+        """Attempt to normalize a numeric tag value to an integer."""
+        if value is None:
+            return None
+
+        if isinstance(value, int):
+            return value
+
+        # Mutagen ID3 frames expose a ``text`` attribute with the raw values
+        if hasattr(value, "text"):
+            # Accessing .text may return a list of strings
+            normalized = self._normalize_numeric_tag(getattr(value, "text"))
+            if normalized is not None:
+                return normalized
+
+        # Handle containers like lists/tuples provided by different tag formats
+        if isinstance(value, (list, tuple)):
+            for item in value:
+                normalized = self._normalize_numeric_tag(item)
+                if normalized is not None:
+                    return normalized
+            return None
+
+        if isinstance(value, bytes):
+            try:
+                value = value.decode("utf-8", errors="ignore")
+            except Exception:
+                return None
+
+        if isinstance(value, str):
+            # Accept common patterns such as ``1/10`` or ``01``
+            match = re.search(r"\d+", value)
+            if match:
+                try:
+                    return int(match.group())
+                except ValueError:
+                    return None
+
+        return None
+
     def _get_track_number(self, file_path: Path, tags: AudioTags) -> int:
         """Extract track number from tags or filename."""
         # Try tags first
-        if tags.track is not None:
-            return tags.track
+        from_tags = self._normalize_numeric_tag(tags.track)
+        if from_tags is not None:
+            return from_tags
 
         # Try filename patterns
         filename = file_path.stem
@@ -277,19 +320,28 @@ class AudioFileScanner:
     def _get_disc_number(self, file_path: Path, tags: AudioTags) -> int:
         """Extract disc number from tags, filename, or directory structure."""
         # Try tags first
-        if tags.disc is not None:
-            return tags.disc
+        from_tags = self._normalize_numeric_tag(tags.disc)
+        if from_tags is not None:
+            return from_tags
 
-        # Check directory structure and filename
-        full_path = str(file_path.parent / file_path.stem).lower()
+        # Check filename and a few parent directory levels for disc hints
+        search_targets: list[str] = [file_path.stem.lower()]
 
-        for pattern in self.DISC_PATTERNS:
-            match = pattern.search(full_path)
-            if match:
-                try:
-                    return int(match.group(1))
-                except ValueError:
-                    continue
+        parent = file_path.parent
+        depth = 0
+        while parent != parent.parent and depth < 3:
+            search_targets.append(parent.name.lower())
+            parent = parent.parent
+            depth += 1
+
+        for target in search_targets:
+            for pattern in self.DISC_PATTERNS:
+                match = pattern.match(target)
+                if match:
+                    try:
+                        return int(match.group(1))
+                    except ValueError:
+                        continue
 
         # Default to disc 1
         return 1
