@@ -534,28 +534,27 @@ def audible() -> None:
 
 
 @audible.command("auth")
+@click.option("--country", type=str, default="US", help="Country code (US, UK, CA, AU, etc.)")
 @click.pass_context
-def audible_auth(ctx: click.Context) -> None:
+def audible_auth(ctx: click.Context, country: str) -> None:
     """Authenticate with Audible for importing books."""
     try:
         from .drm.audible_client import AudibleAuthClient
 
-        client = AudibleAuthClient()
-        device_code = client.get_device_code()
+        client = AudibleAuthClient(country_code=country)
 
-        click.echo(f"Visit: {device_code.verification_uri}")
-        click.echo(f"Enter code: {device_code.user_code}")
-        click.echo("Opening browser...")
+        if client.authenticate():
+            click.echo("✅ Authentication successful! You can now import Audible books.")
+        else:
+            click.echo("❌ Authentication failed. Please try again.", err=True)
+            sys.exit(1)
 
-        client.open_browser(device_code.verification_uri)
-
-        click.echo("Waiting for authorization...")
-        token = client.poll_for_token()
-
-        click.echo("Authentication successful! You can now import Audible books.")
-
+    except ImportError as e:
+        click.echo(f"❌ Missing dependency: {e}", err=True)
+        click.echo("Install the audible package with: pip install audible", err=True)
+        sys.exit(1)
     except Exception as e:
-        click.echo(f"Authentication failed: {e}", err=True)
+        click.echo(f"❌ Authentication failed: {e}", err=True)
         sys.exit(1)
 
 
@@ -582,7 +581,14 @@ def audible_import(ctx: click.Context, asin: str, output_dir: Path | None, remov
 
         client = AudibleAuthClient()
 
-        click.echo(f"Importing Audible book {asin}...")
+        # Check if authenticated
+        if not client._load_stored_auth():
+            click.echo("❌ Not authenticated. Run 'bookbot audible auth' first.", err=True)
+            sys.exit(1)
+
+        client._auth = client._load_stored_auth()
+
+        click.echo(f"📚 Importing Audible book {asin}...")
 
         # Download the book
         book_path = output_dir / f"{asin}.aax"
@@ -626,6 +632,13 @@ def audible_list(ctx: click.Context, limit: int) -> None:
         from .drm.audible_client import AudibleAuthClient
 
         client = AudibleAuthClient()
+
+        # Check if authenticated
+        if not client._load_stored_auth():
+            click.echo("❌ Not authenticated. Run 'bookbot audible auth' first.", err=True)
+            sys.exit(1)
+
+        client._auth = client._load_stored_auth()
         library = client.get_library()
 
         if not library:

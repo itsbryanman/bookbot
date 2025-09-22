@@ -1,6 +1,6 @@
 """BookBot - A cross-platform TUI audiobook renamer and organizer."""
 
-__version__ = "0.2.0"
+__version__ = "0.2.2"
 __author__ = "BookBot"
 __email__ = "bookbot@example.com"
 

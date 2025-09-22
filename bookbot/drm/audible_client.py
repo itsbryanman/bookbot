@@ -1,149 +1,199 @@
-import time
+"""Audible authentication client using the official audible package."""
+
 import webbrowser
+from pathlib import Path
 from typing import Any
 
-import requests
-from pydantic import BaseModel
+try:
+    import audible
+except ImportError:
+    audible = None
 
 from . import secure_storage
-from .models import Token
-
-
-class DeviceCodeResponse(BaseModel):
-    user_code: str
-    device_code: str
-    verification_uri: str
-    interval: int
-    expires_in: int
 
 
 class AudibleAuthClient:
-    def __init__(self) -> None:
-        self.session = requests.Session()
-        self.device_code_response: DeviceCodeResponse | None = None
+    """Client for authenticating with Audible using browser-based OAuth flow."""
 
-    def get_device_code(self) -> DeviceCodeResponse:
-        response = self.session.post(
-            "https://api.audible.com/auth/o2/create/codepair",
-            json={
-                "scope": "alexa:all",
-                "scope_data": {
-                    "alexa:all": {
-                        "productID": "BookBot",
-                        "productInstanceAttributes": {"deviceSerialNumber": "12345"},
-                    }
-                },
-            },
-        )
-        response.raise_for_status()
-        self.device_code_response = DeviceCodeResponse.model_validate(response.json())
-        return self.device_code_response
-
-    def poll_for_token(self) -> Token:
-        if not self.device_code_response:
-            raise ValueError("Device code not yet requested.")
-
-        start_time = time.time()
-        while time.time() - start_time < self.device_code_response.expires_in:
-            response = self.session.post(
-                "https://api.audible.com/auth/o2/token",
-                json={
-                    "grant_type": "device_code",
-                    "device_code": self.device_code_response.device_code,
-                },
+    def __init__(self, country_code: str = "US") -> None:
+        if audible is None:
+            raise ImportError(
+                "The 'audible' package is required for Audible authentication. "
+                "Install it with: pip install audible"
             )
 
-            data = response.json()
-            if response.status_code == 200:
-                token = Token.model_validate(data)
-                secure_storage.save_token(token)
-                return token
+        self.country_code = country_code
+        self._auth: audible.Authenticator | None = None
+        self._client: audible.Client | None = None
 
-            error = data.get("error")
-            if error == "authorization_pending":
-                time.sleep(self.device_code_response.interval)
-            elif error:
-                raise Exception(f"Failed to get token: {error}")
-            else:
-                response.raise_for_status()
+    def authenticate(self) -> bool:
+        """
+        Perform browser-based authentication with Audible.
+        Returns True if authentication succeeded, False otherwise.
+        """
+        try:
+            print("Starting Audible authentication...")
+            print("This will open your web browser for login.")
 
-        raise Exception("Timed out waiting for authorization.")
+            # Check if we already have stored authentication
+            stored_auth = self._load_stored_auth()
+            if stored_auth:
+                print("Found existing authentication, checking if it's still valid...")
+                try:
+                    # Test the authentication
+                    async_client = audible.AsyncClient(stored_auth)
+                    # If this doesn't raise an exception, auth is valid
+                    self._auth = stored_auth
+                    print("✅ Existing authentication is valid!")
+                    return True
+                except Exception:
+                    print("⚠️ Existing authentication is expired, re-authenticating...")
 
-    def get_license(self, asin: str) -> dict[str, Any]:
-        token = secure_storage.load_token()
-        if not token:
-            raise Exception("Not logged in.")
+            # Perform new authentication
+            def login_url_callback(login_url: str) -> str:
+                print(f"\n🌐 Opening browser for authentication...")
+                print(f"If the browser doesn't open automatically, visit: {login_url}")
+                webbrowser.open(login_url)
 
-        headers = {
-            "Authorization": f"Bearer {token.access_token}",
-            "Content-Type": "application/json",
-        }
-        response = self.session.post(
-            "https://cde-ta-g7g.amazon.com/Firs/v1/license/GetConsumptionLicense",
-            headers=headers,
-            json={
-                "contentId": asin,
-                "consumptionType": "Streaming",
-                "deviceInfo": {
-                    "deviceSerialNumber": "12345",
-                    "deviceType": "BookBot",
-                },
-            },
-        )
-        response.raise_for_status()
-        result: dict[str, Any] = response.json()
-        return result
+                print("\n📝 After logging in, you'll see an error page - this is normal!")
+                print("📋 Copy the FULL URL from the address bar and paste it below.")
+                print("📋 It should look like: https://www.amazon.com/ap/maplanding?...")
+
+                return input("\n🔗 Paste the redirect URL here: ").strip()
+
+            # Create authenticator with browser-based login
+            self._auth = audible.Authenticator.from_login_external(
+                locale=self.country_code,
+                login_url_callback=login_url_callback
+            )
+
+            # Save authentication for future use
+            self._save_auth()
+
+            print("✅ Authentication successful!")
+            return True
+
+        except Exception as e:
+            print(f"❌ Authentication failed: {e}")
+            return False
 
     def get_library(self) -> list[dict[str, Any]]:
         """Get user's Audible library."""
-        token = secure_storage.load_token()
-        if not token:
-            raise Exception("Not logged in.")
+        if not self._auth:
+            raise Exception("Not authenticated. Call authenticate() first.")
 
-        headers = {
-            "Authorization": f"Bearer {token.access_token}",
-            "Content-Type": "application/json",
-        }
-
-        response = self.session.get(
-            "https://api.audible.com/1.0/library",
-            headers=headers,
-            params={"num_results": 999, "sort_by": "PurchaseDate"}
-        )
-        response.raise_for_status()
-        result: dict[str, Any] = response.json()
-        return result.get("items", [])
+        try:
+            with audible.Client(self._auth) as client:
+                library = client.get(
+                    "library",
+                    num_results=999,
+                    response_groups="product_desc,product_attrs,series,media,price"
+                )
+                return library.get("items", [])
+        except Exception as e:
+            raise Exception(f"Failed to get library: {e}")
 
     def download_book(self, asin: str, output_path: str) -> bool:
         """Download an Audible book."""
-        license_info = self.get_license(asin)
+        if not self._auth:
+            raise Exception("Not authenticated. Call authenticate() first.")
 
-        # Extract download URL from license
-        download_url = license_info.get("content_license", {}).get("content_url")
-        if not download_url:
-            raise Exception("No download URL found in license")
+        try:
+            with audible.Client(self._auth) as client:
+                # Get download link
+                content_url = client.get_download_link(asin)
 
-        # Download the book
-        response = self.session.get(download_url, stream=True)
-        response.raise_for_status()
+                # Download the file
+                import requests
+                response = requests.get(content_url, stream=True)
+                response.raise_for_status()
 
-        with open(output_path, "wb") as f:
-            for chunk in response.iter_content(chunk_size=8192):
-                if chunk:
-                    f.write(chunk)
+                output_file = Path(output_path)
+                output_file.parent.mkdir(parents=True, exist_ok=True)
 
-        return True
+                with open(output_file, "wb") as f:
+                    for chunk in response.iter_content(chunk_size=8192):
+                        if chunk:
+                            f.write(chunk)
+
+                return True
+
+        except Exception as e:
+            raise Exception(f"Failed to download book: {e}")
 
     def get_activation_bytes(self) -> str | None:
         """Get activation bytes for DRM removal."""
-        token = secure_storage.load_token()
-        if not token:
+        if not self._auth:
             return None
 
-        # This would need to be implemented based on Audible's API
-        # For now, return None - users would need to provide their own
-        return None
+        try:
+            # Extract activation bytes from the authentication
+            if hasattr(self._auth, 'activation_bytes'):
+                return self._auth.activation_bytes
+            return None
+        except Exception:
+            return None
+
+    def _save_auth(self) -> None:
+        """Save authentication data securely."""
+        if self._auth:
+            # Save the authentication data to keyring
+            auth_data = {
+                'access_token': self._auth.access_token,
+                'refresh_token': self._auth.refresh_token,
+                'adp_token': self._auth.adp_token,
+                'device_private_key': self._auth.device_private_key,
+                'store_authentication_cookie': self._auth.store_authentication_cookie,
+                'device_info': self._auth.device_info,
+                'customer_info': self._auth.customer_info,
+                'website_cookies': self._auth.website_cookies
+            }
+
+            import json
+            import keyring
+            keyring.set_password("bookbot", "audible_auth", json.dumps(auth_data))
+
+    def _load_stored_auth(self) -> audible.Authenticator | None:
+        """Load stored authentication data."""
+        try:
+            import json
+            import keyring
+
+            auth_data_str = keyring.get_password("bookbot", "audible_auth")
+            if not auth_data_str:
+                return None
+
+            auth_data = json.loads(auth_data_str)
+
+            # Reconstruct the authenticator
+            auth = audible.Authenticator(
+                access_token=auth_data.get('access_token'),
+                refresh_token=auth_data.get('refresh_token'),
+                adp_token=auth_data.get('adp_token'),
+                device_private_key=auth_data.get('device_private_key'),
+                store_authentication_cookie=auth_data.get('store_authentication_cookie'),
+                device_info=auth_data.get('device_info'),
+                customer_info=auth_data.get('customer_info'),
+                website_cookies=auth_data.get('website_cookies')
+            )
+
+            return auth
+
+        except Exception:
+            return None
+
+    def logout(self) -> None:
+        """Clear stored authentication."""
+        try:
+            import keyring
+            keyring.delete_password("bookbot", "audible_auth")
+        except Exception:
+            pass
+
+        self._auth = None
+        self._client = None
 
     @staticmethod
     def open_browser(url: str) -> None:
+        """Open URL in browser."""
         webbrowser.open(url)
