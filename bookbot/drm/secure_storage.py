@@ -1,7 +1,7 @@
 import keyring  # type: ignore
 import toml
 
-from bookbot.drm.models import Token
+from .models import Token
 
 
 def save_token(token: Token, service_name: str = "bookbot") -> None:

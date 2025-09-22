@@ -5,8 +5,8 @@ from typing import Any
 import requests
 from pydantic import BaseModel
 
-from bookbot.drm import secure_storage
-from bookbot.drm.models import Token
+from . import secure_storage
+from .models import Token
 
 
 class DeviceCodeResponse(BaseModel):

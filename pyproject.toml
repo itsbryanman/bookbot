@@ -59,7 +59,7 @@ build = [
 ]
 
 [project.scripts]
-bookbot = "bookbot.cli:main"
+bookbot = "bookbot:main"
 bookbot-cli = "bookbot.cli:main"
 bookbot-gui = "bookbot.gui:main"
 
