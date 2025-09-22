@@ -36,6 +36,7 @@ dependencies = [
     "aiohttp>=3.8.0",
     "keyring>=24.0.0",
     "beautifulsoup4>=4.12.0",
+    "cryptography>=41.0.0",
 ]
 
 [project.optional-dependencies]
@@ -59,6 +60,8 @@ build = [
 
 [project.scripts]
 bookbot = "bookbot.cli:main"
+bookbot-cli = "bookbot.cli:main"
+bookbot-gui = "bookbot.gui:main"
 
 [project.urls]
 Homepage = "https://github.com/itsbryanman/BookBot"

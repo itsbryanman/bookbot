@@ -528,6 +528,143 @@ def history(ctx: click.Context, days: int) -> None:
 
 
 @cli.group()
+def audible() -> None:
+    """Audible-specific commands for import and DRM removal."""
+    pass
+
+
+@audible.command("auth")
+@click.pass_context
+def audible_auth(ctx: click.Context) -> None:
+    """Authenticate with Audible for importing books."""
+    try:
+        from .drm.audible_client import AudibleAuthClient
+
+        client = AudibleAuthClient()
+        device_code = client.get_device_code()
+
+        click.echo(f"Visit: {device_code.verification_uri}")
+        click.echo(f"Enter code: {device_code.user_code}")
+        click.echo("Opening browser...")
+
+        client.open_browser(device_code.verification_uri)
+
+        click.echo("Waiting for authorization...")
+        token = client.poll_for_token()
+
+        click.echo("Authentication successful! You can now import Audible books.")
+
+    except Exception as e:
+        click.echo(f"Authentication failed: {e}", err=True)
+        sys.exit(1)
+
+
+@audible.command("import")
+@click.argument("asin", type=str)
+@click.option(
+    "-o", "--output-dir",
+    type=click.Path(path_type=Path),
+    help="Output directory for downloaded book"
+)
+@click.option("--remove-drm", is_flag=True, help="Remove DRM after download")
+@click.option("--activation-bytes", type=str, help="Activation bytes for DRM removal")
+@click.pass_context
+def audible_import(ctx: click.Context, asin: str, output_dir: Path | None, remove_drm: bool, activation_bytes: str | None) -> None:
+    """Import an Audible book by ASIN."""
+    try:
+        from .drm.audible_client import AudibleAuthClient
+        from .drm.remover import DRMRemover
+
+        if not output_dir:
+            output_dir = Path.cwd() / "audible_books"
+
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        client = AudibleAuthClient()
+
+        click.echo(f"Importing Audible book {asin}...")
+
+        # Download the book
+        book_path = output_dir / f"{asin}.aax"
+        success = client.download_book(asin, str(book_path))
+
+        if success:
+            click.echo(f"Book downloaded to: {book_path}")
+
+            if remove_drm:
+                click.echo("Removing DRM...")
+
+                # Try to get activation bytes from client if not provided
+                if not activation_bytes:
+                    activation_bytes = client.get_activation_bytes()
+
+                if not activation_bytes:
+                    click.echo("Warning: No activation bytes available. DRM removal may fail.")
+
+                remover = DRMRemover(activation_bytes=activation_bytes)
+                result = remover.remove_drm(book_path)
+
+                if result.success:
+                    click.echo(f"DRM removed successfully! Output: {result.output_file}")
+                else:
+                    click.echo(f"DRM removal failed: {result.error_message}", err=True)
+        else:
+            click.echo("Download failed", err=True)
+            sys.exit(1)
+
+    except Exception as e:
+        click.echo(f"Import failed: {e}", err=True)
+        sys.exit(1)
+
+
+@audible.command("list")
+@click.option("--limit", type=int, default=20, help="Maximum number of books to show")
+@click.pass_context
+def audible_list(ctx: click.Context, limit: int) -> None:
+    """List user's Audible library."""
+    try:
+        from .drm.audible_client import AudibleAuthClient
+
+        client = AudibleAuthClient()
+        library = client.get_library()
+
+        if not library:
+            click.echo("No books found in your library")
+            return
+
+        click.echo(f"Found {len(library)} books in your library:")
+        click.echo("")
+
+        for i, book in enumerate(library[:limit], 1):
+            title = book.get("title", "Unknown Title")
+            authors = book.get("authors", [])
+            author_names = [author.get("name", "") for author in authors]
+            author_str = ", ".join(author_names) if author_names else "Unknown Author"
+            asin = book.get("asin", "")
+
+            click.echo(f"{i:3}. {title}")
+            click.echo(f"     Author: {author_str}")
+            click.echo(f"     ASIN: {asin}")
+
+            # Show series info if available
+            series = book.get("series")
+            if series:
+                series_title = series[0].get("title", "") if series else ""
+                series_sequence = series[0].get("sequence", "") if series else ""
+                if series_title:
+                    click.echo(f"     Series: {series_title} #{series_sequence}")
+
+            click.echo("")
+
+        if len(library) > limit:
+            click.echo(f"... and {len(library) - limit} more books")
+
+    except Exception as e:
+        click.echo(f"Failed to list library: {e}", err=True)
+        sys.exit(1)
+
+
+@cli.group()
 def drm() -> None:
     """DRM detection and removal commands."""
     pass
@@ -601,6 +738,22 @@ def drm_detect(ctx: click.Context, files: tuple[Path, ...], recursive: bool) -> 
         sys.exit(1)
     except Exception as e:
         click.echo(f"Error during DRM detection: {e}", err=True)
+        sys.exit(1)
+
+
+@drm.command("set-activation-bytes")
+@click.argument("activation_bytes", type=str)
+@click.pass_context
+def drm_set_activation_bytes(ctx: click.Context, activation_bytes: str) -> None:
+    """Store activation bytes for AAX DRM removal."""
+    try:
+        from .drm.secure_storage import save_activation_bytes
+
+        save_activation_bytes(activation_bytes)
+        click.echo("Activation bytes saved securely")
+
+    except Exception as e:
+        click.echo(f"Failed to save activation bytes: {e}", err=True)
         sys.exit(1)
 
 

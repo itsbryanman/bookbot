@@ -147,16 +147,42 @@ bookbot convert /input/folder -o /output/folder --no-art
 bookbot convert /input/folder -o /output/folder --dry-run
 ```
 
-### DRM Management
+### Audible Integration
 
 #### Authentication
 ```bash
-# Launch TUI and use the DRM Removal tab for browser-based Audible authentication
-bookbot tui /path/to/audiobooks
+# Authenticate with Audible for importing books
+bookbot audible auth
 
-# The TUI provides a secure OAuth flow that opens your browser for authentication
+# The command opens your browser for secure OAuth authentication
 # No need to extract or manage activation bytes manually
 ```
+
+#### Import Books
+```bash
+# Import a single book by ASIN
+bookbot audible import B01234567X
+
+# Import with custom output directory
+bookbot audible import B01234567X -o /path/to/downloads
+
+# Import and automatically remove DRM
+bookbot audible import B01234567X --remove-drm
+
+# Import with manual activation bytes (if needed)
+bookbot audible import B01234567X --remove-drm --activation-bytes XXXXXXXX
+```
+
+#### Library Management
+```bash
+# List your Audible library
+bookbot audible list
+
+# List with custom limit
+bookbot audible list --limit 50
+```
+
+### DRM Management
 
 #### Detection
 ```bash
@@ -172,7 +198,10 @@ bookbot drm detect *.{mp3,m4a,aax,aaxc}
 
 #### Removal
 ```bash
-# Remove DRM from AAX/AAXC files (authentication via TUI)
+# Store activation bytes securely for AAX files
+bookbot drm set-activation-bytes XXXXXXXX
+
+# Remove DRM from AAX/AAXC files (uses stored activation bytes)
 bookbot drm remove file.aax
 
 # Remove DRM with custom output directory
@@ -184,7 +213,7 @@ bookbot drm remove *.aax --dry-run
 # Process entire directory recursively
 bookbot drm remove /folder --recursive
 
-# Legacy support: Manual activation bytes (if needed)
+# Manual activation bytes (overrides stored ones)
 bookbot drm remove file.aax --activation-bytes XXXXXXXX
 ```
 

@@ -31,3 +31,27 @@ def delete_token(service_name: str = "bookbot") -> None:
         keyring.delete_password(service_name, "token")
     except keyring.errors.PasswordDeleteError:
         pass
+
+
+def save_activation_bytes(activation_bytes: str, service_name: str = "bookbot") -> None:
+    """
+    Saves activation bytes to the system's keyring.
+    """
+    keyring.set_password(service_name, "activation_bytes", activation_bytes)
+
+
+def load_activation_bytes(service_name: str = "bookbot") -> str | None:
+    """
+    Loads activation bytes from the system's keyring.
+    """
+    return keyring.get_password(service_name, "activation_bytes")
+
+
+def delete_activation_bytes(service_name: str = "bookbot") -> None:
+    """
+    Deletes activation bytes from the system's keyring.
+    """
+    try:
+        keyring.delete_password(service_name, "activation_bytes")
+    except keyring.errors.PasswordDeleteError:
+        pass
