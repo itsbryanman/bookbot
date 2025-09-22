@@ -4,14 +4,13 @@ import json
 import uuid
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional
 
 import aiofiles
 import aiohttp
 
 from ..config.manager import ConfigManager
 from ..config.models import ConversionConfig
-from ..core.models import AudiobookSet, ProviderIdentity, Track
+from ..core.models import AudiobookSet, ProviderIdentity
 from .ffmpeg import FFmpegWrapper
 
 
@@ -21,40 +20,41 @@ class ConversionPlan:
     def __init__(self, plan_id: str):
         self.plan_id = plan_id
         self.created_at = datetime.now()
-        self.operations: List[ConversionOperation] = []
+        self.operations: list[ConversionOperation] = []
 
-    def add_operation(self, operation: 'ConversionOperation') -> None:
+    def add_operation(self, operation: "ConversionOperation") -> None:
         """Add a conversion operation to the plan."""
         self.operations.append(operation)
 
-    def to_dict(self) -> Dict:
+    def to_dict(self) -> dict:
         """Convert plan to dictionary for serialization."""
         return {
-            'plan_id': self.plan_id,
-            'created_at': self.created_at.isoformat(),
-            'operations': [op.to_dict() for op in self.operations]
+            "plan_id": self.plan_id,
+            "created_at": self.created_at.isoformat(),
+            "operations": [op.to_dict() for op in self.operations],
         }
 
 
 class ConversionOperation:
     """Single M4B conversion operation."""
 
-    def __init__(self, audiobook_set: AudiobookSet, output_path: Path,
-                 config: ConversionConfig):
+    def __init__(
+        self, audiobook_set: AudiobookSet, output_path: Path, config: ConversionConfig
+    ):
         self.audiobook_set = audiobook_set
         self.output_path = output_path
         self.config = config
-        self.chapters: List[Dict] = []
-        self.temp_files: List[Path] = []
+        self.chapters: list[dict] = []
+        self.temp_files: list[Path] = []
 
-    def to_dict(self) -> Dict:
+    def to_dict(self) -> dict:
         """Convert operation to dictionary for serialization."""
         return {
-            'source_path': str(self.audiobook_set.source_path),
-            'output_path': str(self.output_path),
-            'track_count': len(self.audiobook_set.tracks),
-            'total_duration': self.audiobook_set.total_duration,
-            'config': self.config.model_dump()
+            "source_path": str(self.audiobook_set.source_path),
+            "output_path": str(self.output_path),
+            "track_count": len(self.audiobook_set.tracks),
+            "total_duration": self.audiobook_set.total_duration,
+            "config": self.config.model_dump(),
         }
 
 
@@ -65,13 +65,15 @@ class ConversionPipeline:
         self.config_manager = config_manager
         self.ffmpeg = FFmpegWrapper()
 
-    def create_conversion_plan(self, source_path: Path,
-                             config: ConversionConfig) -> ConversionPlan:
+    def create_conversion_plan(
+        self, source_path: Path, config: ConversionConfig
+    ) -> ConversionPlan:
         """Create a conversion plan for audiobooks in a directory."""
         plan = ConversionPlan(str(uuid.uuid4()))
 
         # Scan for audiobooks
         from ..core.discovery import AudioFileScanner
+
         scanner = AudioFileScanner()
         audiobook_sets = scanner.scan_directory(source_path)
 
@@ -80,14 +82,19 @@ class ConversionPipeline:
             if audiobook_set.chosen_identity:
                 identity = audiobook_set.chosen_identity
                 if identity.series_name and identity.series_index:
-                    filename = f"{identity.series_name} {identity.series_index} - {identity.title}"
+                    filename = (
+                        f"{identity.series_name} {identity.series_index} - "
+                        f"{identity.title}"
+                    )
                 else:
                     filename = identity.title
 
                 if identity.authors:
                     filename = f"{identity.authors[0]} - {filename}"
             else:
-                filename = audiobook_set.raw_title_guess or audiobook_set.source_path.name
+                filename = (
+                    audiobook_set.raw_title_guess or audiobook_set.source_path.name
+                )
 
             # Sanitize filename
             filename = self._sanitize_filename(filename)
@@ -130,10 +137,17 @@ class ConversionPipeline:
             chapter_data = []
             current_time = 0.0
 
-            for track in sorted(audiobook_set.tracks, key=lambda t: (t.disc, t.track_index)):
-                temp_file = temp_dir / f"track_{track.disc:02d}_{track.track_index:03d}.aac"
+            for track in sorted(
+                audiobook_set.tracks, key=lambda t: (t.disc, t.track_index)
+            ):
+                temp_file = (
+                    temp_dir / f"track_{track.disc:02d}_{track.track_index:03d}.aac"
+                )
 
-                if self.ffmpeg.can_stream_copy(track.src_path) and not config.normalize_audio:
+                if (
+                    self.ffmpeg.can_stream_copy(track.src_path)
+                    and not config.normalize_audio
+                ):
                     # Stream copy for AAC files
                     success = self._stream_copy(track.src_path, temp_file)
                 else:
@@ -144,7 +158,7 @@ class ConversionPipeline:
                         bitrate=config.bitrate if not config.use_vbr else None,
                         vbr_quality=config.vbr_quality if config.use_vbr else None,
                         normalize=config.normalize_audio,
-                        target_lufs=config.target_lufs
+                        target_lufs=config.target_lufs,
                     )
 
                 if not success:
@@ -157,18 +171,26 @@ class ConversionPipeline:
                 if config.create_chapters:
                     duration = self.ffmpeg.get_duration(temp_file)
 
-                    if config.chapter_naming == "from_tags" and track.existing_tags.title:
+                    if (
+                        config.chapter_naming == "from_tags"
+                        and track.existing_tags.title
+                    ):
                         chapter_title = track.existing_tags.title
                     elif config.chapter_naming == "track_number":
                         chapter_title = f"Track {track.track_index}"
                     else:  # auto
-                        chapter_title = track.existing_tags.title or f"Chapter {len(chapter_data) + 1}"
+                        chapter_title = (
+                            track.existing_tags.title
+                            or f"Chapter {len(chapter_data) + 1}"
+                        )
 
-                    chapter_data.append({
-                        'title': chapter_title,
-                        'start': current_time,
-                        'end': current_time + duration
-                    })
+                    chapter_data.append(
+                        {
+                            "title": chapter_title,
+                            "start": current_time,
+                            "end": current_time + duration,
+                        }
+                    )
 
                     current_time += duration
 
@@ -181,7 +203,7 @@ class ConversionPipeline:
                 success = self.ffmpeg.concatenate_files(
                     aac_files,
                     output_path,
-                    chapters=chapter_data if config.create_chapters else None
+                    chapters=chapter_data if config.create_chapters else None,
                 )
 
                 if not success:
@@ -209,50 +231,55 @@ class ConversionPipeline:
         """Stream copy a file without re-encoding."""
         try:
             import shutil
+
             shutil.copy2(input_path, output_path)
             return True
         except Exception:
             return False
 
-    async def _apply_metadata(self, file_path: Path, identity: ProviderIdentity) -> None:
+    async def _apply_metadata(
+        self, file_path: Path, identity: ProviderIdentity
+    ) -> None:
         """Apply metadata tags to the M4B file."""
         metadata = {}
 
         if identity.title:
-            metadata['title'] = identity.title
-            metadata['album'] = identity.title
+            metadata["title"] = identity.title
+            metadata["album"] = identity.title
 
         if identity.authors:
-            metadata['artist'] = ', '.join(identity.authors)
-            metadata['albumartist'] = identity.authors[0]
+            metadata["artist"] = ", ".join(identity.authors)
+            metadata["albumartist"] = identity.authors[0]
 
         if identity.narrator:
-            metadata['composer'] = identity.narrator
+            metadata["composer"] = identity.narrator
 
         if identity.year:
-            metadata['date'] = str(identity.year)
+            metadata["date"] = str(identity.year)
 
         if identity.series_name:
-            metadata['series'] = identity.series_name
+            metadata["series"] = identity.series_name
             if identity.series_index:
-                metadata['series_index'] = identity.series_index
+                metadata["series_index"] = identity.series_index
 
         if identity.publisher:
-            metadata['publisher'] = identity.publisher
+            metadata["publisher"] = identity.publisher
 
         if identity.language:
-            metadata['language'] = identity.language
+            metadata["language"] = identity.language
 
         if identity.isbn_13 or identity.isbn_10:
-            metadata['isbn'] = identity.isbn_13 or identity.isbn_10
+            metadata["isbn"] = identity.isbn_13 or identity.isbn_10
 
-        metadata['genre'] = 'Audiobook'
-        metadata['comment'] = 'Converted by BookBot'
+        metadata["genre"] = "Audiobook"
+        metadata["comment"] = "Converted by BookBot"
 
         # Apply metadata using FFmpeg
         self.ffmpeg.set_metadata(file_path, metadata)
 
-    async def _embed_cover_art(self, file_path: Path, identity: ProviderIdentity) -> None:
+    async def _embed_cover_art(
+        self, file_path: Path, identity: ProviderIdentity
+    ) -> None:
         """Download and embed cover art."""
         if not identity.cover_urls:
             return
@@ -269,24 +296,24 @@ class ConversionPipeline:
             except Exception:
                 continue
 
-    async def _download_cover(self, url: str, temp_dir: Path) -> Optional[Path]:
+    async def _download_cover(self, url: str, temp_dir: Path) -> Path | None:
         """Download cover art from URL."""
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.get(url, timeout=30) as response:
                     if response.status == 200:
                         # Determine file extension from content type
-                        content_type = response.headers.get('content-type', '')
-                        if 'jpeg' in content_type or 'jpg' in content_type:
-                            ext = '.jpg'
-                        elif 'png' in content_type:
-                            ext = '.png'
+                        content_type = response.headers.get("content-type", "")
+                        if "jpeg" in content_type or "jpg" in content_type:
+                            ext = ".jpg"
+                        elif "png" in content_type:
+                            ext = ".png"
                         else:
-                            ext = '.jpg'  # Default
+                            ext = ".jpg"  # Default
 
                         cover_path = temp_dir / f"cover_{uuid.uuid4().hex[:8]}{ext}"
 
-                        async with aiofiles.open(cover_path, 'wb') as f:
+                        async with aiofiles.open(cover_path, "wb") as f:
                             async for chunk in response.content.iter_chunked(1024):
                                 await f.write(chunk)
 
@@ -301,7 +328,7 @@ class ConversionPipeline:
         # Remove or replace problematic characters
         forbidden_chars = '<>:"/\\|?*'
         for char in forbidden_chars:
-            filename = filename.replace(char, '_')
+            filename = filename.replace(char, "_")
 
         # Limit length
         if len(filename) > 200:
@@ -318,11 +345,12 @@ class ConversionPipeline:
         plan_file = log_dir / f"conversion_plan_{plan.plan_id}.json"
 
         try:
-            with open(plan_file, 'w') as f:
+            with open(plan_file, "w") as f:
                 json.dump(plan.to_dict(), f, indent=2)
         except Exception:
             pass
 
         # Execute plan
         import asyncio
+
         return asyncio.run(self.execute_plan(plan))

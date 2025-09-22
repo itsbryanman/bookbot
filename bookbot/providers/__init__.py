@@ -1,11 +1,11 @@
 """Metadata providers for BookBot."""
 
+from .audible import AudibleProvider
 from .base import MetadataProvider
-from .openlibrary import OpenLibraryProvider
 from .googlebooks import GoogleBooksProvider
 from .librivox import LibriVoxProvider
-from .audible import AudibleProvider
 from .manager import ProviderManager
+from .openlibrary import OpenLibraryProvider
 
 __all__ = [
     "MetadataProvider",
@@ -13,5 +13,5 @@ __all__ = [
     "GoogleBooksProvider",
     "LibriVoxProvider",
     "AudibleProvider",
-    "ProviderManager"
+    "ProviderManager",
 ]

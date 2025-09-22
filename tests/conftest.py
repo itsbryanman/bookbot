@@ -80,29 +80,29 @@ def sample_audiobook_directory():
 @pytest.fixture(scope="session")
 def mock_ffmpeg():
     """Mock FFmpeg for testing conversion functionality."""
+
     class MockFFmpeg:
         def __init__(self):
             self.available = True
 
         def probe_file(self, file_path):
             return {
-                'format': {'duration': '3600.0'},
-                'streams': [{
-                    'codec_type': 'audio',
-                    'codec_name': 'mp3',
-                    'duration': '3600.0'
-                }]
+                "format": {"duration": "3600.0"},
+                "streams": [
+                    {"codec_type": "audio", "codec_name": "mp3", "duration": "3600.0"}
+                ],
             }
 
         def get_duration(self, file_path):
             return 3600.0
 
         def can_stream_copy(self, file_path):
-            return file_path.suffix.lower() == '.aac'
+            return file_path.suffix.lower() == ".aac"
 
         def convert_to_aac(self, input_path, output_path, **kwargs):
             # Mock conversion by copying file
             import shutil
+
             try:
                 shutil.copy2(input_path, output_path)
                 return True
@@ -130,14 +130,16 @@ def mock_ffmpeg():
 def mock_openlibrary_response():
     """Mock Open Library API response."""
     return {
-        'docs': [{
-            'key': '/works/OL12345W',
-            'title': 'The Way of Kings',
-            'author_name': ['Brandon Sanderson'],
-            'first_publish_year': 2010,
-            'isbn': ['9780765326355', '0765326353'],
-            'cover_i': 12345,
-            'publisher': ['Tor Books'],
-            'language': ['eng']
-        }]
+        "docs": [
+            {
+                "key": "/works/OL12345W",
+                "title": "The Way of Kings",
+                "author_name": ["Brandon Sanderson"],
+                "first_publish_year": 2010,
+                "isbn": ["9780765326355", "0765326353"],
+                "cover_i": 12345,
+                "publisher": ["Tor Books"],
+                "language": ["eng"],
+            }
+        ]
     }

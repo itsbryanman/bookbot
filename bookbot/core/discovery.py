@@ -2,50 +2,49 @@
 
 import re
 from pathlib import Path
-from typing import Dict, List, Optional, Set, Tuple
 
 from mutagen import File as MutagenFile
 from mutagen.id3 import ID3NoHeaderError
 
-from .models import AudioFormat, AudioTags, AudiobookSet, Track, TrackStatus
+from .models import AudiobookSet, AudioFormat, AudioTags, Track, TrackStatus
 
 
 class AudioFileScanner:
     """Scans directories for audio files and extracts metadata."""
 
     SUPPORTED_EXTENSIONS = {
-        '.mp3': AudioFormat.MP3,
-        '.m4a': AudioFormat.M4A,
-        '.m4b': AudioFormat.M4B,
-        '.flac': AudioFormat.FLAC,
-        '.ogg': AudioFormat.OGG,
-        '.opus': AudioFormat.OPUS,
-        '.aac': AudioFormat.AAC,
-        '.wav': AudioFormat.WAV,
+        ".mp3": AudioFormat.MP3,
+        ".m4a": AudioFormat.M4A,
+        ".m4b": AudioFormat.M4B,
+        ".flac": AudioFormat.FLAC,
+        ".ogg": AudioFormat.OGG,
+        ".opus": AudioFormat.OPUS,
+        ".aac": AudioFormat.AAC,
+        ".wav": AudioFormat.WAV,
     }
 
     # Regex patterns for extracting track/disc numbers from filenames
     TRACK_PATTERNS = [
-        re.compile(r'^(\d{1,3})', re.IGNORECASE),  # Leading digits
-        re.compile(r'track\s*(\d+)', re.IGNORECASE),
-        re.compile(r'ch(?:apter)?\s*(\d+)', re.IGNORECASE),
-        re.compile(r'part\s*(\d+)', re.IGNORECASE),
-        re.compile(r'(\d+)\s*[-_.]\s*', re.IGNORECASE),  # Number followed by separator
+        re.compile(r"^(\d{1,3})", re.IGNORECASE),  # Leading digits
+        re.compile(r"track\s*(\d+)", re.IGNORECASE),
+        re.compile(r"ch(?:apter)?\s*(\d+)", re.IGNORECASE),
+        re.compile(r"part\s*(\d+)", re.IGNORECASE),
+        re.compile(r"(\d+)\s*[-_.]\s*", re.IGNORECASE),  # Number followed by separator
     ]
 
     DISC_PATTERNS = [
-        re.compile(r'^disc(?:\s*|[-_])?(\d+)$', re.IGNORECASE),
-        re.compile(r'^cd(?:\s*|[-_])?(\d+)$', re.IGNORECASE),
-        re.compile(r'^book\s*(\d+)$', re.IGNORECASE),
-        re.compile(r'^volume\s*(\d+)$', re.IGNORECASE),
-        re.compile(r'^vol\.?\s*(\d+)$', re.IGNORECASE),
+        re.compile(r"^disc(?:\s*|[-_])?(\d+)$", re.IGNORECASE),
+        re.compile(r"^cd(?:\s*|[-_])?(\d+)$", re.IGNORECASE),
+        re.compile(r"^book\s*(\d+)$", re.IGNORECASE),
+        re.compile(r"^volume\s*(\d+)$", re.IGNORECASE),
+        re.compile(r"^vol\.?\s*(\d+)$", re.IGNORECASE),
     ]
 
     def __init__(self, recursive: bool = True, max_depth: int = 5):
         self.recursive = recursive
         self.max_depth = max_depth
 
-    def scan_directory(self, path: Path) -> List[AudiobookSet]:
+    def scan_directory(self, path: Path) -> list[AudiobookSet]:
         """Scan a directory for audio files and group them into audiobook sets."""
         if not path.exists() or not path.is_dir():
             raise ValueError(f"Path does not exist or is not a directory: {path}")
@@ -65,7 +64,7 @@ class AudioFileScanner:
 
         return audiobook_sets
 
-    def _find_audio_files(self, path: Path, current_depth: int = 0) -> List[Path]:
+    def _find_audio_files(self, path: Path, current_depth: int = 0) -> list[Path]:
         """Recursively find all audio files in a directory."""
         audio_files = []
 
@@ -73,9 +72,12 @@ class AudioFileScanner:
             for item in path.iterdir():
                 if item.is_file() and item.suffix.lower() in self.SUPPORTED_EXTENSIONS:
                     audio_files.append(item)
-                elif (item.is_dir() and self.recursive and
-                      current_depth < self.max_depth and
-                      not item.name.startswith('.')):
+                elif (
+                    item.is_dir()
+                    and self.recursive
+                    and current_depth < self.max_depth
+                    and not item.name.startswith(".")
+                ):
                     audio_files.extend(self._find_audio_files(item, current_depth + 1))
         except PermissionError:
             # Skip directories we can't read
@@ -83,9 +85,9 @@ class AudioFileScanner:
 
         return sorted(audio_files)
 
-    def _group_files_by_audiobook(self, files: List[Path]) -> Dict[Path, List[Path]]:
+    def _group_files_by_audiobook(self, files: list[Path]) -> dict[Path, list[Path]]:
         """Group audio files by their likely audiobook sets."""
-        groups: Dict[Path, List[Path]] = {}
+        groups: dict[Path, list[Path]] = {}
 
         for file_path in files:
             # Use the immediate parent directory as the grouping key
@@ -102,7 +104,9 @@ class AudioFileScanner:
 
         return groups
 
-    def _create_audiobook_set(self, source_path: Path, files: List[Path]) -> AudiobookSet:
+    def _create_audiobook_set(
+        self, source_path: Path, files: list[Path]
+    ) -> AudiobookSet:
         """Create an AudiobookSet from a group of files."""
         tracks = []
         total_duration = 0.0
@@ -120,8 +124,8 @@ class AudioFileScanner:
         tracks.sort(key=lambda t: (t.disc, t.track_index))
 
         # Extract metadata guesses from folder name and tracks
-        title_guess, author_guess, series_guess, volume_guess = self._extract_metadata_guesses(
-            source_path, tracks
+        title_guess, author_guess, series_guess, volume_guess = (
+            self._extract_metadata_guesses(source_path, tracks)
         )
 
         disc_count = max(disc_numbers) if disc_numbers else 1
@@ -135,7 +139,7 @@ class AudioFileScanner:
             disc_count=disc_count,
             total_tracks=len(tracks),
             total_duration=total_duration if total_duration > 0 else None,
-            tracks=tracks
+            tracks=tracks,
         )
 
         # Validate track ordering and add warnings
@@ -144,7 +148,7 @@ class AudioFileScanner:
 
         return audiobook_set
 
-    def _create_track_from_file(self, file_path: Path) -> Optional[Track]:
+    def _create_track_from_file(self, file_path: Path) -> Track | None:
         """Create a Track object from an audio file."""
         try:
             # Get basic file info
@@ -161,7 +165,9 @@ class AudioFileScanner:
             disc_num = self._get_disc_number(file_path, audio_tags)
 
             # Get audio properties
-            duration, bitrate, channels, sample_rate = self._extract_audio_properties(file_path)
+            duration, bitrate, channels, sample_rate = self._extract_audio_properties(
+                file_path
+            )
 
             track = Track(
                 src_path=file_path,
@@ -174,7 +180,7 @@ class AudioFileScanner:
                 file_size=stat.st_size,
                 audio_format=audio_format,
                 existing_tags=audio_tags,
-                status=TrackStatus.VALID
+                status=TrackStatus.VALID,
             )
 
             return track
@@ -186,9 +192,11 @@ class AudioFileScanner:
                 disc=1,
                 track_index=999,  # Put error tracks at the end
                 file_size=file_path.stat().st_size if file_path.exists() else 0,
-                audio_format=self.SUPPORTED_EXTENSIONS.get(file_path.suffix.lower(), AudioFormat.MP3),
+                audio_format=self.SUPPORTED_EXTENSIONS.get(
+                    file_path.suffix.lower(), AudioFormat.MP3
+                ),
                 status=TrackStatus.ERROR,
-                warnings=[f"Error reading file: {str(e)}"]
+                warnings=[f"Error reading file: {str(e)}"],
             )
 
     def _extract_audio_tags(self, file_path: Path) -> AudioTags:
@@ -202,28 +210,34 @@ class AudioFileScanner:
 
             # Map common tag fields
             tag_mapping = {
-                'title': ['TIT2', 'TITLE', '\xa9nam'],
-                'album': ['TALB', 'ALBUM', '\xa9alb'],
-                'artist': ['TPE1', 'ARTIST', '\xa9ART'],
-                'albumartist': ['TPE2', 'ALBUMARTIST', 'aART'],
-                'date': ['TDRC', 'DATE', '\xa9day'],
-                'genre': ['TCON', 'GENRE', '\xa9gen'],
-                'track': ['TRCK', 'TRACKNUMBER', 'trkn'],
-                'disc': ['TPOS', 'DISCNUMBER', 'disk'],
+                "title": ["TIT2", "TITLE", "\xa9nam"],
+                "album": ["TALB", "ALBUM", "\xa9alb"],
+                "artist": ["TPE1", "ARTIST", "\xa9ART"],
+                "albumartist": ["TPE2", "ALBUMARTIST", "aART"],
+                "date": ["TDRC", "DATE", "\xa9day"],
+                "genre": ["TCON", "GENRE", "\xa9gen"],
+                "track": ["TRCK", "TRACKNUMBER", "trkn"],
+                "disc": ["TPOS", "DISCNUMBER", "disk"],
             }
 
             for field, tag_keys in tag_mapping.items():
                 for key in tag_keys:
                     if key in audio_file:
-                        value = audio_file[key][0] if isinstance(audio_file[key], list) else audio_file[key]
+                        value = (
+                            audio_file[key][0]
+                            if isinstance(audio_file[key], list)
+                            else audio_file[key]
+                        )
 
                         # Handle track/disc numbers that might be "1/10" format
-                        if field in ['track', 'disc'] and isinstance(value, str):
+                        if field in ["track", "disc"] and isinstance(value, str):
                             try:
-                                value = int(value.split('/')[0])
+                                value = int(value.split("/")[0])
                             except (ValueError, IndexError):
                                 continue
-                        elif field in ['track', 'disc'] and hasattr(value, '__getitem__'):
+                        elif field in ["track", "disc"] and hasattr(
+                            value, "__getitem__"
+                        ):
                             # Handle tuple format like (1, 10)
                             value = value[0]
 
@@ -239,7 +253,9 @@ class AudioFileScanner:
 
         return tags
 
-    def _extract_audio_properties(self, file_path: Path) -> Tuple[Optional[float], Optional[int], Optional[int], Optional[int]]:
+    def _extract_audio_properties(
+        self, file_path: Path
+    ) -> tuple[float | None, int | None, int | None, int | None]:
         """Extract audio properties (duration, bitrate, channels, sample rate)."""
         try:
             audio_file = MutagenFile(file_path)
@@ -247,10 +263,10 @@ class AudioFileScanner:
                 return None, None, None, None
 
             info = audio_file.info
-            duration = getattr(info, 'length', None)
-            bitrate = getattr(info, 'bitrate', None)
-            channels = getattr(info, 'channels', None)
-            sample_rate = getattr(info, 'sample_rate', None)
+            duration = getattr(info, "length", None)
+            bitrate = getattr(info, "bitrate", None)
+            channels = getattr(info, "channels", None)
+            sample_rate = getattr(info, "sample_rate", None)
 
             return duration, bitrate, channels, sample_rate
 
@@ -268,7 +284,7 @@ class AudioFileScanner:
         # Mutagen ID3 frames expose a ``text`` attribute with the raw values
         if hasattr(value, "text"):
             # Accessing .text may return a list of strings
-            normalized = self._normalize_numeric_tag(getattr(value, "text"))
+            normalized = self._normalize_numeric_tag(value.text)
             if normalized is not None:
                 return normalized
 
@@ -346,17 +362,21 @@ class AudioFileScanner:
         # Default to disc 1
         return 1
 
-    def _extract_metadata_guesses(self, source_path: Path, tracks: List[Track]) -> Tuple[Optional[str], Optional[str], Optional[str], Optional[str]]:
+    def _extract_metadata_guesses(
+        self, source_path: Path, tracks: list[Track]
+    ) -> tuple[str | None, str | None, str | None, str | None]:
         """Extract title, author, series, and volume guesses from path and tracks."""
         # Use folder name as primary source
         folder_name = source_path.name
 
         # Clean up common patterns
-        folder_name = re.sub(r'\s*\[.*?\]\s*', '', folder_name)  # Remove [brackets]
-        folder_name = re.sub(r'\s*\(.*?\)\s*', '', folder_name)  # Remove (parentheses)
+        folder_name = re.sub(r"\s*\[.*?\]\s*", "", folder_name)  # Remove [brackets]
+        folder_name = re.sub(r"\s*\(.*?\)\s*", "", folder_name)  # Remove (parentheses)
 
         # Try to extract series and volume info
-        series_match = re.search(r'(.+?)\s+(?:book|vol|volume)\s*(\d+)', folder_name, re.IGNORECASE)
+        series_match = re.search(
+            r"(.+?)\s+(?:book|vol|volume)\s*(\d+)", folder_name, re.IGNORECASE
+        )
         if series_match:
             series_name = series_match.group(1).strip()
             volume = series_match.group(2)
@@ -364,7 +384,7 @@ class AudioFileScanner:
             return title_guess, None, series_name, volume
 
         # Try author - title pattern
-        author_title_match = re.search(r'^(.+?)\s*[-–—]\s*(.+)$', folder_name)
+        author_title_match = re.search(r"^(.+?)\s*[-–—]\s*(.+)$", folder_name)
         if author_title_match:
             author_guess = author_title_match.group(1).strip()
             # Keep full folder name as the initial title guess while extracting the author name.
@@ -385,8 +405,10 @@ class AudioFileScanner:
                 albumartists.add(str(track.existing_tags.albumartist))
 
         title_guess = albums.pop() if len(albums) == 1 else folder_name
-        author_guess = (albumartists.pop() if len(albumartists) == 1
-                       else artists.pop() if len(artists) == 1
-                       else None)
+        author_guess = (
+            albumartists.pop()
+            if len(albumartists) == 1
+            else artists.pop() if len(artists) == 1 else None
+        )
 
         return title_guess, author_guess, None, None

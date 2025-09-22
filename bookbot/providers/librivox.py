@@ -2,8 +2,7 @@
 
 import asyncio
 import json
-from typing import List, Optional, Dict, Any
-from urllib.parse import quote_plus
+from typing import Any
 
 import aiohttp
 from rapidfuzz import fuzz
@@ -18,16 +17,14 @@ class LibriVoxProvider(MetadataProvider):
     def __init__(self):
         super().__init__("LibriVox")
         self.base_url = "https://librivox.org/api/feed"
-        self.session: Optional[aiohttp.ClientSession] = None
+        self.session: aiohttp.ClientSession | None = None
 
     async def _get_session(self) -> aiohttp.ClientSession:
         """Get or create HTTP session."""
         if self.session is None or self.session.closed:
             self.session = aiohttp.ClientSession(
                 timeout=aiohttp.ClientTimeout(total=30),
-                headers={
-                    "User-Agent": "BookBot/1.0 (Audiobook Organizer)"
-                }
+                headers={"User-Agent": "BookBot/1.0 (Audiobook Organizer)"},
             )
         return self.session
 
@@ -38,22 +35,19 @@ class LibriVoxProvider(MetadataProvider):
 
     async def search(
         self,
-        title: Optional[str] = None,
-        author: Optional[str] = None,
-        series: Optional[str] = None,
-        isbn: Optional[str] = None,
-        year: Optional[int] = None,
-        language: Optional[str] = None,
-        limit: int = 10
-    ) -> List[ProviderIdentity]:
+        title: str | None = None,
+        author: str | None = None,
+        series: str | None = None,
+        isbn: str | None = None,
+        year: int | None = None,
+        language: str | None = None,
+        limit: int = 10,
+    ) -> list[ProviderIdentity]:
         """Search for audiobooks using LibriVox API."""
         session = await self._get_session()
 
         # LibriVox supports title and author searches
-        params = {
-            "format": "json",
-            "limit": min(limit, 50)  # LibriVox API limit
-        }
+        params = {"format": "json", "limit": min(limit, 50)}  # LibriVox API limit
 
         if title:
             params["title"] = title
@@ -85,14 +79,11 @@ class LibriVoxProvider(MetadataProvider):
         except (aiohttp.ClientError, asyncio.TimeoutError, json.JSONDecodeError):
             return []
 
-    async def get_by_id(self, external_id: str) -> Optional[ProviderIdentity]:
+    async def get_by_id(self, external_id: str) -> ProviderIdentity | None:
         """Get a book by its LibriVox ID."""
         session = await self._get_session()
 
-        params = {
-            "format": "json",
-            "id": external_id
-        }
+        params = {"format": "json", "id": external_id}
 
         try:
             async with session.get(self.base_url, params=params) as response:
@@ -110,7 +101,7 @@ class LibriVoxProvider(MetadataProvider):
         except (aiohttp.ClientError, asyncio.TimeoutError, json.JSONDecodeError):
             return None
 
-    def _parse_book(self, book: Dict[str, Any]) -> Optional[ProviderIdentity]:
+    def _parse_book(self, book: dict[str, Any]) -> ProviderIdentity | None:
         """Parse a LibriVox book into a ProviderIdentity."""
         title = book.get("title")
         if not title:
@@ -121,7 +112,9 @@ class LibriVoxProvider(MetadataProvider):
         if book.get("authors"):
             for author in book["authors"]:
                 if isinstance(author, dict):
-                    author_name = f"{author.get('first_name', '')} {author.get('last_name', '')}".strip()
+                    first_name = author.get("first_name", "")
+                    last_name = author.get("last_name", "")
+                    author_name = f"{first_name} {last_name}".strip()
                     if author_name:
                         authors.append(author_name)
                 elif isinstance(author, str):
@@ -143,10 +136,10 @@ class LibriVoxProvider(MetadataProvider):
         url_project = book.get("url_project", "")
 
         # Cover art (LibriVox doesn't always have cover art)
-        cover_urls = {}
+        cover_urls = []
         if url_project:
             # Construct potential cover art URL
-            cover_urls["thumbnail"] = url_project + "/cover.jpg"
+            cover_urls.append(url_project + "/cover.jpg")
 
         # Description
         description = book.get("description", "")
@@ -162,7 +155,7 @@ class LibriVoxProvider(MetadataProvider):
         sections = book.get("sections", [])
 
         return ProviderIdentity(
-            provider_name=self.name,
+            provider=self.name,
             external_id=str(book.get("id", "")),
             title=title,
             authors=authors,
@@ -170,28 +163,27 @@ class LibriVoxProvider(MetadataProvider):
             series_index=None,
             year=year,
             language=language,
-            identifiers={},  # LibriVox doesn't provide ISBNs
             cover_urls=cover_urls,
             description=description,
-            metadata={
+            raw_data={
                 "genre": genre,
                 "categories": categories,
                 "url_librivox": url_librivox,
                 "url_project": url_project,
                 "total_time_seconds": total_time,
                 "num_sections": len(sections),
-                "reader_count": len(set(s.get("reader", "") for s in sections if s.get("reader"))),
+                "reader_count": len(
+                    {s.get("reader") for s in sections if s.get("reader")}
+                ),
                 "copyright_year": book.get("copyright_year"),
                 "zip_file": book.get("url_zip_file"),
                 "m4b_file": book.get("url_m4b"),
-                "public_domain": True  # All LibriVox content is public domain
-            }
+                "public_domain": True,  # All LibriVox content is public domain
+            },
         )
 
     def calculate_match_score(
-        self,
-        audiobook_set: AudiobookSet,
-        identity: ProviderIdentity
+        self, audiobook_set: AudiobookSet, identity: ProviderIdentity
     ) -> float:
         """Calculate match score between audiobook set and LibriVox identity."""
         score = 0.0
@@ -199,10 +191,12 @@ class LibriVoxProvider(MetadataProvider):
 
         # Title matching (weight: 0.5 - higher for LibriVox since less metadata)
         if audiobook_set.raw_title_guess and identity.title:
-            title_ratio = fuzz.ratio(
-                audiobook_set.raw_title_guess.lower(),
-                identity.title.lower()
-            ) / 100.0
+            title_ratio = (
+                fuzz.ratio(
+                    audiobook_set.raw_title_guess.lower(), identity.title.lower()
+                )
+                / 100.0
+            )
             score += title_ratio * 0.5
             total_weight += 0.5
 
@@ -210,10 +204,10 @@ class LibriVoxProvider(MetadataProvider):
         if audiobook_set.author_guess and identity.authors:
             author_scores = []
             for author in identity.authors:
-                author_ratio = fuzz.ratio(
-                    audiobook_set.author_guess.lower(),
-                    author.lower()
-                ) / 100.0
+                author_ratio = (
+                    fuzz.ratio(audiobook_set.author_guess.lower(), author.lower())
+                    / 100.0
+                )
                 author_scores.append(author_ratio)
 
             if author_scores:
@@ -228,7 +222,7 @@ class LibriVoxProvider(MetadataProvider):
             total_weight += 0.1
 
         # Bonus for public domain content (weight: 0.05)
-        if identity.metadata.get("public_domain"):
+        if identity.raw_data.get("public_domain"):
             score += 1.0 * 0.05
             total_weight += 0.05
 

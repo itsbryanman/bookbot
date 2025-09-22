@@ -50,9 +50,10 @@ Intelligently parses disc numbers from folder or file names to correctly handle 
 
 ### DRM Removal
 Built-in support for removing DRM from supported formats:
-- **Audible AAX files** (requires activation bytes)
-- Detection and handling of various DRM types
+- **Audible AAX/AAXC files** with secure browser-based authentication
+- Automatic detection and handling of various DRM types
 - Safe conversion to DRM-free formats
+- No manual activation bytes required for Audible content
 
 ### M4B Conversion Pipeline
 An optional feature to merge audiobook tracks into a single M4B file, powered by FFmpeg. Features include:
@@ -145,6 +146,15 @@ bookbot convert /input/folder -o /output/folder --dry-run
 
 ### DRM Management
 
+#### Authentication
+```bash
+# Launch TUI and use the DRM Removal tab for browser-based Audible authentication
+bookbot tui /path/to/audiobooks
+
+# The TUI provides a secure OAuth flow that opens your browser for authentication
+# No need to extract or manage activation bytes manually
+```
+
 #### Detection
 ```bash
 # Detect DRM on individual files
@@ -159,17 +169,20 @@ bookbot drm detect *.{mp3,m4a,aax,aaxc}
 
 #### Removal
 ```bash
-# Remove DRM from AAX files (requires activation bytes)
-bookbot drm remove file.aax --activation-bytes XXXXXXXX
+# Remove DRM from AAX/AAXC files (authentication via TUI)
+bookbot drm remove file.aax
 
 # Remove DRM with custom output directory
-bookbot drm remove *.aax -o /output/folder --activation-bytes XXXXXXXX
+bookbot drm remove *.aax -o /output/folder
 
 # Dry run to see what would be processed
-bookbot drm remove *.aax --dry-run --activation-bytes XXXXXXXX
+bookbot drm remove *.aax --dry-run
 
 # Process entire directory recursively
-bookbot drm remove /folder --recursive --activation-bytes XXXXXXXX
+bookbot drm remove /folder --recursive
+
+# Legacy support: Manual activation bytes (if needed)
+bookbot drm remove file.aax --activation-bytes XXXXXXXX
 ```
 
 ### Provider Management
@@ -308,6 +321,7 @@ bookbot completions all -o ./completions
 3. **Match Review**: Examine metadata matches and confidence scores
 4. **Preview**: See proposed changes before applying
 5. **Convert**: Configure and execute M4B conversion
+6. **DRM Removal**: Secure browser-based Audible authentication and DRM removal
 
 ### Troubleshooting
 
@@ -323,11 +337,11 @@ sudo apt install ffmpeg  # Ubuntu/Debian
 brew install ffmpeg      # macOS
 choco install ffmpeg     # Windows
 
-# If activation bytes are needed for AAX files
-# Extract from your Audible account using tools like:
-# - audible-activator
-# - AAXtoMP3
-# Then use: bookbot drm remove file.aax --activation-bytes XXXXXXXX
+# If DRM removal fails for Audible files
+# Use the TUI DRM Removal tab for browser-based authentication
+bookbot tui /path/to/audiobooks
+# Navigate to DRM Removal tab and click "Begin Login"
+# Complete authentication in your browser when prompted
 
 # Clear cache if metadata seems stale
 rm -rf ~/.cache/bookbot/

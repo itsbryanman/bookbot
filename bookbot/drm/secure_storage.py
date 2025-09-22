@@ -1,14 +1,16 @@
-import keyring
+import keyring  # type: ignore
 import toml
 
-from bookbot.core.models import Token
+from bookbot.drm.models import Token
 
 
 def save_token(token: Token, service_name: str = "bookbot") -> None:
     """
     Saves a token to the system's keyring.
     """
-    keyring.set_password(service_name, "token", toml.dumps({"token": token.dict()}))
+    keyring.set_password(
+        service_name, "token", toml.dumps({"token": token.model_dump()})
+    )
 
 
 def load_token(service_name: str = "bookbot") -> Token | None:
@@ -17,7 +19,7 @@ def load_token(service_name: str = "bookbot") -> Token | None:
     """
     stored_token = keyring.get_password(service_name, "token")
     if stored_token:
-        return Token.parse_obj(toml.loads(stored_token)["token"])
+        return Token.model_validate(toml.loads(stored_token)["token"])
     return None
 
 
@@ -27,5 +29,5 @@ def delete_token(service_name: str = "bookbot") -> None:
     """
     try:
         keyring.delete_password(service_name, "token")
-    except keyring.errors.PasswordNotFoundError:
+    except keyring.errors.PasswordDeleteError:
         pass

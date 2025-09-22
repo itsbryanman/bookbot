@@ -26,7 +26,8 @@ _bookbot_completion() {
         scan)
             case "${prev}" in
                 --profile)
-                    COMPREPLY=( $(compgen -W "default plex audible series safe full" -- ${cur}) )
+                    COMPREPLY=( $(compgen -W "default plex audible series safe full" \
+                        -- ${cur}) )
                     return 0
                     ;;
                 --template)
@@ -38,7 +39,8 @@ _bookbot_completion() {
                     return 0
                     ;;
                 *)
-                    opts="--dry-run --profile --recurse --no-tag --template --lang --cache --log --help"
+                    opts="--dry-run --profile --recurse --no-tag --template --lang"
+                    opts+=" --cache --log --help"
                     COMPREPLY=( $(compgen -W "${opts}" -- ${cur}) )
                     if [[ ${cur} != -* ]]; then
                         COMPREPLY+=( $(compgen -d -- ${cur}) )
@@ -50,7 +52,8 @@ _bookbot_completion() {
         tui)
             case "${prev}" in
                 --profile)
-                    COMPREPLY=( $(compgen -W "default plex audible series safe full" -- ${cur}) )
+                    COMPREPLY=( $(compgen -W "default plex audible series safe full" \
+                        -- ${cur}) )
                     return 0
                     ;;
                 *)
@@ -74,7 +77,8 @@ _bookbot_completion() {
                     return 0
                     ;;
                 --bitrate)
-                    COMPREPLY=( $(compgen -W "64k 96k 128k 160k 192k 256k 320k" -- ${cur}) )
+                    COMPREPLY=( $(compgen -W "64k 96k 128k 160k 192k 256k 320k" \
+                        -- ${cur}) )
                     return 0
                     ;;
                 --vbr)
@@ -86,7 +90,8 @@ _bookbot_completion() {
                     return 0
                     ;;
                 *)
-                    opts="-o --output --profile --bitrate --vbr --normalize --chapters --no-art --dry-run --help"
+                    opts="-o --output --profile --bitrate --vbr --normalize --chapters"
+                    opts+=" --no-art --dry-run --help"
                     COMPREPLY=( $(compgen -W "${opts}" -- ${cur}) )
                     if [[ ${cur} != -* ]]; then
                         COMPREPLY+=( $(compgen -d -- ${cur}) )
@@ -117,7 +122,8 @@ _bookbot_completion() {
                         opts="--recursive --help"
                         COMPREPLY=( $(compgen -W "${opts}" -- ${cur}) )
                         if [[ ${cur} != -* ]]; then
-                            COMPREPLY+=( $(compgen -f -X '!*.@(mp3|m4a|m4b|aax|aaxc|flac|ogg|opus|aac|wav)' -- ${cur}) )
+                            local exts='!*.@(mp3|m4a|m4b|aax|aaxc|flac|ogg|opus|aac|wav)'
+                            COMPREPLY+=( $(compgen -f -X "${exts}" -- ${cur}) )
                             COMPREPLY+=( $(compgen -d -- ${cur}) )
                         fi
                         return 0
@@ -129,7 +135,8 @@ _bookbot_completion() {
                                 return 0
                                 ;;
                             *)
-                                opts="-o --output-dir --activation-bytes --dry-run --recursive --help"
+                                opts="-o --output-dir --activation-bytes --dry-run"
+                                opts+=" --recursive --help"
                                 COMPREPLY=( $(compgen -W "${opts}" -- ${cur}) )
                                 if [[ ${cur} != -* ]]; then
                                     COMPREPLY+=( $(compgen -f -X '!*.@(aax|aaxc)' -- ${cur}) )
@@ -436,15 +443,15 @@ def main(shell: str, output_dir: str) -> None:
 
         click.echo(f"Generated {shell_name} completion: {file_path}")
 
-    click.echo(f"\nTo install completions:")
+    click.echo("\nTo install completions:")
 
     if 'bash' in shells_to_generate:
         click.echo(f"  Bash: source {output_path / 'bookbot.bash'}")
-        click.echo(f"        or copy to /etc/bash_completion.d/")
+        click.echo("        or copy to /etc/bash_completion.d/")
 
     if 'zsh' in shells_to_generate:
         click.echo(f"  Zsh:  add {output_path} to your fpath")
-        click.echo(f"        or copy _bookbot to any directory in $fpath")
+        click.echo("        or copy _bookbot to any directory in $fpath")
 
     if 'fish' in shells_to_generate:
         click.echo(f"  Fish: copy {output_path / 'bookbot.fish'} to ~/.config/fish/completions/")

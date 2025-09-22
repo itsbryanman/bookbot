@@ -23,7 +23,6 @@ from .screens import (
 )
 
 
-
 class BookBotApp(App):
     """Main BookBot TUI application."""
 

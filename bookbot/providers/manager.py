@@ -1,13 +1,11 @@
 """Provider manager for handling multiple metadata sources."""
 
-from typing import Dict, List, Optional, Type
-
 from ..config.manager import ConfigManager
+from .audible import AudibleProvider
 from .base import MetadataProvider
-from .openlibrary import OpenLibraryProvider
 from .googlebooks import GoogleBooksProvider
 from .librivox import LibriVoxProvider
-from .audible import AudibleProvider
+from .openlibrary import OpenLibraryProvider
 
 
 class ProviderManager:
@@ -15,7 +13,7 @@ class ProviderManager:
 
     def __init__(self, config_manager: ConfigManager):
         self.config_manager = config_manager
-        self.providers: Dict[str, MetadataProvider] = {}
+        self.providers: dict[str, MetadataProvider] = {}
         self._initialize_providers()
 
     def _initialize_providers(self) -> None:
@@ -27,7 +25,10 @@ class ProviderManager:
         self.providers["openlibrary"] = OpenLibraryProvider()
 
         # Add Google Books if API key is provided
-        if provider_config.google_books.enabled and provider_config.google_books.api_key:
+        if (
+            provider_config.google_books.enabled
+            and provider_config.google_books.api_key
+        ):
             self.providers["googlebooks"] = GoogleBooksProvider(
                 api_key=provider_config.google_books.api_key
             )
@@ -41,7 +42,7 @@ class ProviderManager:
             marketplace = provider_config.audible.marketplace
             self.providers["audible"] = AudibleProvider(marketplace=marketplace)
 
-    def get_enabled_providers(self) -> List[MetadataProvider]:
+    def get_enabled_providers(self) -> list[MetadataProvider]:
         """Get list of enabled providers in priority order."""
         config = self.config_manager.load_config()
         provider_order = config.providers.priority_order
@@ -52,13 +53,13 @@ class ProviderManager:
                 enabled_providers.append(self.providers[provider_name])
 
         # Add any remaining providers not in the priority list
-        for provider_name, provider in self.providers.items():
+        for _, provider in self.providers.items():
             if provider not in enabled_providers:
                 enabled_providers.append(provider)
 
         return enabled_providers
 
-    def get_provider(self, name: str) -> Optional[MetadataProvider]:
+    def get_provider(self, name: str) -> MetadataProvider | None:
         """Get a specific provider by name."""
         return self.providers.get(name.lower())
 
@@ -70,10 +71,10 @@ class ProviderManager:
     async def close_all(self) -> None:
         """Close all provider connections."""
         for provider in self.providers.values():
-            if hasattr(provider, 'close'):
+            if hasattr(provider, "close"):
                 await provider.close()
 
-    def list_providers(self) -> Dict[str, Dict[str, str]]:
+    def list_providers(self) -> dict[str, dict[str, str]]:
         """List all available providers with their status."""
         config = self.config_manager.load_config()
         provider_config = config.providers
@@ -83,28 +84,28 @@ class ProviderManager:
                 "name": "Open Library",
                 "status": "enabled" if "openlibrary" in self.providers else "disabled",
                 "description": "Free, comprehensive book database",
-                "requires_api_key": "no"
+                "requires_api_key": "no",
             },
             "googlebooks": {
                 "name": "Google Books",
                 "status": "enabled" if "googlebooks" in self.providers else "disabled",
                 "description": "Google's extensive book catalog",
                 "requires_api_key": "yes",
-                "api_key_provided": bool(provider_config.google_books.api_key)
+                "api_key_provided": bool(provider_config.google_books.api_key),
             },
             "librivox": {
                 "name": "LibriVox",
                 "status": "enabled" if "librivox" in self.providers else "disabled",
                 "description": "Public domain audiobooks",
-                "requires_api_key": "no"
+                "requires_api_key": "no",
             },
             "audible": {
                 "name": "Audible",
                 "status": "enabled" if "audible" in self.providers else "disabled",
                 "description": "Audible audiobook metadata",
                 "requires_api_key": "no",
-                "marketplace": provider_config.audible.marketplace
-            }
+                "marketplace": provider_config.audible.marketplace,
+            },
         }
 
         return providers_info

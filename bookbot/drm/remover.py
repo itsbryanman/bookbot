@@ -1,20 +1,18 @@
 """DRM removal functionality."""
 
 import subprocess
-import tempfile
 from pathlib import Path
-from typing import Optional, List, Dict, Any
 
 from .detector import DRMDetector
-from .models import DRMInfo, DRMType, RemovalResult
+from .models import DRMType, RemovalResult
 
 
 class DRMRemover:
     """Removes DRM protection from audio files."""
 
-    def __init__(self,
-                 ffmpeg_path: Optional[str] = None,
-                 activation_bytes: Optional[str] = None) -> None:
+    def __init__(
+        self, ffmpeg_path: str | None = None, activation_bytes: str | None = None
+    ) -> None:
         """
         Initialize the DRM remover.
 
@@ -26,10 +24,12 @@ class DRMRemover:
         self.activation_bytes = activation_bytes
         self.detector = DRMDetector()
 
-    def remove_drm(self,
-                   file_path: Path,
-                   output_path: Optional[Path] = None,
-                   activation_bytes: Optional[str] = None) -> RemovalResult:
+    def remove_drm(
+        self,
+        file_path: Path,
+        output_path: Path | None = None,
+        activation_bytes: str | None = None,
+    ) -> RemovalResult:
         """
         Remove DRM protection from an audio file.
 
@@ -50,7 +50,7 @@ class DRMRemover:
                 original_file=file_path,
                 output_file=file_path,  # No conversion needed
                 drm_info=drm_info,
-                method_used="no_drm"
+                method_used="no_drm",
             )
 
         # Generate output path if not provided
@@ -72,7 +72,7 @@ class DRMRemover:
                     success=False,
                     original_file=file_path,
                     drm_info=drm_info,
-                    error_message=f"Unsupported DRM type: {drm_info.drm_type}"
+                    error_message=f"Unsupported DRM type: {drm_info.drm_type}",
                 )
 
         except Exception as e:
@@ -80,47 +80,44 @@ class DRMRemover:
                 success=False,
                 original_file=file_path,
                 drm_info=drm_info,
-                error_message=str(e)
+                error_message=str(e),
             )
 
-    def _remove_aax_drm(self,
-                        input_path: Path,
-                        output_path: Path,
-                        activation_bytes: Optional[str]) -> RemovalResult:
+    def _remove_aax_drm(
+        self, input_path: Path, output_path: Path, activation_bytes: str | None
+    ) -> RemovalResult:
         """Remove DRM from Audible AAX files using ffmpeg."""
         if not activation_bytes:
             return RemovalResult(
                 success=False,
                 original_file=input_path,
                 drm_info=self.detector.detect_drm(input_path),
-                error_message="Activation bytes required for AAX DRM removal"
+                error_message="Activation bytes required for AAX DRM removal",
             )
 
         try:
             # Use ffmpeg to convert AAX to M4A/MP3
             cmd = [
                 self.ffmpeg_path,
-                "-activation_bytes", activation_bytes,
-                "-i", str(input_path),
+                "-activation_bytes",
+                activation_bytes,
+                "-i",
+                str(input_path),
                 "-vn",  # No video
-                "-c:a", "copy",  # Copy audio codec if possible
+                "-c:a",
+                "copy",  # Copy audio codec if possible
                 "-y",  # Overwrite output
-                str(output_path)
+                str(output_path),
             ]
 
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                check=True
-            )
+            subprocess.run(cmd, capture_output=True, text=True, check=True)
 
             return RemovalResult(
                 success=True,
                 original_file=input_path,
                 output_file=output_path,
                 drm_info=self.detector.detect_drm(input_path),
-                method_used="ffmpeg_activation_bytes"
+                method_used="ffmpeg_activation_bytes",
             )
 
         except subprocess.CalledProcessError as e:
@@ -129,7 +126,7 @@ class DRMRemover:
                 success=False,
                 original_file=input_path,
                 drm_info=self.detector.detect_drm(input_path),
-                error_message=error_msg
+                error_message=error_msg,
             )
 
     def _remove_aaxc_drm(self, input_path: Path, output_path: Path) -> RemovalResult:
@@ -140,16 +137,18 @@ class DRMRemover:
             success=False,
             original_file=input_path,
             drm_info=self.detector.detect_drm(input_path),
-            error_message="AAXC DRM removal not yet implemented"
+            error_message="AAXC DRM removal not yet implemented",
         )
 
-    def _remove_fairplay_drm(self, input_path: Path, output_path: Path) -> RemovalResult:
+    def _remove_fairplay_drm(
+        self, input_path: Path, output_path: Path
+    ) -> RemovalResult:
         """Remove FairPlay DRM from iTunes files."""
         return RemovalResult(
             success=False,
             original_file=input_path,
             drm_info=self.detector.detect_drm(input_path),
-            error_message="FairPlay DRM removal requires iTunes authorization"
+            error_message="FairPlay DRM removal requires iTunes authorization",
         )
 
     def _generate_output_path(self, input_path: Path, drm_type: DRMType) -> Path:
@@ -169,10 +168,12 @@ class DRMRemover:
 
         return parent / f"{stem}_no_drm{extension}"
 
-    def batch_remove_drm(self,
-                         file_paths: List[Path],
-                         output_dir: Optional[Path] = None,
-                         activation_bytes: Optional[str] = None) -> List[RemovalResult]:
+    def batch_remove_drm(
+        self,
+        file_paths: list[Path],
+        output_dir: Path | None = None,
+        activation_bytes: str | None = None,
+    ) -> list[RemovalResult]:
         """
         Remove DRM from multiple files.
 
@@ -188,10 +189,12 @@ class DRMRemover:
 
         for file_path in file_paths:
             if output_dir:
-                output_path = output_dir / self._generate_output_path(
-                    file_path,
-                    self.detector.detect_drm(file_path).drm_type
-                ).name
+                output_path = (
+                    output_dir
+                    / self._generate_output_path(
+                        file_path, self.detector.detect_drm(file_path).drm_type
+                    ).name
+                )
             else:
                 output_path = None
 
@@ -207,13 +210,13 @@ class DRMRemover:
                 [self.ffmpeg_path, "-h", "full"],
                 capture_output=True,
                 text=True,
-                check=True
+                check=True,
             )
             return "activation_bytes" in result.stdout
         except (subprocess.CalledProcessError, FileNotFoundError):
             return False
 
-    def get_supported_formats(self) -> List[DRMType]:
+    def get_supported_formats(self) -> list[DRMType]:
         """Get list of DRM formats this remover can handle."""
         supported = [DRMType.NONE]  # Always support non-DRM files
 

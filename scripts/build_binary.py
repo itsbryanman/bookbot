@@ -140,7 +140,7 @@ exe = EXE(
             str(spec_file)
         ]
 
-        result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+        subprocess.run(cmd, check=True, capture_output=True, text=True)
         print("PyInstaller completed successfully")
 
         # Verify the binary was created
@@ -186,7 +186,6 @@ exe = EXE(
 
 def create_installer(target=None, output_dir=None):
     """Create platform-specific installer."""
-    project_root = Path(__file__).parent.parent
     platform_name, arch, ext = get_platform_info()
     if target:
         platform_name = target
@@ -226,8 +225,11 @@ def main():
                        help="Output directory for built files")
     parser.add_argument("--installer", action="store_true",
                        help="Create platform-specific installer")
-    parser.add_argument("--all", action="store_true",
-                       help="Build for all supported platforms (requires cross-compilation)")
+    parser.add_argument(
+        "--all",
+        action="store_true",
+        help="Build for all supported platforms (requires cross-compilation)",
+    )
 
     args = parser.parse_args()
 

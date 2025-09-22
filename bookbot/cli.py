@@ -1,49 +1,60 @@
 """Command-line interface for BookBot."""
 
-import asyncio
 import sys
 from pathlib import Path
-from typing import Optional
 
 import click
 
 from .config.manager import ConfigManager
 from .core.discovery import AudioFileScanner
 from .core.operations import TransactionManager
-from .providers.openlibrary import OpenLibraryProvider
 
 
 @click.group()
 @click.version_option()
-@click.option('--config-dir', type=click.Path(path_type=Path),
-              help='Configuration directory path')
+@click.option(
+    "--config-dir", type=click.Path(path_type=Path), help="Configuration directory path"
+)
 @click.pass_context
-def cli(ctx: click.Context, config_dir: Optional[Path]) -> None:
+def cli(ctx: click.Context, config_dir: Path | None) -> None:
     """BookBot - A cross-platform TUI audiobook renamer and organizer."""
     # Ensure that ctx.obj exists and is a dict
     ctx.ensure_object(dict)
 
     # Initialize configuration manager
-    ctx.obj['config_manager'] = ConfigManager(config_dir)
+    ctx.obj["config_manager"] = ConfigManager(config_dir)
 
 
 @cli.command()
-@click.argument('folder', type=click.Path(exists=True, file_okay=False, path_type=Path))
-@click.option('--dry-run', is_flag=True, default=True,
-              help='Show what would be done without making changes')
-@click.option('--profile', type=str, help='Configuration profile to use')
-@click.option('--recurse', type=int, default=5, help='Maximum recursion depth')
-@click.option('--no-tag', is_flag=True, help='Skip tagging operations')
-@click.option('--template', type=str, help='Naming template to use')
-@click.option('--lang', type=str, default='en', help='Preferred language')
-@click.option('--cache', type=click.Path(path_type=Path), help='Cache directory')
-@click.option('--log', type=click.Path(path_type=Path), help='Log file path')
+@click.argument("folder", type=click.Path(exists=True, file_okay=False, path_type=Path))
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    default=True,
+    help="Show what would be done without making changes",
+)
+@click.option("--profile", type=str, help="Configuration profile to use")
+@click.option("--recurse", type=int, default=5, help="Maximum recursion depth")
+@click.option("--no-tag", is_flag=True, help="Skip tagging operations")
+@click.option("--template", type=str, help="Naming template to use")
+@click.option("--lang", type=str, default="en", help="Preferred language")
+@click.option("--cache", type=click.Path(path_type=Path), help="Cache directory")
+@click.option("--log", type=click.Path(path_type=Path), help="Log file path")
 @click.pass_context
-def scan(ctx: click.Context, folder: Path, dry_run: bool, profile: Optional[str],
-         recurse: int, no_tag: bool, template: Optional[str], lang: str,
-         cache: Optional[Path], log: Optional[Path]) -> None:
+def scan(
+    ctx: click.Context,
+    folder: Path,
+    dry_run: bool,
+    profile: str | None,
+    recurse: int,
+    no_tag: bool,
+    template: str | None,
+    lang: str,
+    cache: Path | None,
+    log: Path | None,
+) -> None:
     """Scan a folder for audiobooks and propose renames."""
-    config_manager = ctx.obj['config_manager']
+    config_manager = ctx.obj["config_manager"]
 
     # Apply profile if specified
     if profile:
@@ -88,7 +99,9 @@ def scan(ctx: click.Context, folder: Path, dry_run: bool, profile: Optional[str]
                     click.echo(f"     - {warning}")
 
         if dry_run:
-            click.echo("\nDry run completed. Use 'bookbot tui' for interactive processing.")
+            click.echo(
+                "\nDry run completed. Use 'bookbot tui' for interactive processing."
+            )
 
     except Exception as e:
         click.echo(f"Error scanning directory: {e}", err=True)
@@ -96,12 +109,14 @@ def scan(ctx: click.Context, folder: Path, dry_run: bool, profile: Optional[str]
 
 
 @cli.command()
-@click.argument('folders', nargs=-1, type=click.Path(exists=True, file_okay=False, path_type=Path))
-@click.option('--profile', type=str, help='Configuration profile to use')
+@click.argument(
+    "folders", nargs=-1, type=click.Path(exists=True, file_okay=False, path_type=Path)
+)
+@click.option("--profile", type=str, help="Configuration profile to use")
 @click.pass_context
-def tui(ctx: click.Context, folders: tuple[Path, ...], profile: Optional[str]) -> None:
+def tui(ctx: click.Context, folders: tuple[Path, ...], profile: str | None) -> None:
     """Launch the interactive TUI for audiobook processing."""
-    config_manager = ctx.obj['config_manager']
+    config_manager = ctx.obj["config_manager"]
 
     # Apply profile if specified
     if profile:
@@ -121,7 +136,11 @@ def tui(ctx: click.Context, folders: tuple[Path, ...], profile: Optional[str]) -
         app.run()
 
     except ImportError:
-        click.echo("Error: Textual is required for TUI mode. Install with: pip install textual", err=True)
+        click.echo(
+            "Error: Textual is required for TUI mode. "
+            "Install with: pip install textual",
+            err=True,
+        )
         sys.exit(1)
     except Exception as e:
         click.echo(f"Error running TUI: {e}", err=True)
@@ -129,23 +148,41 @@ def tui(ctx: click.Context, folders: tuple[Path, ...], profile: Optional[str]) -
 
 
 @cli.command()
-@click.argument('folder', type=click.Path(exists=True, file_okay=False, path_type=Path))
-@click.option('-o', '--output', type=click.Path(path_type=Path), required=True,
-              help='Output directory for converted files')
-@click.option('--profile', type=str, help='Configuration profile to use')
-@click.option('--bitrate', type=str, default='128k', help='AAC bitrate (e.g., 128k)')
-@click.option('--vbr', type=int, help='VBR quality (1-6, overrides bitrate)')
-@click.option('--normalize', is_flag=True, help='Normalize audio levels')
-@click.option('--chapters', type=click.Choice(['auto', 'from-tags']), default='auto',
-              help='Chapter creation method')
-@click.option('--no-art', is_flag=True, help='Skip cover art embedding')
-@click.option('--dry-run', is_flag=True, help='Show conversion plan without executing')
+@click.argument("folder", type=click.Path(exists=True, file_okay=False, path_type=Path))
+@click.option(
+    "-o",
+    "--output",
+    type=click.Path(path_type=Path),
+    required=True,
+    help="Output directory for converted files",
+)
+@click.option("--profile", type=str, help="Configuration profile to use")
+@click.option("--bitrate", type=str, default="128k", help="AAC bitrate (e.g., 128k)")
+@click.option("--vbr", type=int, help="VBR quality (1-6, overrides bitrate)")
+@click.option("--normalize", is_flag=True, help="Normalize audio levels")
+@click.option(
+    "--chapters",
+    type=click.Choice(["auto", "from-tags"]),
+    default="auto",
+    help="Chapter creation method",
+)
+@click.option("--no-art", is_flag=True, help="Skip cover art embedding")
+@click.option("--dry-run", is_flag=True, help="Show conversion plan without executing")
 @click.pass_context
-def convert(ctx: click.Context, folder: Path, output: Path, profile: Optional[str],
-           bitrate: str, vbr: Optional[int], normalize: bool, chapters: str,
-           no_art: bool, dry_run: bool) -> None:
+def convert(
+    ctx: click.Context,
+    folder: Path,
+    output: Path,
+    profile: str | None,
+    bitrate: str,
+    vbr: int | None,
+    normalize: bool,
+    chapters: str,
+    no_art: bool,
+    dry_run: bool,
+) -> None:
     """Convert audiobooks to M4B format."""
-    config_manager = ctx.obj['config_manager']
+    config_manager = ctx.obj["config_manager"]
 
     # Apply profile if specified
     if profile:
@@ -184,7 +221,9 @@ def convert(ctx: click.Context, folder: Path, output: Path, profile: Optional[st
         if dry_run:
             # Show conversion plan
             plan = pipeline.create_conversion_plan(folder, conv_config)
-            click.echo(f"Conversion plan created with {len(plan.operations)} operation(s)")
+            click.echo(
+                f"Conversion plan created with {len(plan.operations)} operation(s)"
+            )
             # TODO: Display plan details
         else:
             # Execute conversion
@@ -196,8 +235,11 @@ def convert(ctx: click.Context, folder: Path, output: Path, profile: Optional[st
                 sys.exit(1)
 
     except ImportError as e:
-        if 'ffmpeg' in str(e).lower():
-            click.echo("Error: FFmpeg is required for conversion. Please install FFmpeg.", err=True)
+        if "ffmpeg" in str(e).lower():
+            click.echo(
+                "Error: FFmpeg is required for conversion. Please install FFmpeg.",
+                err=True,
+            )
         else:
             click.echo(f"Error: Missing dependency for conversion: {e}", err=True)
         sys.exit(1)
@@ -207,11 +249,11 @@ def convert(ctx: click.Context, folder: Path, output: Path, profile: Optional[st
 
 
 @cli.command()
-@click.argument('transaction_id', type=str)
+@click.argument("transaction_id", type=str)
 @click.pass_context
 def undo(ctx: click.Context, transaction_id: str) -> None:
     """Undo a previous operation by transaction ID."""
-    config_manager = ctx.obj['config_manager']
+    config_manager = ctx.obj["config_manager"]
     transaction_manager = TransactionManager(config_manager)
 
     try:
@@ -231,11 +273,11 @@ def config() -> None:
     pass
 
 
-@config.command('list')
+@config.command("list")
 @click.pass_context
 def config_list(ctx: click.Context) -> None:
     """List configuration profiles."""
-    config_manager = ctx.obj['config_manager']
+    config_manager = ctx.obj["config_manager"]
     profiles = config_manager.list_profiles()
 
     if not profiles:
@@ -247,12 +289,12 @@ def config_list(ctx: click.Context) -> None:
         click.echo(f"  {name}: {description}")
 
 
-@config.command('show')
-@click.argument('profile_name', type=str, required=False)
+@config.command("show")
+@click.argument("profile_name", type=str, required=False)
 @click.pass_context
-def config_show(ctx: click.Context, profile_name: Optional[str]) -> None:
+def config_show(ctx: click.Context, profile_name: str | None) -> None:
     """Show configuration details."""
-    config_manager = ctx.obj['config_manager']
+    config_manager = ctx.obj["config_manager"]
 
     if profile_name:
         profile = config_manager.load_profile(profile_name)
@@ -273,12 +315,12 @@ def config_show(ctx: click.Context, profile_name: Optional[str]) -> None:
     click.echo(f"Conversion enabled: {config_data.conversion.enabled}")
 
 
-@config.command('reset')
-@click.confirmation_option(prompt='Reset configuration to defaults?')
+@config.command("reset")
+@click.confirmation_option(prompt="Reset configuration to defaults?")
 @click.pass_context
 def config_reset(ctx: click.Context) -> None:
     """Reset configuration to defaults."""
-    config_manager = ctx.obj['config_manager']
+    config_manager = ctx.obj["config_manager"]
     config_manager.reset_to_defaults()
     click.echo("Configuration reset to defaults")
 
@@ -289,14 +331,14 @@ def provider() -> None:
     pass
 
 
-@provider.command('list')
+@provider.command("list")
 @click.pass_context
 def provider_list(ctx: click.Context) -> None:
     """List available metadata providers."""
     try:
         from .providers.manager import ProviderManager
 
-        config_manager = ctx.obj['config_manager']
+        config_manager = ctx.obj["config_manager"]
         provider_manager = ProviderManager(config_manager)
 
         providers_info = provider_manager.list_providers()
@@ -322,12 +364,12 @@ def provider_list(ctx: click.Context) -> None:
         sys.exit(1)
 
 
-@provider.command('enable')
-@click.argument('provider_name', type=str)
+@provider.command("enable")
+@click.argument("provider_name", type=str)
 @click.pass_context
 def provider_enable(ctx: click.Context, provider_name: str) -> None:
     """Enable a metadata provider."""
-    config_manager = ctx.obj['config_manager']
+    config_manager = ctx.obj["config_manager"]
     config = config_manager.load_config()
 
     provider_name = provider_name.lower()
@@ -354,12 +396,12 @@ def provider_enable(ctx: click.Context, provider_name: str) -> None:
     click.echo(f"Provider '{provider_name}' enabled")
 
 
-@provider.command('disable')
-@click.argument('provider_name', type=str)
+@provider.command("disable")
+@click.argument("provider_name", type=str)
 @click.pass_context
 def provider_disable(ctx: click.Context, provider_name: str) -> None:
     """Disable a metadata provider."""
-    config_manager = ctx.obj['config_manager']
+    config_manager = ctx.obj["config_manager"]
     config = config_manager.load_config()
 
     provider_name = provider_name.lower()
@@ -381,13 +423,13 @@ def provider_disable(ctx: click.Context, provider_name: str) -> None:
     click.echo(f"Provider '{provider_name}' disabled")
 
 
-@provider.command('set-key')
-@click.argument('provider_name', type=str)
-@click.argument('api_key', type=str)
+@provider.command("set-key")
+@click.argument("provider_name", type=str)
+@click.argument("api_key", type=str)
 @click.pass_context
 def provider_set_key(ctx: click.Context, provider_name: str, api_key: str) -> None:
     """Set API key for a provider."""
-    config_manager = ctx.obj['config_manager']
+    config_manager = ctx.obj["config_manager"]
     config = config_manager.load_config()
 
     provider_name = provider_name.lower()
@@ -402,12 +444,15 @@ def provider_set_key(ctx: click.Context, provider_name: str, api_key: str) -> No
         sys.exit(1)
 
 
-@provider.command('set-marketplace')
-@click.argument('marketplace', type=click.Choice(['US', 'UK', 'CA', 'AU', 'FR', 'DE', 'IT', 'ES', 'JP', 'IN']))
+@provider.command("set-marketplace")
+@click.argument(
+    "marketplace",
+    type=click.Choice(["US", "UK", "CA", "AU", "FR", "DE", "IT", "ES", "JP", "IN"]),
+)
 @click.pass_context
 def provider_set_marketplace(ctx: click.Context, marketplace: str) -> None:
     """Set Audible marketplace."""
-    config_manager = ctx.obj['config_manager']
+    config_manager = ctx.obj["config_manager"]
     config = config_manager.load_config()
 
     config.providers.audible.marketplace = marketplace.upper()
@@ -416,11 +461,15 @@ def provider_set_marketplace(ctx: click.Context, marketplace: str) -> None:
 
 
 @cli.command()
-@click.argument('shell', type=click.Choice(['bash', 'zsh', 'fish', 'all']))
-@click.option('--output-dir', '-o', type=click.Path(path_type=Path),
-              help='Output directory for completion files')
+@click.argument("shell", type=click.Choice(["bash", "zsh", "fish", "all"]))
+@click.option(
+    "--output-dir",
+    "-o",
+    type=click.Path(path_type=Path),
+    help="Output directory for completion files",
+)
 @click.pass_context
-def completions(ctx: click.Context, shell: str, output_dir: Optional[Path]) -> None:
+def completions(ctx: click.Context, shell: str, output_dir: Path | None) -> None:
     """Generate shell completion scripts."""
     try:
         import subprocess
@@ -436,7 +485,7 @@ def completions(ctx: click.Context, shell: str, output_dir: Optional[Path]) -> N
         # Build command
         cmd = [sys.executable, str(script_path), shell]
         if output_dir:
-            cmd.extend(['--output-dir', str(output_dir)])
+            cmd.extend(["--output-dir", str(output_dir)])
 
         # Run the completion generator
         result = subprocess.run(cmd, capture_output=True, text=True)
@@ -453,11 +502,11 @@ def completions(ctx: click.Context, shell: str, output_dir: Optional[Path]) -> N
 
 
 @cli.command()
-@click.option('--days', type=int, default=30, help='Show transactions from last N days')
+@click.option("--days", type=int, default=30, help="Show transactions from last N days")
 @click.pass_context
 def history(ctx: click.Context, days: int) -> None:
     """Show operation history."""
-    config_manager = ctx.obj['config_manager']
+    config_manager = ctx.obj["config_manager"]
     transaction_manager = TransactionManager(config_manager)
 
     transactions = transaction_manager.list_transactions(days)
@@ -468,12 +517,14 @@ def history(ctx: click.Context, days: int) -> None:
 
     click.echo(f"Transactions from last {days} days:")
     for transaction in transactions:
-        status = transaction.get('status', 'completed')
-        undo_info = "" if transaction['can_undo'] else " (cannot undo)"
-        click.echo(f"  {transaction['id'][:8]}... - "
-                  f"{transaction['timestamp']} - "
-                  f"{transaction['operation_count']} operations - "
-                  f"{status}{undo_info}")
+        status = transaction.get("status", "completed")
+        undo_info = "" if transaction["can_undo"] else " (cannot undo)"
+        click.echo(
+            f"  {transaction['id'][:8]}... - "
+            f"{transaction['timestamp']} - "
+            f"{transaction['operation_count']} operations - "
+            f"{status}{undo_info}"
+        )
 
 
 @cli.group()
@@ -482,9 +533,9 @@ def drm() -> None:
     pass
 
 
-@drm.command('detect')
-@click.argument('files', nargs=-1, type=click.Path(exists=True, path_type=Path))
-@click.option('--recursive', '-r', is_flag=True, help='Scan directories recursively')
+@drm.command("detect")
+@click.argument("files", nargs=-1, type=click.Path(exists=True, path_type=Path))
+@click.option("--recursive", "-r", is_flag=True, help="Scan directories recursively")
 @click.pass_context
 def drm_detect(ctx: click.Context, files: tuple[Path, ...], recursive: bool) -> None:
     """Detect DRM protection on audio files."""
@@ -504,8 +555,19 @@ def drm_detect(ctx: click.Context, files: tuple[Path, ...], recursive: bool) -> 
                 files_to_scan.append(path)
             elif path.is_dir() and recursive:
                 # Scan directory for audio files
-                audio_extensions = {'.mp3', '.m4a', '.m4b', '.aax', '.aaxc', '.flac', '.ogg', '.opus', '.aac', '.wav'}
-                for file_path in path.rglob('*'):
+                audio_extensions = {
+                    ".mp3",
+                    ".m4a",
+                    ".m4b",
+                    ".aax",
+                    ".aaxc",
+                    ".flac",
+                    ".ogg",
+                    ".opus",
+                    ".aac",
+                    ".wav",
+                }
+                for file_path in path.rglob("*"):
                     if file_path.suffix.lower() in audio_extensions:
                         files_to_scan.append(file_path)
 
@@ -530,7 +592,9 @@ def drm_detect(ctx: click.Context, files: tuple[Path, ...], recursive: bool) -> 
                     for key, value in drm_info.metadata.items():
                         click.echo(f"    {key}: {value}")
 
-        click.echo(f"\nSummary: {protected_count}/{total_count} files have DRM protection")
+        click.echo(
+            f"\nSummary: {protected_count}/{total_count} files have DRM protection"
+        )
 
     except ImportError as e:
         click.echo(f"Error: Missing dependency: {e}", err=True)
@@ -540,33 +604,49 @@ def drm_detect(ctx: click.Context, files: tuple[Path, ...], recursive: bool) -> 
         sys.exit(1)
 
 
-@drm.command('remove')
-@click.argument('files', nargs=-1, type=click.Path(exists=True, path_type=Path))
-@click.option('-o', '--output-dir', type=click.Path(path_type=Path),
-              help='Output directory for DRM-free files')
-@click.option('--activation-bytes', type=str,
-              help='Audible activation bytes for AAX files')
-@click.option('--dry-run', is_flag=True, help='Show what would be done without removing DRM')
-@click.option('--recursive', '-r', is_flag=True, help='Process directories recursively')
+@drm.command("remove")
+@click.argument("files", nargs=-1, type=click.Path(exists=True, path_type=Path))
+@click.option(
+    "-o",
+    "--output-dir",
+    type=click.Path(path_type=Path),
+    help="Output directory for DRM-free files",
+)
+@click.option(
+    "--activation-bytes", type=str, help="Audible activation bytes for AAX files"
+)
+@click.option(
+    "--dry-run", is_flag=True, help="Show what would be done without removing DRM"
+)
+@click.option("--recursive", "-r", is_flag=True, help="Process directories recursively")
 @click.pass_context
-def drm_remove(ctx: click.Context, files: tuple[Path, ...], output_dir: Optional[Path],
-               activation_bytes: Optional[str], dry_run: bool, recursive: bool) -> None:
+def drm_remove(
+    ctx: click.Context,
+    files: tuple[Path, ...],
+    output_dir: Path | None,
+    activation_bytes: str | None,
+    dry_run: bool,
+    recursive: bool,
+) -> None:
     """Remove DRM protection from audio files."""
     if not files:
         click.echo("Error: At least one file or directory must be specified", err=True)
         sys.exit(1)
 
     try:
-        from .drm.remover import DRMRemover
         from .drm.detector import DRMDetector
+        from .drm.remover import DRMRemover
 
         detector = DRMDetector()
         remover = DRMRemover(activation_bytes=activation_bytes)
 
         # Check ffmpeg availability
         if not remover.check_ffmpeg_availability():
-            click.echo("Warning: FFmpeg with activation_bytes support not found. "
-                      "AAX DRM removal will not work.", err=True)
+            click.echo(
+                "Warning: FFmpeg with activation_bytes support not found. "
+                "AAX DRM removal will not work.",
+                err=True,
+            )
 
         # Collect all files to process
         files_to_process = []
@@ -574,8 +654,19 @@ def drm_remove(ctx: click.Context, files: tuple[Path, ...], output_dir: Optional
             if path.is_file():
                 files_to_process.append(path)
             elif path.is_dir() and recursive:
-                audio_extensions = {'.mp3', '.m4a', '.m4b', '.aax', '.aaxc', '.flac', '.ogg', '.opus', '.aac', '.wav'}
-                for file_path in path.rglob('*'):
+                audio_extensions = {
+                    ".mp3",
+                    ".m4a",
+                    ".m4b",
+                    ".aax",
+                    ".aaxc",
+                    ".flac",
+                    ".ogg",
+                    ".opus",
+                    ".aac",
+                    ".wav",
+                }
+                for file_path in path.rglob("*"):
                     if file_path.suffix.lower() in audio_extensions:
                         files_to_process.append(file_path)
 
@@ -602,7 +693,9 @@ def drm_remove(ctx: click.Context, files: tuple[Path, ...], output_dir: Optional
                 continue
 
             if dry_run:
-                click.echo(f"🔒 {file_path.name}: Would remove {drm_info.drm_type.value} DRM")
+                click.echo(
+                    f"🔒 {file_path.name}: Would remove {drm_info.drm_type.value} DRM"
+                )
                 continue
 
             # Remove DRM
@@ -622,7 +715,9 @@ def drm_remove(ctx: click.Context, files: tuple[Path, ...], output_dir: Optional
                 error_count += 1
 
         if dry_run:
-            click.echo(f"\nDry run completed. Found {len(files_to_process)} files to process.")
+            click.echo(
+                f"\nDry run completed. Found {len(files_to_process)} files to process."
+            )
         else:
             click.echo(f"\nCompleted: {success_count} successful, {error_count} failed")
 
@@ -646,5 +741,5 @@ def main() -> None:
         sys.exit(1)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

@@ -1,15 +1,12 @@
 """Atomic file operations for safe renaming and undo functionality."""
 
 import json
-import shutil
-import tempfile
 import uuid
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional
 
 from ..config.manager import ConfigManager
-from .models import AudioTags, OperationRecord, RenamePlan, RenameOperation, Track
+from .models import AudioTags, OperationRecord, RenameOperation, RenamePlan, Track
 
 
 class TransactionManager:
@@ -19,7 +16,7 @@ class TransactionManager:
         self.config_manager = config_manager
         self.log_dir = config_manager.get_log_dir()
 
-    def create_rename_plan(self, operations: List[RenameOperation]) -> RenamePlan:
+    def create_rename_plan(self, operations: list[RenameOperation]) -> RenamePlan:
         """Create a rename plan with validation."""
         plan_id = str(uuid.uuid4())
         plan = RenamePlan(
@@ -27,7 +24,7 @@ class TransactionManager:
             created_at=datetime.now(),
             source_path=operations[0].old_path.parent if operations else Path.cwd(),
             operations=operations,
-            dry_run=True
+            dry_run=True,
         )
 
         # Validate the plan
@@ -61,7 +58,7 @@ class TransactionManager:
                     operation_type="rename",
                     old_path=operation.old_path,
                     new_path=temp_path,
-                    old_content_hash=operation.track.get_content_hash()
+                    old_content_hash=operation.track.get_content_hash(),
                 )
 
                 # Move to temp location
@@ -81,7 +78,7 @@ class TransactionManager:
                     operation_type="rename",
                     old_path=operation.temp_path,
                     new_path=operation.new_path,
-                    new_content_hash=operation.track.get_content_hash()
+                    new_content_hash=operation.track.get_content_hash(),
                 )
 
                 # Move to final location
@@ -99,7 +96,7 @@ class TransactionManager:
         except Exception as e:
             # Rollback on failure
             self._rollback_operations(temp_operations, transaction_log)
-            raise RuntimeError(f"Failed to execute rename plan: {e}")
+            raise RuntimeError(f"Failed to execute rename plan: {e}") from e
 
     def _get_temp_path(self, original_path: Path) -> Path:
         """Generate a temporary path on the same volume."""
@@ -109,8 +106,11 @@ class TransactionManager:
         temp_name = f"{stem}.tmp_{uuid.uuid4().hex[:8]}{suffix}"
         return parent / temp_name
 
-    def _rollback_operations(self, operations: List[RenameOperation],
-                           completed_records: List[OperationRecord]) -> None:
+    def _rollback_operations(
+        self,
+        operations: list[RenameOperation],
+        completed_records: list[OperationRecord],
+    ) -> None:
         """Rollback completed operations in reverse order."""
         for record in reversed(completed_records):
             try:
@@ -123,21 +123,22 @@ class TransactionManager:
                 # Best effort rollback
                 pass
 
-    def _save_transaction_log(self, transaction_id: str,
-                            records: List[OperationRecord]) -> None:
+    def _save_transaction_log(
+        self, transaction_id: str, records: list[OperationRecord]
+    ) -> None:
         """Save transaction log for undo functionality."""
         log_file = self.log_dir / f"transaction_{transaction_id}.json"
 
         log_data = {
-            'transaction_id': transaction_id,
-            'timestamp': datetime.now().isoformat(),
-            'operations': [record.model_dump() for record in records]
+            "transaction_id": transaction_id,
+            "timestamp": datetime.now().isoformat(),
+            "operations": [record.model_dump() for record in records],
         }
 
         try:
-            with open(log_file, 'w', encoding='utf-8') as f:
+            with open(log_file, "w", encoding="utf-8") as f:
                 json.dump(log_data, f, indent=2, default=str)
-        except IOError as e:
+        except OSError as e:
             print(f"Warning: Failed to save transaction log: {e}")
 
     def undo_transaction(self, transaction_id: str) -> bool:
@@ -148,10 +149,10 @@ class TransactionManager:
             return False
 
         try:
-            with open(log_file, 'r', encoding='utf-8') as f:
+            with open(log_file, encoding="utf-8") as f:
                 log_data = json.load(f)
 
-            records = [OperationRecord(**op) for op in log_data['operations']]
+            records = [OperationRecord(**op) for op in log_data["operations"]]
 
             # Reverse the operations
             for record in reversed(records):
@@ -161,7 +162,7 @@ class TransactionManager:
                     self._undo_retag(record)
 
             # Mark transaction as undone
-            undo_file = log_file.with_suffix('.undone')
+            undo_file = log_file.with_suffix(".undone")
             log_file.rename(undo_file)
 
             return True
@@ -193,13 +194,14 @@ class TransactionManager:
     def _calculate_file_hash(self, file_path: Path) -> str:
         """Calculate SHA-256 hash of a file."""
         import hashlib
+
         hasher = hashlib.sha256()
-        with open(file_path, 'rb') as f:
+        with open(file_path, "rb") as f:
             for chunk in iter(lambda: f.read(4096), b""):
                 hasher.update(chunk)
         return hasher.hexdigest()
 
-    def list_transactions(self, days: int = 30) -> List[Dict]:
+    def list_transactions(self, days: int = 30) -> list[dict]:
         """List recent transactions that can be undone."""
         cutoff_date = datetime.now().timestamp() - (days * 24 * 60 * 60)
         transactions = []
@@ -209,35 +211,39 @@ class TransactionManager:
                 continue
 
             try:
-                with open(log_file, 'r', encoding='utf-8') as f:
+                with open(log_file, encoding="utf-8") as f:
                     log_data = json.load(f)
 
-                transactions.append({
-                    'id': log_data['transaction_id'],
-                    'timestamp': log_data['timestamp'],
-                    'operation_count': len(log_data['operations']),
-                    'can_undo': True
-                })
+                transactions.append(
+                    {
+                        "id": log_data["transaction_id"],
+                        "timestamp": log_data["timestamp"],
+                        "operation_count": len(log_data["operations"]),
+                        "can_undo": True,
+                    }
+                )
             except Exception:
                 continue
 
         # Check for undone transactions
         for undo_file in self.log_dir.glob("transaction_*.undone"):
             try:
-                with open(undo_file, 'r', encoding='utf-8') as f:
+                with open(undo_file, encoding="utf-8") as f:
                     log_data = json.load(f)
 
-                transactions.append({
-                    'id': log_data['transaction_id'],
-                    'timestamp': log_data['timestamp'],
-                    'operation_count': len(log_data['operations']),
-                    'can_undo': False,
-                    'status': 'undone'
-                })
+                transactions.append(
+                    {
+                        "id": log_data["transaction_id"],
+                        "timestamp": log_data["timestamp"],
+                        "operation_count": len(log_data["operations"]),
+                        "can_undo": False,
+                        "status": "undone",
+                    }
+                )
             except Exception:
                 continue
 
-        return sorted(transactions, key=lambda x: x['timestamp'], reverse=True)
+        return sorted(transactions, key=lambda x: x["timestamp"], reverse=True)
 
     def cleanup_old_transactions(self, days: int = 30) -> int:
         """Clean up transaction logs older than specified days."""
@@ -262,8 +268,9 @@ class TagManager:
         self.config_manager = config_manager
         self.config = config_manager.load_config()
 
-    def apply_tags(self, track: Track, new_tags: AudioTags,
-                   preserve_existing: bool = True) -> bool:
+    def apply_tags(
+        self, track: Track, new_tags: AudioTags, preserve_existing: bool = True
+    ) -> bool:
         """Apply tags to an audio file."""
         if not self.config.tagging.enabled:
             return True
@@ -301,53 +308,60 @@ class TagManager:
     def _write_all_tags(self, audio_file, new_tags: AudioTags) -> None:
         """Write all tags, overwriting existing ones."""
         tag_mapping = {
-            'title': new_tags.title,
-            'album': new_tags.album,
-            'artist': new_tags.artist,
-            'albumartist': new_tags.albumartist,
-            'date': new_tags.date,
-            'genre': new_tags.genre or 'Audiobook',
-            'tracknumber': str(new_tags.track) if new_tags.track else None,
-            'discnumber': str(new_tags.disc) if new_tags.disc else None,
+            "title": new_tags.title,
+            "album": new_tags.album,
+            "artist": new_tags.artist,
+            "albumartist": new_tags.albumartist,
+            "date": new_tags.date,
+            "genre": new_tags.genre or "Audiobook",
+            "tracknumber": str(new_tags.track) if new_tags.track else None,
+            "discnumber": str(new_tags.disc) if new_tags.disc else None,
         }
 
         for key, value in tag_mapping.items():
             if value is not None and self._should_write_tag(key):
                 audio_file[key] = value
 
-    def _write_missing_tags(self, audio_file, new_tags: AudioTags,
-                          original_tags: AudioTags) -> None:
+    def _write_missing_tags(
+        self, audio_file, new_tags: AudioTags, original_tags: AudioTags
+    ) -> None:
         """Write tags only if they don't already exist."""
         tag_mapping = {
-            'title': (new_tags.title, original_tags.title),
-            'album': (new_tags.album, original_tags.album),
-            'artist': (new_tags.artist, original_tags.artist),
-            'albumartist': (new_tags.albumartist, original_tags.albumartist),
-            'date': (new_tags.date, original_tags.date),
-            'genre': (new_tags.genre or 'Audiobook', original_tags.genre),
-            'tracknumber': (str(new_tags.track) if new_tags.track else None,
-                          str(original_tags.track) if original_tags.track else None),
-            'discnumber': (str(new_tags.disc) if new_tags.disc else None,
-                         str(original_tags.disc) if original_tags.disc else None),
+            "title": (new_tags.title, original_tags.title),
+            "album": (new_tags.album, original_tags.album),
+            "artist": (new_tags.artist, original_tags.artist),
+            "albumartist": (new_tags.albumartist, original_tags.albumartist),
+            "date": (new_tags.date, original_tags.date),
+            "genre": (new_tags.genre or "Audiobook", original_tags.genre),
+            "tracknumber": (
+                str(new_tags.track) if new_tags.track else None,
+                str(original_tags.track) if original_tags.track else None,
+            ),
+            "discnumber": (
+                str(new_tags.disc) if new_tags.disc else None,
+                str(original_tags.disc) if original_tags.disc else None,
+            ),
         }
 
         for key, (new_value, original_value) in tag_mapping.items():
-            if (new_value is not None and
-                not original_value and
-                self._should_write_tag(key)):
+            if (
+                new_value is not None
+                and not original_value
+                and self._should_write_tag(key)
+            ):
                 audio_file[key] = new_value
 
     def _should_write_tag(self, tag_name: str) -> bool:
         """Check if a specific tag should be written based on config."""
         tag_config_map = {
-            'title': self.config.tagging.write_title,
-            'album': self.config.tagging.write_album,
-            'artist': self.config.tagging.write_artist,
-            'albumartist': self.config.tagging.write_albumartist,
-            'date': self.config.tagging.write_date,
-            'genre': self.config.tagging.write_genre,
-            'tracknumber': self.config.tagging.write_track,
-            'discnumber': self.config.tagging.write_disc,
+            "title": self.config.tagging.write_title,
+            "album": self.config.tagging.write_album,
+            "artist": self.config.tagging.write_artist,
+            "albumartist": self.config.tagging.write_albumartist,
+            "date": self.config.tagging.write_date,
+            "genre": self.config.tagging.write_genre,
+            "tracknumber": self.config.tagging.write_track,
+            "discnumber": self.config.tagging.write_disc,
         }
 
         return tag_config_map.get(tag_name, True)

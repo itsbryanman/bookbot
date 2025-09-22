@@ -6,7 +6,6 @@ import re
 import subprocess
 import sys
 from pathlib import Path
-from typing import Tuple
 
 
 def get_current_version() -> str:
@@ -14,7 +13,7 @@ def get_current_version() -> str:
     project_root = Path(__file__).parent.parent
     pyproject_path = project_root / "pyproject.toml"
 
-    with open(pyproject_path, 'r') as f:
+    with open(pyproject_path) as f:
         content = f.read()
 
     version_match = re.search(r'version = "([^"]+)"', content)
@@ -45,7 +44,7 @@ def bump_version(current_version: str, bump_type: str) -> str:
 
 def update_version_in_file(file_path: Path, old_version: str, new_version: str) -> None:
     """Update version in a file."""
-    with open(file_path, 'r') as f:
+    with open(file_path) as f:
         content = f.read()
 
     # Replace version in pyproject.toml
@@ -73,7 +72,7 @@ def run_tests() -> bool:
     """Run the test suite."""
     print("Running tests...")
     try:
-        result = subprocess.run(
+        subprocess.run(
             [sys.executable, "-m", "pytest", "tests/", "-v"],
             check=True,
             capture_output=True,
@@ -94,7 +93,9 @@ def run_linting() -> bool:
     try:
         # Run ruff
         subprocess.run([sys.executable, "-m", "ruff", "check", "."], check=True)
-        subprocess.run([sys.executable, "-m", "ruff", "format", "--check", "."], check=True)
+        subprocess.run(
+            [sys.executable, "-m", "ruff", "format", "--check", "."], check=True
+        )
         print("✓ Linting passed")
         return True
     except subprocess.CalledProcessError:
@@ -104,7 +105,10 @@ def run_linting() -> bool:
 
 def create_changelog_entry(version: str) -> str:
     """Create a changelog entry for the new version."""
-    return f"""## [{version}] - {subprocess.check_output(['date', '+%Y-%m-%d']).decode().strip()}
+    return (
+        f"## [{version}] - "
+        f"{subprocess.check_output(['date', '+%Y-%m-%d']).decode().strip()}"
+    )
 
 ### Added
 - New features and enhancements
@@ -138,7 +142,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 {create_changelog_entry(version)}
 """
     else:
-        with open(changelog_path, 'r') as f:
+        with open(changelog_path) as f:
             content = f.read()
 
         # Insert new entry after the header

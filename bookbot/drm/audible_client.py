@@ -1,12 +1,12 @@
 import time
 import webbrowser
-from typing import Any, Dict, Optional
+from typing import Any
 
 import requests
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
-from bookbot.core.models import Token
 from bookbot.drm import secure_storage
+from bookbot.drm.models import Token
 
 
 class DeviceCodeResponse(BaseModel):
@@ -20,7 +20,7 @@ class DeviceCodeResponse(BaseModel):
 class AudibleAuthClient:
     def __init__(self) -> None:
         self.session = requests.Session()
-        self.device_code_response: Optional[DeviceCodeResponse] = None
+        self.device_code_response: DeviceCodeResponse | None = None
 
     def get_device_code(self) -> DeviceCodeResponse:
         response = self.session.post(
@@ -29,14 +29,14 @@ class AudibleAuthClient:
                 "scope": "alexa:all",
                 "scope_data": {
                     "alexa:all": {
-                        "productID": "Platescape",
+                        "productID": "BookBot",
                         "productInstanceAttributes": {"deviceSerialNumber": "12345"},
                     }
                 },
             },
         )
         response.raise_for_status()
-        self.device_code_response = DeviceCodeResponse.parse_obj(response.json())
+        self.device_code_response = DeviceCodeResponse.model_validate(response.json())
         return self.device_code_response
 
     def poll_for_token(self) -> Token:
@@ -55,7 +55,7 @@ class AudibleAuthClient:
 
             data = response.json()
             if response.status_code == 200:
-                token = Token.parse_obj(data)
+                token = Token.model_validate(data)
                 secure_storage.save_token(token)
                 return token
 
@@ -69,7 +69,7 @@ class AudibleAuthClient:
 
         raise Exception("Timed out waiting for authorization.")
 
-    def get_license(self, asin: str) -> Dict[str, Any]:
+    def get_license(self, asin: str) -> dict[str, Any]:
         token = secure_storage.load_token()
         if not token:
             raise Exception("Not logged in.")
@@ -86,12 +86,13 @@ class AudibleAuthClient:
                 "consumptionType": "Streaming",
                 "deviceInfo": {
                     "deviceSerialNumber": "12345",
-                    "deviceType": "Platescape",
+                    "deviceType": "BookBot",
                 },
             },
         )
         response.raise_for_status()
-        return response.json()
+        result: dict[str, Any] = response.json()
+        return result
 
     @staticmethod
     def open_browser(url: str) -> None:

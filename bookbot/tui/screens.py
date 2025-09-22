@@ -3,6 +3,7 @@
 import webbrowser
 from pathlib import Path
 
+from textual import work
 from textual.app import ComposeResult
 from textual.containers import Container, Horizontal
 from textual.message import Message
@@ -48,8 +49,9 @@ class DRMLoginScreen(Screen):
         yield Container(
             Label("Audible Authentication", classes="section-title"),
             Static(
-                "To remove DRM from Audible audiobooks, you need to authenticate with your Audible account. "
-                "This process will open a browser window for you to log in securely.",
+                "To remove DRM from Audible audiobooks, you need to authenticate with "
+                "your Audible account. This process will open a browser window for you "
+                "to log in securely.",
                 classes="description",
             ),
             Static("", id="user_code_display"),
@@ -72,10 +74,14 @@ class DRMLoginScreen(Screen):
             device_code_response = self.auth_client.get_device_code()
             webbrowser.open(device_code_response.verification_uri)
             user_code_display.update(
-                f"Please enter this code in your browser: [b]{device_code_response.user_code}[/b]"
+                "Please enter this code in your browser: "
+                f"[b]{device_code_response.user_code}[/b]"
             )
-            self.auth_client.poll_for_token()
-            self.post_message(LoginSuccess())
+            token = self.auth_client.poll_for_token()
+            if token:
+                self.post_message(LoginSuccess())
+            else:
+                self.post_message(LoginFailure("Failed to authenticate"))
         except Exception as e:
             self.post_message(LoginFailure(str(e)))
             user_code_display.update(f"An error occurred: {e}")

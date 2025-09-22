@@ -6,7 +6,6 @@ from pathlib import Path
 import pytest
 
 from bookbot.core.discovery import AudioFileScanner
-from bookbot.core.models import AudioFormat, TrackStatus
 
 
 class TestAudioFileScanner:
@@ -17,7 +16,14 @@ class TestAudioFileScanner:
         scanner = AudioFileScanner()
 
         expected_extensions = {
-            '.mp3', '.m4a', '.m4b', '.flac', '.ogg', '.opus', '.aac', '.wav'
+            ".mp3",
+            ".m4a",
+            ".m4b",
+            ".flac",
+            ".ogg",
+            ".opus",
+            ".aac",
+            ".wav",
         }
 
         assert set(scanner.SUPPORTED_EXTENSIONS.keys()) == expected_extensions
@@ -37,6 +43,7 @@ class TestAudioFileScanner:
             path = Path(filename)
             # Create a mock AudioTags object for testing
             from bookbot.core.models import AudioTags
+
             tags = AudioTags()
 
             result = scanner._get_track_number(path, tags)
@@ -55,6 +62,7 @@ class TestAudioFileScanner:
         for filename, expected_track in test_cases:
             path = Path(filename)
             from bookbot.core.models import AudioTags
+
             tags = AudioTags()
 
             result = scanner._get_track_number(path, tags)
@@ -74,6 +82,7 @@ class TestAudioFileScanner:
         for full_path, expected_disc in test_cases:
             path = Path(full_path)
             from bookbot.core.models import AudioTags
+
             tags = AudioTags()
 
             result = scanner._get_disc_number(path, tags)
@@ -142,8 +151,8 @@ class TestAudioFileScanner:
 
         # Should find 3 MP3 files
         assert len(files) == 3
-        assert all(f.suffix == '.mp3' for f in files)
-        assert all('Chapter' in f.stem or 'Prologue' in f.stem for f in files)
+        assert all(f.suffix == ".mp3" for f in files)
+        assert all("Chapter" in f.stem or "Prologue" in f.stem for f in files)
 
     def test_group_files_by_audiobook(self, temp_audio_structure):
         """Test grouping files into audiobook sets."""

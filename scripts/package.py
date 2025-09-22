@@ -28,7 +28,7 @@ def build_wheel(project_root: Path) -> bool:
     print("Building wheel package...")
 
     try:
-        result = subprocess.run([
+        subprocess.run([
             sys.executable, "-m", "build", "--wheel", str(project_root)
         ], check=True, capture_output=True, text=True, cwd=project_root)
 
@@ -47,7 +47,7 @@ def build_sdist(project_root: Path) -> bool:
     print("Building source distribution...")
 
     try:
-        result = subprocess.run([
+        subprocess.run([
             sys.executable, "-m", "build", "--sdist", str(project_root)
         ], check=True, capture_output=True, text=True, cwd=project_root)
 
@@ -71,7 +71,7 @@ def check_package(project_root: Path) -> bool:
         return False
 
     try:
-        result = subprocess.run([
+        subprocess.run([
             sys.executable, "-m", "twine", "check", str(dist_dir / "*")
         ], check=True, capture_output=True, text=True, cwd=project_root)
 
@@ -127,7 +127,7 @@ def test_installation(project_root: Path) -> bool:
             ], check=True, capture_output=True, text=True)
 
             # Test CLI
-            result = subprocess.run([
+            subprocess.run([
                 str(python_exe), "-m", "bookbot.cli", "--help"
             ], check=True, capture_output=True, text=True)
 
@@ -204,8 +204,12 @@ def main():
 
     # Check dependencies
     try:
-        import build
-        import twine
+        import importlib.util
+
+        if importlib.util.find_spec("build") is None:
+            raise ImportError("build is not installed")
+        if importlib.util.find_spec("twine") is None:
+            raise ImportError("twine is not installed")
     except ImportError as e:
         print(f"Missing build dependency: {e}")
         print("Install with: pip install build twine")

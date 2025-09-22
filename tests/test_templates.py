@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from bookbot.config.models import CasePolicy
-from bookbot.core.models import AudiobookSet, ProviderIdentity, Track, AudioFormat
+from bookbot.core.models import AudiobookSet, AudioFormat, ProviderIdentity, Track
 from bookbot.core.templates import TemplateEngine
 
 
@@ -22,7 +22,7 @@ class TestTemplateEngine:
             series_guess="The Stormlight Archive",
             volume_guess="1",
             disc_count=2,
-            total_tracks=6
+            total_tracks=6,
         )
 
     @pytest.fixture
@@ -36,7 +36,7 @@ class TestTemplateEngine:
             series_name="The Stormlight Archive",
             series_index="1",
             year=2010,
-            language="en"
+            language="en",
         )
 
     @pytest.fixture
@@ -46,50 +46,48 @@ class TestTemplateEngine:
             src_path=Path("/path/to/track01.mp3"),
             disc=1,
             track_index=1,
-            audio_format=AudioFormat.MP3
+            audio_format=AudioFormat.MP3,
         )
 
-    def test_build_tokens_with_identity(self, sample_audiobook_set, sample_identity, sample_track):
+    def test_build_tokens_with_identity(
+        self, sample_audiobook_set, sample_identity, sample_track
+    ):
         """Test building template tokens with provider identity."""
         engine = TemplateEngine(case_policy=CasePolicy.AS_IS)
 
         tokens = engine._build_tokens(
-            sample_audiobook_set,
-            sample_identity,
-            sample_track,
-            zero_padding_width=2
+            sample_audiobook_set, sample_identity, sample_track, zero_padding_width=2
         )
 
-        assert tokens['Title'] == "The Way of Kings"
-        assert tokens['Author'] == "Brandon Sanderson"
-        assert tokens['AuthorLastFirst'] == "Sanderson, Brandon"
-        assert tokens['SeriesName'] == "The Stormlight Archive"
-        assert tokens['SeriesIndex'] == "1"
-        assert tokens['Year'] == "2010"
-        assert tokens['TrackPad'] == "01"
-        assert tokens['Track'] == "1"
-        assert tokens['DiscPad'] == "1"
+        assert tokens["Title"] == "The Way of Kings"
+        assert tokens["Author"] == "Brandon Sanderson"
+        assert tokens["AuthorLastFirst"] == "Sanderson, Brandon"
+        assert tokens["SeriesName"] == "The Stormlight Archive"
+        assert tokens["SeriesIndex"] == "1"
+        assert tokens["Year"] == "2010"
+        assert tokens["TrackPad"] == "01"
+        assert tokens["Track"] == "1"
+        assert tokens["DiscPad"] == "1"
 
     def test_build_tokens_without_identity(self, sample_audiobook_set, sample_track):
         """Test building template tokens without provider identity."""
         engine = TemplateEngine(case_policy=CasePolicy.AS_IS)
 
         tokens = engine._build_tokens(
-            sample_audiobook_set,
-            None,
-            sample_track,
-            zero_padding_width=3
+            sample_audiobook_set, None, sample_track, zero_padding_width=3
         )
 
-        assert tokens['Title'] == "The Way of Kings"
-        assert tokens['Author'] == "Brandon Sanderson"
-        assert tokens['AuthorLastFirst'] == "Sanderson, Brandon"
-        assert tokens['SeriesName'] == "The Stormlight Archive"
-        assert tokens['SeriesIndex'] == "1"
-        assert tokens['Year'] == ""
-        assert tokens['TrackPad'] == "001"
+        assert tokens["Title"] == "The Way of Kings"
+        assert tokens["Author"] == "Brandon Sanderson"
+        assert tokens["AuthorLastFirst"] == "Sanderson, Brandon"
+        assert tokens["SeriesName"] == "The Stormlight Archive"
+        assert tokens["SeriesIndex"] == "1"
+        assert tokens["Year"] == ""
+        assert tokens["TrackPad"] == "001"
 
-    def test_generate_filename(self, sample_audiobook_set, sample_identity, sample_track):
+    def test_generate_filename(
+        self, sample_audiobook_set, sample_identity, sample_track
+    ):
         """Test filename generation from template."""
         engine = TemplateEngine()
 
@@ -98,7 +96,7 @@ class TestTemplateEngine:
             sample_audiobook_set,
             sample_identity,
             template="{DiscPad}{TrackPad} - {Title}",
-            zero_padding_width=2
+            zero_padding_width=2,
         )
 
         assert filename == "101 - The Way Of Kings.mp3"
@@ -110,10 +108,13 @@ class TestTemplateEngine:
         folder_name = engine.generate_folder_name(
             sample_audiobook_set,
             sample_identity,
-            template="{AuthorLastFirst}/{SeriesName}/{SeriesIndex} - {Title} ({Year})"
+            template="{AuthorLastFirst}/{SeriesName}/{SeriesIndex} - {Title} ({Year})",
         )
 
-        assert folder_name == "Sanderson, Brandon/The Stormlight Archive/1 - The Way Of Kings (2010)"
+        assert (
+            folder_name
+            == "Sanderson, Brandon/The Stormlight Archive/1 - The Way Of Kings (2010)"
+        )
 
     def test_case_policies(self, sample_audiobook_set, sample_identity):
         """Test different case policies."""
@@ -121,13 +122,13 @@ class TestTemplateEngine:
             (CasePolicy.TITLE_CASE, "The Way Of Kings"),
             (CasePolicy.LOWER_CASE, "the way of kings"),
             (CasePolicy.UPPER_CASE, "THE WAY OF KINGS"),
-            (CasePolicy.AS_IS, "The Way of Kings")
+            (CasePolicy.AS_IS, "The Way of Kings"),
         ]
 
         for case_policy, expected in test_cases:
             engine = TemplateEngine(case_policy=case_policy)
             tokens = engine._build_tokens(sample_audiobook_set, sample_identity)
-            assert tokens['Title'] == expected
+            assert tokens["Title"] == expected
 
     def test_smart_title_case(self):
         """Test smart title case functionality."""
@@ -137,7 +138,7 @@ class TestTemplateEngine:
             ("the way of kings", "The Way Of Kings"),
             ("a song of ice and fire", "A Song Of Ice And Fire"),
             ("the lord of the rings", "The Lord Of The Rings"),
-            ("ready player one", "Ready Player One")
+            ("ready player one", "Ready Player One"),
         ]
 
         for input_text, expected in test_cases:
@@ -153,7 +154,7 @@ class TestTemplateEngine:
             ("J.K. Rowling", "Rowling, J.K."),
             ("Stephen King", "King, Stephen"),
             ("Madonna", "Madonna"),  # Single name
-            ("Jean-Claude Van Damme", "Damme, Jean-Claude Van")
+            ("Jean-Claude Van Damme", "Damme, Jean-Claude Van"),
         ]
 
         for input_name, expected in test_cases:
@@ -177,8 +178,11 @@ class TestTemplateEngine:
         test_cases = [
             ("File with spaces.mp3", "File with spaces.mp3"),
             ("File/with\\forbidden:chars.mp3", "File_with_forbidden_chars.mp3"),
-            ("File<with>more|forbidden?chars*.mp3", "File_with_more_forbidden_chars_.mp3"),
-            ("File\"with'quotes.mp3", "File_with'quotes.mp3")
+            (
+                "File<with>more|forbidden?chars*.mp3",
+                "File_with_more_forbidden_chars_.mp3",
+            ),
+            ("File\"with'quotes.mp3", "File_with'quotes.mp3"),
         ]
 
         for input_filename, expected in test_cases:
@@ -193,7 +197,7 @@ class TestTemplateEngine:
         valid_templates = [
             "{Author} - {Title}",
             "{DiscPad}{TrackPad} - {Title}",
-            "{AuthorLastFirst}/{SeriesName}/{Title}"
+            "{AuthorLastFirst}/{SeriesName}/{Title}",
         ]
 
         for template in valid_templates:
@@ -219,7 +223,12 @@ class TestTemplateEngine:
         # Create audiobook set with many tracks to test padding
         sample_audiobook_set.total_tracks = 150
         sample_audiobook_set.tracks = [
-            Track(src_path=Path(f"track{i:03d}.mp3"), disc=1, track_index=i, audio_format=AudioFormat.MP3)
+            Track(
+                src_path=Path(f"track{i:03d}.mp3"),
+                disc=1,
+                track_index=i,
+                audio_format=AudioFormat.MP3,
+            )
             for i in range(1, 151)
         ]
 
@@ -227,11 +236,11 @@ class TestTemplateEngine:
             sample_audiobook_set,
             None,
             sample_track,
-            zero_padding_width=0  # Auto-detect
+            zero_padding_width=0,  # Auto-detect
         )
 
         # Should detect 3-digit padding needed for 150 tracks
-        assert tokens['TrackPad'] == "001"
+        assert tokens["TrackPad"] == "001"
 
     def test_multi_disc_handling(self, sample_audiobook_set, sample_identity):
         """Test handling of multi-disc audiobooks."""
@@ -242,37 +251,32 @@ class TestTemplateEngine:
             src_path=Path("/path/to/track01_disc2.mp3"),
             disc=2,
             track_index=1,
-            audio_format=AudioFormat.MP3
+            audio_format=AudioFormat.MP3,
         )
 
         tokens = engine._build_tokens(
-            sample_audiobook_set,
-            sample_identity,
-            track_disc2,
-            zero_padding_width=2
+            sample_audiobook_set, sample_identity, track_disc2, zero_padding_width=2
         )
 
-        assert tokens['Disc'] == "2"
-        assert tokens['DiscPad'] == "2"  # Should be padded for 2-disc set
+        assert tokens["Disc"] == "2"
+        assert tokens["DiscPad"] == "2"  # Should be padded for 2-disc set
 
     def test_single_disc_no_disc_padding(self):
         """Test that single-disc audiobooks don't include disc padding."""
         engine = TemplateEngine()
 
         single_disc_set = AudiobookSet(
-            source_path=Path("/path/to/audiobook"),
-            disc_count=1,
-            total_tracks=10
+            source_path=Path("/path/to/audiobook"), disc_count=1, total_tracks=10
         )
 
         track = Track(
             src_path=Path("/path/to/track01.mp3"),
             disc=1,
             track_index=1,
-            audio_format=AudioFormat.MP3
+            audio_format=AudioFormat.MP3,
         )
 
         tokens = engine._build_tokens(single_disc_set, None, track)
 
-        assert tokens['Disc'] == ""
-        assert tokens['DiscPad'] == ""
+        assert tokens["Disc"] == ""
+        assert tokens["DiscPad"] == ""

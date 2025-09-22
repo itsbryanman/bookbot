@@ -2,13 +2,13 @@
 
 from enum import Enum
 from pathlib import Path
-from typing import Dict, List, Optional
 
 from pydantic import BaseModel, Field, validator
 
 
 class CasePolicy(str, Enum):
     """Case normalization policies."""
+
     TITLE_CASE = "title"
     LOWER_CASE = "lower"
     UPPER_CASE = "upper"
@@ -17,6 +17,7 @@ class CasePolicy(str, Enum):
 
 class OverwritePolicy(str, Enum):
     """Tag overwrite policies."""
+
     OVERWRITE = "overwrite"
     FILL_MISSING = "fill_missing"
     PRESERVE = "preserve"
@@ -24,21 +25,34 @@ class OverwritePolicy(str, Enum):
 
 class NamingTemplate(BaseModel):
     """Filename template configuration."""
+
     name: str
     description: str
     folder_template: str = "{AuthorLastFirst}/{SeriesName}/{SeriesIndex} - {Title}"
     file_template: str = "{DiscPad}{TrackPad} - {Title}"
 
     # Template variables documentation
-    available_tokens: List[str] = Field(default_factory=lambda: [
-        "{Author}", "{AuthorLastFirst}", "{Title}", "{ShortTitle}",
-        "{SeriesName}", "{SeriesIndex}", "{Year}", "{Narrator}",
-        "{DiscPad}", "{TrackPad}", "{Language}", "{ISBN}"
-    ])
+    available_tokens: list[str] = Field(
+        default_factory=lambda: [
+            "{Author}",
+            "{AuthorLastFirst}",
+            "{Title}",
+            "{ShortTitle}",
+            "{SeriesName}",
+            "{SeriesIndex}",
+            "{Year}",
+            "{Narrator}",
+            "{DiscPad}",
+            "{TrackPad}",
+            "{Language}",
+            "{ISBN}",
+        ]
+    )
 
 
 class TaggingConfig(BaseModel):
     """Audio tagging configuration."""
+
     enabled: bool = True
     overwrite_policy: OverwritePolicy = OverwritePolicy.FILL_MISSING
     write_cover_art: bool = True
@@ -58,7 +72,7 @@ class TaggingConfig(BaseModel):
     write_series: bool = True
     write_identifiers: bool = True
 
-    @validator('overwrite_policy', pre=True)
+    @validator("overwrite_policy", pre=True)
     def validate_overwrite_policy(cls, v):
         if isinstance(v, str):
             return OverwritePolicy(v)
@@ -67,8 +81,9 @@ class TaggingConfig(BaseModel):
 
 class ConversionConfig(BaseModel):
     """M4B conversion configuration."""
+
     enabled: bool = False
-    output_directory: Optional[Path] = None
+    output_directory: Path | None = None
     bitrate: str = "128k"  # AAC bitrate
     use_vbr: bool = True
     vbr_quality: int = 5  # aacvbr quality (1-6)
@@ -76,30 +91,39 @@ class ConversionConfig(BaseModel):
     target_lufs: float = -16.0  # EBU R128 target
     create_chapters: bool = True
     chapter_naming: str = "auto"  # "auto", "from_tags", "track_number"
-    temp_directory: Optional[Path] = None
+    temp_directory: Path | None = None
 
-    @validator('output_directory', 'temp_directory', pre=True)
+    @validator("output_directory", "temp_directory", pre=True)
     def validate_paths(cls, v):
         return Path(v) if isinstance(v, str) else v
 
 
 class GoogleBooksConfig(BaseModel):
     """Google Books API configuration."""
+
     enabled: bool = False
-    api_key: Optional[str] = None
+    api_key: str | None = None
+
 
 class LibriVoxConfig(BaseModel):
     """LibriVox configuration."""
+
     enabled: bool = True
+
 
 class AudibleConfig(BaseModel):
     """Audible configuration."""
+
     enabled: bool = True
     marketplace: str = "US"  # US, UK, CA, AU, FR, DE, IT, ES, JP, IN
 
+
 class ProviderConfig(BaseModel):
     """Metadata provider configuration."""
-    priority_order: List[str] = Field(default_factory=lambda: ["openlibrary", "googlebooks", "librivox", "audible"])
+
+    priority_order: list[str] = Field(
+        default_factory=lambda: ["openlibrary", "googlebooks", "librivox", "audible"]
+    )
     cache_enabled: bool = True
     cache_size_mb: int = 100
     rate_limit_delay: float = 0.1
@@ -114,6 +138,7 @@ class ProviderConfig(BaseModel):
 
 class Config(BaseModel):
     """Main configuration model."""
+
     # File operations
     safe_mode: bool = True  # Rename only, no tagging
     dry_run_default: bool = True
@@ -124,7 +149,7 @@ class Config(BaseModel):
 
     # Naming templates
     active_template: str = "default"
-    templates: Dict[str, NamingTemplate] = Field(default_factory=dict)
+    templates: dict[str, NamingTemplate] = Field(default_factory=dict)
 
     # Tagging
     tagging: TaggingConfig = Field(default_factory=TaggingConfig)
@@ -144,11 +169,11 @@ class Config(BaseModel):
     max_concurrent_operations: int = 5
     scan_timeout: int = 300  # seconds
 
-    @validator('cache_directory', 'log_directory', pre=True)
+    @validator("cache_directory", "log_directory", pre=True)
     def validate_paths(cls, v):
         return Path(v) if isinstance(v, str) else v
 
-    @validator('case_policy', pre=True)
+    @validator("case_policy", pre=True)
     def validate_case_policy(cls, v):
         if isinstance(v, str):
             return CasePolicy(v)
@@ -159,43 +184,48 @@ class Config(BaseModel):
         if not self.templates:
             self.templates = self._get_default_templates()
 
-    def _get_default_templates(self) -> Dict[str, NamingTemplate]:
+    def _get_default_templates(self) -> dict[str, NamingTemplate]:
         """Get default naming templates."""
         return {
             "default": NamingTemplate(
                 name="Default",
                 description="Standard audiobook naming",
                 folder_template="{AuthorLastFirst}/{Title} ({Year})",
-                file_template="{DiscPad}{TrackPad} - {Title}"
+                file_template="{DiscPad}{TrackPad} - {Title}",
             ),
             "plex": NamingTemplate(
                 name="Plex Media Server",
                 description="Plex-friendly naming convention",
-                folder_template="{AuthorLastFirst}/{SeriesName}/{SeriesIndex} - {Title}",
-                file_template="{DiscPad}{TrackPad} - {Title}"
+                folder_template=(
+                    "{AuthorLastFirst}/{SeriesName}/{SeriesIndex} - {Title}"
+                ),
+                file_template="{DiscPad}{TrackPad} - {Title}",
             ),
             "audible": NamingTemplate(
                 name="Audible Style",
                 description="Audible-like naming with narrator",
                 folder_template="{AuthorLastFirst}/{Title} ({Narrator})",
-                file_template="Chapter {TrackPad} - {Title}"
+                file_template="Chapter {TrackPad} - {Title}",
             ),
             "series": NamingTemplate(
                 name="Series Focused",
                 description="Organize by series first",
-                folder_template="{SeriesName}/{SeriesIndex} - {Title} - {AuthorLastFirst}",
-                file_template="{DiscPad}{TrackPad} - {Title}"
-            )
+                folder_template=(
+                    "{SeriesName}/{SeriesIndex} - {Title} - {AuthorLastFirst}"
+                ),
+                file_template="{DiscPad}{TrackPad} - {Title}",
+            ),
         }
 
 
 class Profile(BaseModel):
     """A complete configuration profile."""
+
     name: str
     description: str
     config: Config
 
     # Profile metadata
-    created_at: Optional[str] = None
-    last_used: Optional[str] = None
+    created_at: str | None = None
+    last_used: str | None = None
     use_count: int = 0

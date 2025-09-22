@@ -1,7 +1,6 @@
 """Base provider interface for metadata sources."""
 
 from abc import ABC, abstractmethod
-from typing import List, Optional
 
 from ..core.models import AudiobookSet, MatchCandidate, ProviderIdentity
 
@@ -15,36 +14,32 @@ class MetadataProvider(ABC):
     @abstractmethod
     async def search(
         self,
-        title: Optional[str] = None,
-        author: Optional[str] = None,
-        series: Optional[str] = None,
-        isbn: Optional[str] = None,
-        year: Optional[int] = None,
-        language: Optional[str] = None,
-        limit: int = 10
-    ) -> List[ProviderIdentity]:
+        title: str | None = None,
+        author: str | None = None,
+        series: str | None = None,
+        isbn: str | None = None,
+        year: int | None = None,
+        language: str | None = None,
+        limit: int = 10,
+    ) -> list[ProviderIdentity]:
         """Search for books matching the given criteria."""
         pass
 
     @abstractmethod
-    async def get_by_id(self, external_id: str) -> Optional[ProviderIdentity]:
+    async def get_by_id(self, external_id: str) -> ProviderIdentity | None:
         """Get a book by its external ID."""
         pass
 
     @abstractmethod
     def calculate_match_score(
-        self,
-        audiobook_set: AudiobookSet,
-        identity: ProviderIdentity
+        self, audiobook_set: AudiobookSet, identity: ProviderIdentity
     ) -> float:
         """Calculate a match score between an audiobook set and provider identity."""
         pass
 
     async def find_matches(
-        self,
-        audiobook_set: AudiobookSet,
-        limit: int = 10
-    ) -> List[MatchCandidate]:
+        self, audiobook_set: AudiobookSet, limit: int = 10
+    ) -> list[MatchCandidate]:
         """Find potential matches for an audiobook set."""
         # Perform search using available metadata
         identities = await self.search(
@@ -52,7 +47,7 @@ class MetadataProvider(ABC):
             author=audiobook_set.author_guess,
             series=audiobook_set.series_guess,
             language=audiobook_set.language_guess,
-            limit=limit
+            limit=limit,
         )
 
         # Score and rank the candidates
@@ -64,9 +59,7 @@ class MetadataProvider(ABC):
             reasons = self._get_match_reasons(audiobook_set, identity, score)
 
             candidate = MatchCandidate(
-                identity=identity,
-                confidence=score,
-                match_reasons=reasons
+                identity=identity, confidence=score, match_reasons=reasons
             )
             candidates.append(candidate)
 
@@ -76,11 +69,8 @@ class MetadataProvider(ABC):
         return candidates
 
     def _get_match_reasons(
-        self,
-        audiobook_set: AudiobookSet,
-        identity: ProviderIdentity,
-        score: float
-    ) -> List[str]:
+        self, audiobook_set: AudiobookSet, identity: ProviderIdentity, score: float
+    ) -> list[str]:
         """Generate human-readable match reasons."""
         reasons = []
 

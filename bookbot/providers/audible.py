@@ -1,10 +1,7 @@
 """Audible provider for audiobook metadata (metadata only, no DRM operations)."""
 
 import asyncio
-import json
 import re
-from typing import List, Optional, Dict, Any
-from urllib.parse import quote_plus
 
 import aiohttp
 from rapidfuzz import fuzz
@@ -31,11 +28,11 @@ class AudibleProvider(MetadataProvider):
             "IT": "audible.it",
             "ES": "audible.es",
             "JP": "audible.co.jp",
-            "IN": "audible.in"
+            "IN": "audible.in",
         }
 
         self.base_domain = self.marketplaces.get(marketplace, "audible.com")
-        self.session: Optional[aiohttp.ClientSession] = None
+        self.session: aiohttp.ClientSession | None = None
 
     async def _get_session(self) -> aiohttp.ClientSession:
         """Get or create HTTP session."""
@@ -43,12 +40,19 @@ class AudibleProvider(MetadataProvider):
             self.session = aiohttp.ClientSession(
                 timeout=aiohttp.ClientTimeout(total=30),
                 headers={
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
-                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+                    "User-Agent": (
+                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                        "AppleWebKit/537.36 (KHTML, like Gecko) "
+                        "Chrome/91.0.4472.124 Safari/537.36"
+                    ),
+                    "Accept": (
+                        "text/html,application/xhtml+xml,application/xml;q=0.9,"
+                        "image/webp,*/*;q=0.8"
+                    ),
                     "Accept-Language": "en-US,en;q=0.5",
                     "Accept-Encoding": "gzip, deflate",
-                    "Connection": "keep-alive"
-                }
+                    "Connection": "keep-alive",
+                },
             )
         return self.session
 
@@ -59,14 +63,14 @@ class AudibleProvider(MetadataProvider):
 
     async def search(
         self,
-        title: Optional[str] = None,
-        author: Optional[str] = None,
-        series: Optional[str] = None,
-        isbn: Optional[str] = None,
-        year: Optional[int] = None,
-        language: Optional[str] = None,
-        limit: int = 10
-    ) -> List[ProviderIdentity]:
+        title: str | None = None,
+        author: str | None = None,
+        series: str | None = None,
+        isbn: str | None = None,
+        year: int | None = None,
+        language: str | None = None,
+        limit: int = 10,
+    ) -> list[ProviderIdentity]:
         """Search for audiobooks using Audible search."""
         session = await self._get_session()
 
@@ -88,7 +92,7 @@ class AudibleProvider(MetadataProvider):
         search_url = f"https://www.{self.base_domain}/search"
         params = {
             "keywords": query,
-            "node": "18573211011"  # Audible Books & Originals category
+            "node": "18573211011",  # Audible Books & Originals category
         }
 
         try:
@@ -104,7 +108,7 @@ class AudibleProvider(MetadataProvider):
         except (aiohttp.ClientError, asyncio.TimeoutError):
             return []
 
-    async def get_by_id(self, external_id: str) -> Optional[ProviderIdentity]:
+    async def get_by_id(self, external_id: str) -> ProviderIdentity | None:
         """Get audiobook details by Audible ASIN."""
         session = await self._get_session()
 
@@ -121,12 +125,18 @@ class AudibleProvider(MetadataProvider):
         except (aiohttp.ClientError, asyncio.TimeoutError):
             return None
 
-    def _parse_search_results(self, html: str) -> List[ProviderIdentity]:
+    def _parse_search_results(self, html: str) -> list[ProviderIdentity]:
         """Parse Audible search results HTML."""
         identities = []
 
         # Extract product containers using regex (basic HTML parsing)
-        product_pattern = r'data-asin="([^"]+)"[^>]*>.*?<h3[^>]*class="[^"]*bc-heading[^"]*"[^>]*>.*?<a[^>]*href="[^"]*"[^>]*>([^<]+)</a>.*?<li[^>]*class="[^"]*authorLabel[^"]*"[^>]*>.*?<a[^>]*>([^<]+)</a>'
+        product_pattern = (
+            r'data-asin="([^"]+)"[^>]*>.*?'
+            r'<h3[^>]*class="[^"]*bc-heading[^"]*"[^>]*>.*?'
+            r'<a[^>]*href="[^"]*"[^>]*>([^<]+)</a>.*?'
+            r'<li[^>]*class="[^"]*authorLabel[^"]*"[^>]*>.*?'
+            r"<a[^>]*>([^<]+)</a>"
+        )
 
         matches = re.finditer(product_pattern, html, re.DOTALL | re.IGNORECASE)
 
@@ -137,7 +147,7 @@ class AudibleProvider(MetadataProvider):
 
             if asin and title:
                 identity = ProviderIdentity(
-                    provider_name=self.name,
+                    provider=self.name,
                     external_id=asin,
                     title=title,
                     authors=[author] if author else [],
@@ -145,23 +155,27 @@ class AudibleProvider(MetadataProvider):
                     series_index=None,
                     year=None,
                     language="en",  # Default to English
-                    identifiers={"asin": asin},
-                    cover_urls={},
+                    asin=asin,
+                    cover_urls=[],
                     description="",
-                    metadata={
+                    raw_data={
                         "marketplace": self.marketplace,
-                        "product_url": f"https://www.{self.base_domain}/pd/{asin}"
-                    }
+                        "product_url": f"https://www.{self.base_domain}/pd/{asin}",
+                    },
                 )
                 identities.append(identity)
 
         return identities
 
-    def _parse_product_page(self, html: str, asin: str) -> Optional[ProviderIdentity]:
+    def _parse_product_page(self, html: str, asin: str) -> ProviderIdentity | None:
         """Parse Audible product page for detailed information."""
 
         # Extract title
-        title_match = re.search(r'<h1[^>]*class="[^"]*bc-heading[^"]*"[^>]*>([^<]+)</h1>', html, re.IGNORECASE)
+        title_match = re.search(
+            r'<h1[^>]*class="[^"]*bc-heading[^"]*"[^>]*>([^<]+)</h1>',
+            html,
+            re.IGNORECASE,
+        )
         if not title_match:
             return None
 
@@ -169,26 +183,37 @@ class AudibleProvider(MetadataProvider):
 
         # Extract authors
         authors = []
-        author_pattern = r'<span[^>]*class="[^"]*bc-text[^"]*"[^>]*>\s*By:\s*</span>.*?<a[^>]*>([^<]+)</a>'
+        author_pattern = (
+            r'<span[^>]*class="[^"]*bc-text[^"]*"[^>]*>\s*By:\s*</span>.*?'
+            r"<a[^>]*>([^<]+)</a>"
+        )
         for match in re.finditer(author_pattern, html, re.IGNORECASE):
             author = self._clean_text(match.group(1))
             if author:
                 authors.append(author)
 
         # Extract narrator
-        narrator_pattern = r'<span[^>]*class="[^"]*bc-text[^"]*"[^>]*>\s*Narrated by:\s*</span>.*?<a[^>]*>([^<]+)</a>'
+        narrator_pattern = (
+            r'<span[^>]*class="[^"]*bc-text[^"]*"[^>]*>\s*Narrated by:\s*</span>.*?'
+            r"<a[^>]*>([^<]+)</a>"
+        )
         narrator_match = re.search(narrator_pattern, html, re.IGNORECASE)
         narrator = self._clean_text(narrator_match.group(1)) if narrator_match else None
 
         # Extract series information
         series_name = None
         series_index = None
-        series_pattern = r'<span[^>]*class="[^"]*bc-text[^"]*"[^>]*>\s*Series:\s*</span>.*?<a[^>]*>([^<]+)</a>'
+        series_pattern = (
+            r'<span[^>]*class="[^"]*bc-text[^"]*"[^>]*>\s*Series:\s*</span>.*?'
+            r"<a[^>]*>([^<]+)</a>"
+        )
         series_match = re.search(series_pattern, html, re.IGNORECASE)
         if series_match:
             series_text = self._clean_text(series_match.group(1))
             # Try to extract series name and book number
-            book_num_match = re.search(r'(.+?),?\s*Book\s*(\d+)', series_text, re.IGNORECASE)
+            book_num_match = re.search(
+                r"(.+?),?\s*Book\s*(\d+)", series_text, re.IGNORECASE
+            )
             if book_num_match:
                 series_name = book_num_match.group(1).strip()
                 try:
@@ -200,11 +225,14 @@ class AudibleProvider(MetadataProvider):
 
         # Extract publication date/year
         year = None
-        date_pattern = r'<span[^>]*class="[^"]*bc-text[^"]*"[^>]*>\s*Release date:\s*</span>\s*<span[^>]*>([^<]+)</span>'
+        date_pattern = (
+            r'<span[^>]*class="[^"]*bc-text[^"]*"[^>]*>\s*Release date:\s*</span>'
+            r"\s*<span[^>]*>([^<]+)</span>"
+        )
         date_match = re.search(date_pattern, html, re.IGNORECASE)
         if date_match:
             date_str = self._clean_text(date_match.group(1))
-            year_match = re.search(r'(\d{4})', date_str)
+            year_match = re.search(r"(\d{4})", date_str)
             if year_match:
                 try:
                     year = int(year_match.group(1))
@@ -213,46 +241,56 @@ class AudibleProvider(MetadataProvider):
 
         # Extract description
         description = ""
-        desc_pattern = r'<span[^>]*class="[^"]*bc-text[^"]*"[^>]*>\s*Publisher.?s Summary\s*</span>.*?<span[^>]*>([^<]+)</span>'
+        desc_pattern = (
+            r'<span[^>]*class="[^"]*bc-text[^"]*"[^>]*>'
+            r"\s*Publisher.?s Summary\s*</span>.*?"
+            r"<span[^>]*>([^<]+)</span>"
+        )
         desc_match = re.search(desc_pattern, html, re.IGNORECASE | re.DOTALL)
         if desc_match:
             description = self._clean_text(desc_match.group(1))
 
         # Extract cover image
-        cover_urls = {}
-        cover_pattern = r'<img[^>]*src="([^"]*audible[^"]*\.(jpg|png))"[^>]*class="[^"]*bc-image-inset-border[^"]*"'
+        cover_urls_list = []
+        cover_pattern = (
+            r'<img[^>]*src="([^"]*audible[^"]*\.(jpg|png))"[^>]*'
+            r'class="[^"]*bc-image-inset-border[^"]*"'
+        )
         cover_match = re.search(cover_pattern, html, re.IGNORECASE)
         if cover_match:
             cover_url = cover_match.group(1)
             if cover_url.startswith("//"):
                 cover_url = "https:" + cover_url
-            cover_urls["large"] = cover_url
+            cover_urls_list.append(cover_url)
 
         # Extract runtime
         runtime = None
-        runtime_pattern = r'<span[^>]*class="[^"]*bc-text[^"]*"[^>]*>\s*Length:\s*</span>\s*<span[^>]*>([^<]+)</span>'
+        runtime_pattern = (
+            r'<span[^>]*class="[^"]*bc-text[^"]*"[^>]*>\s*Length:\s*</span>'
+            r"\s*<span[^>]*>([^<]+)</span>"
+        )
         runtime_match = re.search(runtime_pattern, html, re.IGNORECASE)
         if runtime_match:
             runtime = self._clean_text(runtime_match.group(1))
 
         return ProviderIdentity(
-            provider_name=self.name,
+            provider=self.name,
             external_id=asin,
             title=title,
             authors=authors,
             series_name=series_name,
-            series_index=series_index,
+            series_index=str(series_index) if series_index is not None else None,
             year=year,
             language="en",  # Audible is primarily English
-            identifiers={"asin": asin},
-            cover_urls=cover_urls,
+            asin=asin,
+            cover_urls=cover_urls_list,
             description=description,
-            metadata={
+            raw_data={
                 "marketplace": self.marketplace,
                 "product_url": f"https://www.{self.base_domain}/pd/{asin}",
                 "narrator": narrator,
-                "runtime": runtime
-            }
+                "runtime": runtime,
+            },
         )
 
     def _clean_text(self, text: str) -> str:
@@ -261,14 +299,12 @@ class AudibleProvider(MetadataProvider):
             return ""
 
         # Remove HTML entities and extra whitespace
-        text = re.sub(r'&[a-zA-Z0-9#]+;', ' ', text)
-        text = re.sub(r'\s+', ' ', text)
+        text = re.sub(r"&[a-zA-Z0-9#]+;", " ", text)
+        text = re.sub(r"\s+", " ", text)
         return text.strip()
 
     def calculate_match_score(
-        self,
-        audiobook_set: AudiobookSet,
-        identity: ProviderIdentity
+        self, audiobook_set: AudiobookSet, identity: ProviderIdentity
     ) -> float:
         """Calculate match score between audiobook set and Audible identity."""
         score = 0.0
@@ -276,10 +312,12 @@ class AudibleProvider(MetadataProvider):
 
         # Title matching (weight: 0.4)
         if audiobook_set.raw_title_guess and identity.title:
-            title_ratio = fuzz.ratio(
-                audiobook_set.raw_title_guess.lower(),
-                identity.title.lower()
-            ) / 100.0
+            title_ratio = (
+                fuzz.ratio(
+                    audiobook_set.raw_title_guess.lower(), identity.title.lower()
+                )
+                / 100.0
+            )
             score += title_ratio * 0.4
             total_weight += 0.4
 
@@ -287,10 +325,10 @@ class AudibleProvider(MetadataProvider):
         if audiobook_set.author_guess and identity.authors:
             author_scores = []
             for author in identity.authors:
-                author_ratio = fuzz.ratio(
-                    audiobook_set.author_guess.lower(),
-                    author.lower()
-                ) / 100.0
+                author_ratio = (
+                    fuzz.ratio(audiobook_set.author_guess.lower(), author.lower())
+                    / 100.0
+                )
                 author_scores.append(author_ratio)
 
             if author_scores:
@@ -300,20 +338,22 @@ class AudibleProvider(MetadataProvider):
 
         # Series matching (weight: 0.15)
         if audiobook_set.series_guess and identity.series_name:
-            series_ratio = fuzz.ratio(
-                audiobook_set.series_guess.lower(),
-                identity.series_name.lower()
-            ) / 100.0
+            series_ratio = (
+                fuzz.ratio(
+                    audiobook_set.series_guess.lower(), identity.series_name.lower()
+                )
+                / 100.0
+            )
             score += series_ratio * 0.15
             total_weight += 0.15
 
         # Narrator bonus if available (weight: 0.1)
         narrator = identity.metadata.get("narrator")
         if narrator and audiobook_set.narrator_guess:
-            narrator_ratio = fuzz.ratio(
-                audiobook_set.narrator_guess.lower(),
-                narrator.lower()
-            ) / 100.0
+            narrator_ratio = (
+                fuzz.ratio(audiobook_set.narrator_guess.lower(), narrator.lower())
+                / 100.0
+            )
             score += narrator_ratio * 0.1
             total_weight += 0.1
 
