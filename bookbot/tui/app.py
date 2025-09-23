@@ -4,7 +4,8 @@ from pathlib import Path
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Container, Horizontal
+from textual.containers import Container, Horizontal, Vertical
+from textual.message import Message
 from textual.widgets import Button, Footer, Header, Label, TabbedContent, TabPane
 
 from ..config.manager import ConfigManager
@@ -27,26 +28,241 @@ class BookBotApp(App):
     """Main BookBot TUI application."""
 
     CSS = """
+    /* DOPE AF Styling - Textual Compatible */
     .title {
         text-align: center;
         text-style: bold;
-        color: $accent;
+        color: $text;
+        background: $primary;
+        padding: 1;
         margin: 1;
+        border: heavy $accent;
     }
 
     .status {
         dock: bottom;
-        height: 3;
-        background: $surface;
-        border: solid $primary;
+        height: 4;
+        background: $primary;
+        border: heavy $accent;
     }
 
     .main-container {
         height: 100%;
+        background: $surface;
     }
 
     .scan-container {
         height: 100%;
+    }
+
+    /* Enhanced Buttons */
+    Button {
+        border: heavy $accent;
+        background: $warning;
+        color: $text;
+        text-style: bold;
+        margin: 0 1;
+    }
+
+    Button:hover {
+        background: $error;
+        border: heavy $success;
+    }
+
+    Button:focus {
+        border: heavy $success;
+        background: $success;
+        color: $background;
+    }
+
+    Button.-primary {
+        background: $accent;
+        border: heavy $accent;
+        color: $background;
+    }
+
+    Button.-primary:hover {
+        background: $success;
+        border: heavy $success;
+    }
+
+    Button:disabled {
+        background: $surface;
+        color: #666;
+        border: solid #666;
+    }
+
+    /* Enhanced Tables */
+    DataTable {
+        border: heavy $accent;
+        background: $surface;
+    }
+
+    DataTable > .datatable--header {
+        background: $primary;
+        color: $text;
+        text-style: bold;
+    }
+
+    DataTable > .datatable--cursor {
+        background: $accent 50%;
+        color: $text;
+    }
+
+    DataTable:focus > .datatable--cursor {
+        background: $accent;
+        color: $background;
+    }
+
+    /* Enhanced Tabs */
+    TabbedContent {
+        border: heavy $accent;
+        background: $surface;
+    }
+
+    Tab {
+        background: $primary;
+        color: $text;
+        text-style: bold;
+        border: solid $accent;
+    }
+
+    Tab.-active {
+        background: $accent;
+        border: heavy $success;
+        color: $background;
+        text-style: bold;
+    }
+
+    Tab:hover {
+        background: $success;
+        color: $background;
+    }
+
+    /* Section Styling */
+    .section-title {
+        text-align: center;
+        text-style: bold;
+        color: $accent;
+        background: $primary;
+        padding: 1;
+        border: solid $accent;
+        margin: 1;
+    }
+
+    .subsection-title {
+        text-style: bold;
+        color: $warning;
+        margin: 1 0;
+    }
+
+    /* Enhanced Input Fields */
+    Input {
+        border: solid $accent;
+        background: $surface;
+        color: $text;
+    }
+
+    Input:focus {
+        border: heavy $success;
+        background: $background;
+    }
+
+    /* Progress Bar Enhancement */
+    ProgressBar {
+        border: solid $accent;
+        background: $surface;
+    }
+
+    ProgressBar > .bar--bar {
+        background: $accent;
+    }
+
+    ProgressBar > .bar--complete {
+        background: $success;
+    }
+
+    /* Status Label */
+    #status_label {
+        color: $warning;
+        text-style: bold;
+        margin: 1;
+    }
+
+    /* Checkbox Styling */
+    Checkbox {
+        color: $accent;
+    }
+
+    Checkbox:focus {
+        background: $accent 20%;
+    }
+
+    /* Select Styling */
+    Select {
+        border: solid $accent;
+        background: $surface;
+        color: $text;
+    }
+
+    Select:focus {
+        border: heavy $success;
+        background: $background;
+    }
+
+    /* Container Enhancements */
+    Container {
+        border: none;
+        background: transparent;
+    }
+
+    /* Footer Enhancement */
+    Footer {
+        background: $background;
+        color: $accent;
+    }
+
+    /* Header Enhancement */
+    Header {
+        background: $primary;
+        color: $text;
+        text-style: bold;
+    }
+
+    /* Enhanced Labels */
+    Label {
+        color: $text;
+    }
+
+    Static {
+        color: $text;
+    }
+
+    /* Special Effect Classes */
+    .success-text {
+        color: $success;
+        text-style: bold;
+    }
+
+    .warning-text {
+        color: $warning;
+        text-style: bold;
+    }
+
+    .error-text {
+        color: $error;
+        text-style: bold;
+    }
+
+    .highlight {
+        background: $accent;
+        color: $background;
+        padding: 0 1;
+    }
+
+    .glow {
+        border: heavy $accent;
+        background: $accent 20%;
     }
     """
 
@@ -74,7 +290,7 @@ class BookBotApp(App):
         yield Header()
 
         with Container(classes="main-container"):
-            yield Label("BookBot - Audiobook Organizer", classes="title")
+            yield Label("BookBot - Ultimate Audiobook Organizer", classes="title")
 
             with TabbedContent(initial="scan"):
                 with TabPane("Source Selection", id="source"):
@@ -139,19 +355,19 @@ class BookBotApp(App):
         status_label = self.query_one("#status_label", Label)
         status_label.update(message)
 
-    class StartScan(App.Message):
+    class StartScan(Message):
         """Message to start scanning."""
 
         pass
 
-    class ScanComplete(App.Message):
+    class ScanComplete(Message):
         """Message when scanning is complete."""
 
         def __init__(self, audiobook_sets: list[AudiobookSet]):
             super().__init__()
             self.audiobook_sets = audiobook_sets
 
-    class MatchesFound(App.Message):
+    class MatchesFound(Message):
         """Message when matches are found."""
 
         pass
