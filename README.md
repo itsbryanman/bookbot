@@ -19,7 +19,7 @@ Organize your audiobook library with confidence. BookBot is a sleek, powerful, a
 
 ## Why BookBot?
 
-Messy audiobook folders are a thing of the past. BookBot was built to solve the most common frustrations with digital audiobook collections, focusing on four core principles:
+Transform your chaotic audiobook collection into a perfectly organized library. BookBot eliminates the headaches of digital audiobook management with four core principles:
 
 **Safety First**: Your files are precious. BookBot uses a preview-first workflow, atomic file operations, and full undo capabilities for every transaction. No more accidental deletions or botched renames.
 
@@ -78,14 +78,35 @@ The easiest way to install BookBot is with pipx, which installs it in an isolate
 pipx install bookbot
 ```
 
-### 2. Launch the TUI
+**Note:** After installation, you may need to add pipx binaries to your PATH:
+
+```bash
+# Add to your shell profile (~/.bashrc, ~/.zshrc, etc.)
+export PATH="$HOME/.local/bin:$PATH"
+
+# Or for system-wide installations
+export PATH="/root/.local/bin:$PATH"
+```
+
+Restart your terminal or run `source ~/.bashrc` to apply the changes.
+
+### 2. Verify Installation
+Test that BookBot is properly installed and accessible:
+
+```bash
+bookbot --help
+```
+
+If the command is not found, ensure the PATH is configured correctly (see installation notes above).
+
+### 3. Launch the TUI
 Point BookBot to your audiobooks folder to launch the interactive TUI.
 
 ```bash
 bookbot tui /path/to/your/audiobooks
 ```
 
-### 3. The TUI Workflow
+### 4. The TUI Workflow
 The TUI will guide you through a simple, 4-step process:
 
 1. **Scan**: BookBot analyzes your folder structure and reads existing metadata
