@@ -389,7 +389,8 @@ class AudioFileScanner:
         author_title_match = re.search(r"^(.+?)\s*[-–—]\s*(.+)$", folder_name)
         if author_title_match:
             author_guess = author_title_match.group(1).strip()
-            # Keep full folder name as the initial title guess while extracting the author name.
+            # Keep full folder name as the initial title guess while extracting the
+            # author name.
             title_guess = folder_name.strip()
             return title_guess, author_guess, None, None
 

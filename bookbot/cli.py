@@ -534,7 +534,12 @@ def audible() -> None:
 
 
 @audible.command("auth")
-@click.option("--country", type=str, default="US", help="Country code (US, UK, CA, AU, etc.)")
+@click.option(
+    "--country",
+    type=str,
+    default="US",
+    help="Country code (US, UK, CA, AU, etc.)",
+)
 @click.pass_context
 def audible_auth(ctx: click.Context, country: str) -> None:
     """Authenticate with Audible for importing books."""
@@ -544,9 +549,14 @@ def audible_auth(ctx: click.Context, country: str) -> None:
         client = AudibleAuthClient(country_code=country)
 
         if client.authenticate():
-            click.echo("✅ Authentication successful! You can now import Audible books.")
+            click.echo(
+                "✅ Authentication successful! You can now import Audible books."
+            )
         else:
-            click.echo("❌ Authentication failed. Please try again.", err=True)
+            click.echo(
+                "❌ Authentication failed. Please try again.",
+                err=True,
+            )
             sys.exit(1)
 
     except ImportError as e:
@@ -561,14 +571,21 @@ def audible_auth(ctx: click.Context, country: str) -> None:
 @audible.command("import")
 @click.argument("asin", type=str)
 @click.option(
-    "-o", "--output-dir",
+    "-o",
+    "--output-dir",
     type=click.Path(path_type=Path),
-    help="Output directory for downloaded book"
+    help="Output directory for downloaded book",
 )
 @click.option("--remove-drm", is_flag=True, help="Remove DRM after download")
 @click.option("--activation-bytes", type=str, help="Activation bytes for DRM removal")
 @click.pass_context
-def audible_import(ctx: click.Context, asin: str, output_dir: Path | None, remove_drm: bool, activation_bytes: str | None) -> None:
+def audible_import(
+    ctx: click.Context,
+    asin: str,
+    output_dir: Path | None,
+    remove_drm: bool,
+    activation_bytes: str | None,
+) -> None:
     """Import an Audible book by ASIN."""
     try:
         from .drm.audible_client import AudibleAuthClient
@@ -583,7 +600,10 @@ def audible_import(ctx: click.Context, asin: str, output_dir: Path | None, remov
 
         # Check if authenticated
         if not client._load_stored_auth():
-            click.echo("❌ Not authenticated. Run 'bookbot audible auth' first.", err=True)
+            click.echo(
+                "❌ Not authenticated. Run 'bookbot audible auth' first.",
+                err=True,
+            )
             sys.exit(1)
 
         client._auth = client._load_stored_auth()
@@ -605,13 +625,17 @@ def audible_import(ctx: click.Context, asin: str, output_dir: Path | None, remov
                     activation_bytes = client.get_activation_bytes()
 
                 if not activation_bytes:
-                    click.echo("Warning: No activation bytes available. DRM removal may fail.")
+                    click.echo(
+                        "Warning: No activation bytes available. DRM removal may fail."
+                    )
 
                 remover = DRMRemover(activation_bytes=activation_bytes)
                 result = remover.remove_drm(book_path)
 
                 if result.success:
-                    click.echo(f"DRM removed successfully! Output: {result.output_file}")
+                    click.echo(
+                        f"DRM removed successfully! Output: {result.output_file}"
+                    )
                 else:
                     click.echo(f"DRM removal failed: {result.error_message}", err=True)
         else:
@@ -635,7 +659,10 @@ def audible_list(ctx: click.Context, limit: int) -> None:
 
         # Check if authenticated
         if not client._load_stored_auth():
-            click.echo("❌ Not authenticated. Run 'bookbot audible auth' first.", err=True)
+            click.echo(
+                "❌ Not authenticated. Run 'bookbot audible auth' first.",
+                err=True,
+            )
             sys.exit(1)
 
         client._auth = client._load_stored_auth()

@@ -4,8 +4,8 @@ import asyncio
 import re
 
 import aiohttp
-from rapidfuzz import fuzz
 from bs4 import BeautifulSoup
+from rapidfuzz import fuzz
 
 from ..core.models import AudiobookSet, ProviderIdentity
 from .base import MetadataProvider
@@ -170,7 +170,9 @@ class AudibleProvider(MetadataProvider):
             if product_href and product_href.startswith("/"):
                 product_url = f"https://www.{self.base_domain}{product_href}"
             else:
-                product_url = product_href or f"https://www.{self.base_domain}/pd/{asin}"
+                product_url = (
+                    product_href or f"https://www.{self.base_domain}/pd/{asin}"
+                )
 
             identity = ProviderIdentity(
                 provider=self.name,
@@ -205,7 +207,11 @@ class AudibleProvider(MetadataProvider):
         title = self._clean_text(title_tag.get_text())
 
         author_elements = soup.select("li.authorLabel a")
-        authors = [self._clean_text(a.get_text()) for a in author_elements if a.get_text(strip=True)]
+        authors = [
+            self._clean_text(a.get_text())
+            for a in author_elements
+            if a.get_text(strip=True)
+        ]
 
         if not authors:
             # fallback to regex as last resort
@@ -270,7 +276,9 @@ class AudibleProvider(MetadataProvider):
 
         # Release year
         year = None
-        release_element = soup.select_one("li.releaseDateLabel span[data-qa='release-date']")
+        release_element = soup.select_one(
+            "li.releaseDateLabel span[data-qa='release-date']"
+        )
         if release_element:
             year_match = re.search(r"(\d{4})", release_element.get_text())
             if year_match:

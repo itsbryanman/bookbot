@@ -2,7 +2,6 @@
 
 import asyncio
 from asyncio import to_thread
-import webbrowser
 from pathlib import Path
 
 from textual.app import ComposeResult
@@ -198,7 +197,7 @@ class MatchReviewScreen(Static):
         match_tasks = [self.provider.find_matches(a) for a in audiobook_sets]
         results = await asyncio.gather(*match_tasks, return_exceptions=True)
 
-        for audiobook_set, result in zip(audiobook_sets, results):
+        for audiobook_set, result in zip(audiobook_sets, results, strict=False):
             candidates: list = []
             if isinstance(result, Exception):
                 candidates = []
@@ -493,7 +492,9 @@ class ConversionScreen(Static):
 
                 # Update table row status
                 if i < len(self._result_row_keys):
-                    table.update_cell(self._result_row_keys[i], "Status", "🔄 Converting")
+                    table.update_cell(
+                        self._result_row_keys[i], "Status", "🔄 Converting"
+                    )
 
                 try:
                     # Perform conversion

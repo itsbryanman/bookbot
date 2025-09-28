@@ -62,6 +62,7 @@ class DRMRemover:
         if not activation_bytes:
             try:
                 from .secure_storage import load_activation_bytes
+
                 activation_bytes = load_activation_bytes()
             except ImportError:
                 pass

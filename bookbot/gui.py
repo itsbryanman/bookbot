@@ -6,8 +6,8 @@ import sys
 def main() -> None:
     """Launch the GUI version of BookBot."""
     try:
-        from .tui.app import BookBotApp
         from .config.manager import ConfigManager
+        from .tui.app import BookBotApp
 
         # For now, launch TUI as GUI - can be enhanced later
         config_manager = ConfigManager()
@@ -17,6 +17,7 @@ def main() -> None:
     except ImportError:
         print("Error: GUI dependencies not installed. Using TUI mode.")
         from .cli import main as cli_main
+
         cli_main()
     except Exception as e:
         print(f"Error launching GUI: {e}")

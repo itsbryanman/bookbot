@@ -1,15 +1,19 @@
 """Audible authentication client using the official audible package."""
 
+import json
 import webbrowser
 from pathlib import Path
 from typing import Any
 
 try:
+    import keyring
+except ImportError:
+    keyring = None  # type: ignore[assignment]
+
+try:
     import audible
 except ImportError:
     audible = None
-
-from . import secure_storage
 
 
 class AudibleAuthClient:
@@ -50,20 +54,23 @@ class AudibleAuthClient:
 
             # Perform new authentication
             def login_url_callback(login_url: str) -> str:
-                print(f"\n🌐 Opening browser for authentication...")
+                print("\n🌐 Opening browser for authentication...")
                 print(f"If the browser doesn't open automatically, visit: {login_url}")
                 webbrowser.open(login_url)
 
-                print("\n📝 After logging in, you'll see an error page - this is normal!")
+                print(
+                    "\n📝 After logging in, you'll see an error page - this is normal!"
+                )
                 print("📋 Copy the FULL URL from the address bar and paste it below.")
-                print("📋 It should look like: https://www.amazon.com/ap/maplanding?...")
+                print(
+                    "📋 It should look like: https://www.amazon.com/ap/maplanding?..."
+                )
 
                 return input("\n🔗 Paste the redirect URL here: ").strip()
 
             # Create authenticator with browser-based login
             self._auth = audible.Authenticator.from_login_external(
-                locale=self.country_code,
-                login_url_callback=login_url_callback
+                locale=self.country_code, login_url_callback=login_url_callback
             )
 
             # Save authentication for future use
@@ -86,11 +93,11 @@ class AudibleAuthClient:
                 library = client.get(
                     "library",
                     num_results=999,
-                    response_groups="product_desc,product_attrs,series,media,price"
+                    response_groups="product_desc,product_attrs,series,media,price",
                 )
                 return library.get("items", [])
         except Exception as e:
-            raise Exception(f"Failed to get library: {e}")
+            raise Exception(f"Failed to get library: {e}") from e
 
     def download_book(self, asin: str, output_path: str) -> bool:
         """Download an Audible book."""
@@ -104,6 +111,7 @@ class AudibleAuthClient:
 
                 # Download the file
                 import requests
+
                 response = requests.get(content_url, stream=True)
                 response.raise_for_status()
 
@@ -118,7 +126,7 @@ class AudibleAuthClient:
                 return True
 
         except Exception as e:
-            raise Exception(f"Failed to download book: {e}")
+            raise Exception(f"Failed to download book: {e}") from e
 
     def get_activation_bytes(self) -> str | None:
         """Get activation bytes for DRM removal."""
@@ -127,7 +135,7 @@ class AudibleAuthClient:
 
         try:
             # Extract activation bytes from the authentication
-            if hasattr(self._auth, 'activation_bytes'):
+            if hasattr(self._auth, "activation_bytes"):
                 return self._auth.activation_bytes
             return None
         except Exception:
@@ -136,27 +144,29 @@ class AudibleAuthClient:
     def _save_auth(self) -> None:
         """Save authentication data securely."""
         if self._auth:
+            if keyring is None:
+                print("⚠️ Keyring is not available; authentication will not be stored.")
+                return
+
             # Save the authentication data to keyring
             auth_data = {
-                'access_token': self._auth.access_token,
-                'refresh_token': self._auth.refresh_token,
-                'adp_token': self._auth.adp_token,
-                'device_private_key': self._auth.device_private_key,
-                'store_authentication_cookie': self._auth.store_authentication_cookie,
-                'device_info': self._auth.device_info,
-                'customer_info': self._auth.customer_info,
-                'website_cookies': self._auth.website_cookies
+                "access_token": self._auth.access_token,
+                "refresh_token": self._auth.refresh_token,
+                "adp_token": self._auth.adp_token,
+                "device_private_key": self._auth.device_private_key,
+                "store_authentication_cookie": self._auth.store_authentication_cookie,
+                "device_info": self._auth.device_info,
+                "customer_info": self._auth.customer_info,
+                "website_cookies": self._auth.website_cookies,
             }
 
-            import json
-            import keyring
             keyring.set_password("bookbot", "audible_auth", json.dumps(auth_data))
 
     def _load_stored_auth(self) -> audible.Authenticator | None:
         """Load stored authentication data."""
         try:
-            import json
-            import keyring
+            if keyring is None:
+                return None
 
             auth_data_str = keyring.get_password("bookbot", "audible_auth")
             if not auth_data_str:
@@ -166,14 +176,16 @@ class AudibleAuthClient:
 
             # Reconstruct the authenticator
             auth = audible.Authenticator(
-                access_token=auth_data.get('access_token'),
-                refresh_token=auth_data.get('refresh_token'),
-                adp_token=auth_data.get('adp_token'),
-                device_private_key=auth_data.get('device_private_key'),
-                store_authentication_cookie=auth_data.get('store_authentication_cookie'),
-                device_info=auth_data.get('device_info'),
-                customer_info=auth_data.get('customer_info'),
-                website_cookies=auth_data.get('website_cookies')
+                access_token=auth_data.get("access_token"),
+                refresh_token=auth_data.get("refresh_token"),
+                adp_token=auth_data.get("adp_token"),
+                device_private_key=auth_data.get("device_private_key"),
+                store_authentication_cookie=auth_data.get(
+                    "store_authentication_cookie"
+                ),
+                device_info=auth_data.get("device_info"),
+                customer_info=auth_data.get("customer_info"),
+                website_cookies=auth_data.get("website_cookies"),
             )
 
             return auth
@@ -184,7 +196,8 @@ class AudibleAuthClient:
     def logout(self) -> None:
         """Clear stored authentication."""
         try:
-            import keyring
+            if keyring is None:
+                return
             keyring.delete_password("bookbot", "audible_auth")
         except Exception:
             pass

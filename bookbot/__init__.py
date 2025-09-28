@@ -8,4 +8,5 @@ __email__ = "bookbot@example.com"
 def main() -> None:
     """Main entry point for BookBot."""
     from .cli import main as cli_main
+
     cli_main()
