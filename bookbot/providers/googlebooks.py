@@ -14,8 +14,8 @@ from .base import MetadataProvider
 class GoogleBooksProvider(MetadataProvider):
     """Provider for Google Books API."""
 
-    def __init__(self, api_key: str | None = None):
-        super().__init__("Google Books")
+    def __init__(self, api_key: str | None = None, cache_manager=None):
+        super().__init__("Google Books", cache_manager=cache_manager)
         self.api_key = api_key
         self.base_url = "https://www.googleapis.com/books/v1"
         self.session: aiohttp.ClientSession | None = None
@@ -79,6 +79,25 @@ class GoogleBooksProvider(MetadataProvider):
         if language:
             params["langRestrict"] = language
 
+        cache_key = None
+        cache_namespace = "googlebooks_search"
+        if self.cache_manager:
+            cache_key = self.cache_manager.generate_query_hash(
+                query=query,
+                language=language,
+                limit=limit,
+                api_key_used=bool(self.api_key),
+            )
+            cached_entry = self.cache_manager.get(cache_namespace, cache_key)
+            if cached_entry:
+                try:
+                    return [
+                        ProviderIdentity.model_validate(item)
+                        for item in cached_entry["data"]
+                    ]
+                except Exception:
+                    pass
+
         session = await self._get_session()
 
         try:
@@ -97,6 +116,14 @@ class GoogleBooksProvider(MetadataProvider):
                     if identity:
                         identities.append(identity)
 
+                if identities and self.cache_manager and cache_key:
+                    self.cache_manager.set(
+                        cache_namespace,
+                        cache_key,
+                        [identity.model_dump(mode="json") for identity in identities],
+                        ttl_seconds=24 * 60 * 60,
+                    )
+
                 return identities
 
         except (aiohttp.ClientError, asyncio.TimeoutError, json.JSONDecodeError):
@@ -104,6 +131,18 @@ class GoogleBooksProvider(MetadataProvider):
 
     async def get_by_id(self, external_id: str) -> ProviderIdentity | None:
         """Get a book by its Google Books volume ID."""
+        cache_key = None
+        cache_namespace = "googlebooks_volume"
+        if self.cache_manager:
+            cache_key = self.cache_manager.generate_query_hash(volume_id=external_id)
+            cached_entry = self.cache_manager.get(cache_namespace, cache_key)
+            if cached_entry:
+                try:
+                    data = cached_entry["data"][0]
+                    return ProviderIdentity.model_validate(data)
+                except Exception:
+                    pass
+
         session = await self._get_session()
 
         params = {
@@ -124,7 +163,15 @@ class GoogleBooksProvider(MetadataProvider):
                     return None
 
                 data = await response.json()
-                return self._parse_volume(data)
+                identity = self._parse_volume(data)
+                if identity and self.cache_manager and cache_key:
+                    self.cache_manager.set(
+                        cache_namespace,
+                        cache_key,
+                        [identity.model_dump(mode="json")],
+                        ttl_seconds=24 * 60 * 60,
+                    )
+                return identity
 
         except (aiohttp.ClientError, asyncio.TimeoutError, json.JSONDecodeError):
             return None

@@ -40,9 +40,8 @@ class AudibleAuthClient:
             if stored_auth:
                 print("Found existing authentication, checking if it's still valid...")
                 try:
-                    # Test the authentication
-                    async_client = audible.AsyncClient(stored_auth)
-                    # If this doesn't raise an exception, auth is valid
+                    with audible.Client(stored_auth) as client:
+                        client.get("library", num_results=1)
                     self._auth = stored_auth
                     print("✅ Existing authentication is valid!")
                     return True

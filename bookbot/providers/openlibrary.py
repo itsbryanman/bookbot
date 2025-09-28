@@ -18,8 +18,8 @@ class OpenLibraryProvider(MetadataProvider):
     API_TIMEOUT = 30
     RATE_LIMIT_DELAY = 0.1  # 100ms between requests
 
-    def __init__(self):
-        super().__init__("Open Library")
+    def __init__(self, cache_manager=None):
+        super().__init__("Open Library", cache_manager=cache_manager)
         self._session: aiohttp.ClientSession | None = None
         self._last_request_time = 0.0
 
@@ -60,10 +60,40 @@ class OpenLibraryProvider(MetadataProvider):
         """Search Open Library for books."""
         await self._rate_limit()
 
+        cache_key = None
+        cache_namespace = "openlibrary_search"
+
+        if self.cache_manager:
+            cache_key = self.cache_manager.generate_query_hash(
+                title=title,
+                author=author,
+                series=series,
+                isbn=isbn,
+                year=year,
+                language=language,
+                limit=limit,
+            )
+            cached_entry = self.cache_manager.get(cache_namespace, cache_key)
+            if cached_entry:
+                try:
+                    return [
+                        ProviderIdentity.model_validate(item)
+                        for item in cached_entry["data"]
+                    ]
+                except Exception:
+                    pass
+
         # If we have an ISBN, try that first
         if isbn:
             isbn_result = await self._search_by_isbn(isbn)
             if isbn_result:
+                if self.cache_manager and cache_key:
+                    self.cache_manager.set(
+                        cache_namespace,
+                        cache_key,
+                        [isbn_result.model_dump(mode="json")],
+                        ttl_seconds=24 * 60 * 60,
+                    )
                 return [isbn_result]
 
         # Build search query
@@ -105,6 +135,14 @@ class OpenLibraryProvider(MetadataProvider):
                     if identity:
                         identities.append(identity)
 
+                if identities and self.cache_manager and cache_key:
+                    self.cache_manager.set(
+                        cache_namespace,
+                        cache_key,
+                        [identity.model_dump(mode="json") for identity in identities],
+                        ttl_seconds=24 * 60 * 60,
+                    )
+
                 return identities
 
         except Exception:
@@ -115,6 +153,18 @@ class OpenLibraryProvider(MetadataProvider):
         clean_isbn = re.sub(r"[^0-9X]", "", isbn.upper())
         if not clean_isbn:
             return None
+
+        cache_key = None
+        cache_namespace = "openlibrary_isbn"
+        if self.cache_manager:
+            cache_key = self.cache_manager.generate_query_hash(isbn=clean_isbn)
+            cached_entry = self.cache_manager.get(cache_namespace, cache_key)
+            if cached_entry:
+                try:
+                    data = cached_entry["data"][0]
+                    return ProviderIdentity.model_validate(data)
+                except Exception:
+                    pass
 
         url = f"{self.BASE_URL}/api/books"
         params = {"bibkeys": f"ISBN:{clean_isbn}", "format": "json", "jscmd": "data"}
@@ -132,7 +182,17 @@ class OpenLibraryProvider(MetadataProvider):
                 # The response key format is "ISBN:xxxx"
                 for key, book_data in data.items():
                     if key.startswith("ISBN:"):
-                        return self._parse_book_data(book_data, key.split(":", 1)[1])
+                        identity = self._parse_book_data(
+                            book_data, key.split(":", 1)[1]
+                        )
+                        if identity and self.cache_manager and cache_key:
+                            self.cache_manager.set(
+                                cache_namespace,
+                                cache_key,
+                                [identity.model_dump(mode="json")],
+                                ttl_seconds=24 * 60 * 60,
+                            )
+                        return identity
 
         except Exception:
             pass
@@ -145,6 +205,18 @@ class OpenLibraryProvider(MetadataProvider):
 
         if not external_id.startswith("/works/"):
             external_id = f"/works/{external_id}"
+
+        cache_key = None
+        cache_namespace = "openlibrary_work"
+        if self.cache_manager:
+            cache_key = self.cache_manager.generate_query_hash(external_id=external_id)
+            cached_entry = self.cache_manager.get(cache_namespace, cache_key)
+            if cached_entry:
+                try:
+                    data = cached_entry["data"][0]
+                    return ProviderIdentity.model_validate(data)
+                except Exception:
+                    pass
 
         url = f"{self.BASE_URL}{external_id}.json"
 
@@ -166,10 +238,28 @@ class OpenLibraryProvider(MetadataProvider):
                         if editions:
                             # Pick the edition with the most complete data
                             best_edition = self._pick_best_edition(editions)
-                            return self._parse_work_and_edition(work_data, best_edition)
+                            identity = self._parse_work_and_edition(
+                                work_data, best_edition
+                            )
+                            if identity and self.cache_manager and cache_key:
+                                self.cache_manager.set(
+                                    cache_namespace,
+                                    cache_key,
+                                    [identity.model_dump(mode="json")],
+                                    ttl_seconds=24 * 60 * 60,
+                                )
+                            return identity
 
                 # Fallback to work data only
-                return self._parse_work_data(work_data)
+                identity = self._parse_work_data(work_data)
+                if identity and self.cache_manager and cache_key:
+                    self.cache_manager.set(
+                        cache_namespace,
+                        cache_key,
+                        [identity.model_dump(mode="json")],
+                        ttl_seconds=24 * 60 * 60,
+                    )
+                return identity
 
         except Exception:
             return None

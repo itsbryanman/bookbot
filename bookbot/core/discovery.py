@@ -150,6 +150,7 @@ class AudioFileScanner:
 
     def _create_track_from_file(self, file_path: Path) -> Track | None:
         """Create a Track object from an audio file."""
+        stat = None
         try:
             # Get basic file info
             stat = file_path.stat()
@@ -187,11 +188,12 @@ class AudioFileScanner:
 
         except Exception as e:
             # Return a track with error status for problematic files
+            file_size = stat.st_size if stat else 0
             return Track(
                 src_path=file_path,
                 disc=1,
                 track_index=999,  # Put error tracks at the end
-                file_size=file_path.stat().st_size if file_path.exists() else 0,
+                file_size=file_size,
                 audio_format=self.SUPPORTED_EXTENSIONS.get(
                     file_path.suffix.lower(), AudioFormat.MP3
                 ),

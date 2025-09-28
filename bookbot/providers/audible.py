@@ -5,6 +5,7 @@ import re
 
 import aiohttp
 from rapidfuzz import fuzz
+from bs4 import BeautifulSoup
 
 from ..core.models import AudiobookSet, ProviderIdentity
 from .base import MetadataProvider
@@ -13,8 +14,8 @@ from .base import MetadataProvider
 class AudibleProvider(MetadataProvider):
     """Provider for Audible audiobook metadata."""
 
-    def __init__(self, marketplace: str = "US"):
-        super().__init__("Audible")
+    def __init__(self, marketplace: str = "US", cache_manager=None):
+        super().__init__("Audible", cache_manager=cache_manager)
         self.marketplace = marketplace.upper()
 
         # Audible marketplace domains
@@ -127,90 +128,115 @@ class AudibleProvider(MetadataProvider):
 
     def _parse_search_results(self, html: str) -> list[ProviderIdentity]:
         """Parse Audible search results HTML."""
-        identities = []
+        soup = BeautifulSoup(html, "html.parser")
+        identities: list[ProviderIdentity] = []
 
-        # Extract product containers using regex (basic HTML parsing)
-        product_pattern = (
-            r'data-asin="([^"]+)"[^>]*>.*?'
-            r'<h3[^>]*class="[^"]*bc-heading[^"]*"[^>]*>.*?'
-            r'<a[^>]*href="[^"]*"[^>]*>([^<]+)</a>.*?'
-            r'<li[^>]*class="[^"]*authorLabel[^"]*"[^>]*>.*?'
-            r"<a[^>]*>([^<]+)</a>"
-        )
+        for item in soup.select("[data-asin]"):
+            asin = item.get("data-asin")
+            if not asin:
+                continue
 
-        matches = re.finditer(product_pattern, html, re.DOTALL | re.IGNORECASE)
+            title_tag = item.select_one("h3.bc-heading")
+            if not title_tag:
+                continue
 
-        for match in matches:
-            asin = match.group(1)
-            title = self._clean_text(match.group(2))
-            author = self._clean_text(match.group(3))
+            link = title_tag.find("a")
+            title = self._clean_text(link.get_text() if link else title_tag.get_text())
+            if not title:
+                continue
 
-            if asin and title:
-                identity = ProviderIdentity(
-                    provider=self.name,
-                    external_id=asin,
-                    title=title,
-                    authors=[author] if author else [],
-                    series_name=None,
-                    series_index=None,
-                    year=None,
-                    language="en",  # Default to English
-                    asin=asin,
-                    cover_urls=[],
-                    description="",
-                    raw_data={
-                        "marketplace": self.marketplace,
-                        "product_url": f"https://www.{self.base_domain}/pd/{asin}",
-                    },
+            author_elements = item.select("li.authorLabel a")
+            if not author_elements:
+                # fallback to any text inside author label
+                author_container = item.select_one("li.authorLabel")
+                author_text = (
+                    self._clean_text(author_container.get_text())
+                    if author_container
+                    else ""
                 )
-                identities.append(identity)
+                authors = [author_text] if author_text else []
+            else:
+                authors = [self._clean_text(a.get_text()) for a in author_elements]
+
+            cover_tag = item.select_one("img")
+            cover_urls: list[str] = []
+            if cover_tag and cover_tag.get("src"):
+                cover_url = cover_tag.get("src")
+                if cover_url.startswith("//"):
+                    cover_url = "https:" + cover_url
+                cover_urls.append(cover_url)
+
+            product_href = link.get("href") if link else None
+            if product_href and product_href.startswith("/"):
+                product_url = f"https://www.{self.base_domain}{product_href}"
+            else:
+                product_url = product_href or f"https://www.{self.base_domain}/pd/{asin}"
+
+            identity = ProviderIdentity(
+                provider=self.name,
+                external_id=asin,
+                title=title,
+                authors=authors,
+                series_name=None,
+                series_index=None,
+                year=None,
+                language="en",
+                asin=asin,
+                narrator=None,
+                cover_urls=cover_urls,
+                description="",
+                raw_data={
+                    "marketplace": self.marketplace,
+                    "product_url": product_url,
+                },
+            )
+            identities.append(identity)
 
         return identities
 
     def _parse_product_page(self, html: str, asin: str) -> ProviderIdentity | None:
         """Parse Audible product page for detailed information."""
 
-        # Extract title
-        title_match = re.search(
-            r'<h1[^>]*class="[^"]*bc-heading[^"]*"[^>]*>([^<]+)</h1>',
-            html,
-            re.IGNORECASE,
-        )
-        if not title_match:
+        soup = BeautifulSoup(html, "html.parser")
+
+        title_tag = soup.select_one("h1.bc-heading")
+        if not title_tag:
             return None
+        title = self._clean_text(title_tag.get_text())
 
-        title = self._clean_text(title_match.group(1))
+        author_elements = soup.select("li.authorLabel a")
+        authors = [self._clean_text(a.get_text()) for a in author_elements if a.get_text(strip=True)]
 
-        # Extract authors
-        authors = []
-        author_pattern = (
-            r'<span[^>]*class="[^"]*bc-text[^"]*"[^>]*>\s*By:\s*</span>.*?'
-            r"<a[^>]*>([^<]+)</a>"
-        )
-        for match in re.finditer(author_pattern, html, re.IGNORECASE):
-            author = self._clean_text(match.group(1))
-            if author:
-                authors.append(author)
+        if not authors:
+            # fallback to regex as last resort
+            authors = []
+            author_pattern = (
+                r'<span[^>]*class="[^"]*bc-text[^"]*"[^>]*>\s*By:\s*</span>.*?'
+                r"<a[^>]*>([^<]+)</a>"
+            )
+            for match in re.finditer(author_pattern, html, re.IGNORECASE):
+                author = self._clean_text(match.group(1))
+                if author:
+                    authors.append(author)
 
-        # Extract narrator
-        narrator_pattern = (
-            r'<span[^>]*class="[^"]*bc-text[^"]*"[^>]*>\s*Narrated by:\s*</span>.*?'
-            r"<a[^>]*>([^<]+)</a>"
-        )
-        narrator_match = re.search(narrator_pattern, html, re.IGNORECASE)
-        narrator = self._clean_text(narrator_match.group(1)) if narrator_match else None
+        narrator_elements = soup.select("li.narratorLabel a")
+        narrator = None
+        if narrator_elements:
+            narrator = self._clean_text(narrator_elements[0].get_text())
+        else:
+            narrator_pattern = (
+                r'<span[^>]*class="[^"]*bc-text[^"]*"[^>]*>\s*Narrated by:\s*</span>.*?'
+                r"<a[^>]*>([^<]+)</a>"
+            )
+            narrator_match = re.search(narrator_pattern, html, re.IGNORECASE)
+            if narrator_match:
+                narrator = self._clean_text(narrator_match.group(1))
 
-        # Extract series information
         series_name = None
         series_index = None
-        series_pattern = (
-            r'<span[^>]*class="[^"]*bc-text[^"]*"[^>]*>\s*Series:\s*</span>.*?'
-            r"<a[^>]*>([^<]+)</a>"
-        )
-        series_match = re.search(series_pattern, html, re.IGNORECASE)
-        if series_match:
-            series_text = self._clean_text(series_match.group(1))
-            # Try to extract series name and book number
+        series_link = soup.select_one("li.seriesLabel a")
+        if series_link:
+            series_text = self._clean_text(series_link.get_text())
             book_num_match = re.search(
                 r"(.+?),?\s*Book\s*(\d+)", series_text, re.IGNORECASE
             )
@@ -219,59 +245,95 @@ class AudibleProvider(MetadataProvider):
                 try:
                     series_index = int(book_num_match.group(2))
                 except ValueError:
-                    pass
+                    series_index = None
             else:
                 series_name = series_text
+        else:
+            series_pattern = (
+                r'<span[^>]*class="[^"]*bc-text[^"]*"[^>]*>\s*Series:\s*</span>.*?'
+                r"<a[^>]*>([^<]+)</a>"
+            )
+            series_match = re.search(series_pattern, html, re.IGNORECASE)
+            if series_match:
+                series_text = self._clean_text(series_match.group(1))
+                book_num_match = re.search(
+                    r"(.+?),?\s*Book\s*(\d+)", series_text, re.IGNORECASE
+                )
+                if book_num_match:
+                    series_name = book_num_match.group(1).strip()
+                    try:
+                        series_index = int(book_num_match.group(2))
+                    except ValueError:
+                        series_index = None
+                else:
+                    series_name = series_text
 
-        # Extract publication date/year
+        # Release year
         year = None
-        date_pattern = (
-            r'<span[^>]*class="[^"]*bc-text[^"]*"[^>]*>\s*Release date:\s*</span>'
-            r"\s*<span[^>]*>([^<]+)</span>"
-        )
-        date_match = re.search(date_pattern, html, re.IGNORECASE)
-        if date_match:
-            date_str = self._clean_text(date_match.group(1))
-            year_match = re.search(r"(\d{4})", date_str)
+        release_element = soup.select_one("li.releaseDateLabel span[data-qa='release-date']")
+        if release_element:
+            year_match = re.search(r"(\d{4})", release_element.get_text())
             if year_match:
-                try:
+                year = int(year_match.group(1))
+        else:
+            date_pattern = (
+                r'<span[^>]*class="[^"]*bc-text[^"]*"[^>]*>\s*Release date:\s*</span>'
+                r"\s*<span[^>]*>([^<]+)</span>"
+            )
+            date_match = re.search(date_pattern, html, re.IGNORECASE)
+            if date_match:
+                date_str = self._clean_text(date_match.group(1))
+                year_match = re.search(r"(\d{4})", date_str)
+                if year_match:
                     year = int(year_match.group(1))
-                except ValueError:
-                    pass
 
-        # Extract description
         description = ""
-        desc_pattern = (
-            r'<span[^>]*class="[^"]*bc-text[^"]*"[^>]*>'
-            r"\s*Publisher.?s Summary\s*</span>.*?"
-            r"<span[^>]*>([^<]+)</span>"
+        description_container = soup.select_one(
+            "div.bc-section.productPublisherSummary"
         )
-        desc_match = re.search(desc_pattern, html, re.IGNORECASE | re.DOTALL)
-        if desc_match:
-            description = self._clean_text(desc_match.group(1))
+        if description_container:
+            description = self._clean_text(description_container.get_text())
+        else:
+            desc_pattern = (
+                r'<span[^>]*class="[^"]*bc-text[^"]*"[^>]*>'
+                r"\s*Publisher.?s Summary\s*</span>.*?"
+                r"<span[^>]*>([^<]+)</span>"
+            )
+            desc_match = re.search(desc_pattern, html, re.IGNORECASE | re.DOTALL)
+            if desc_match:
+                description = self._clean_text(desc_match.group(1))
 
-        # Extract cover image
-        cover_urls_list = []
-        cover_pattern = (
-            r'<img[^>]*src="([^"]*audible[^"]*\.(jpg|png))"[^>]*'
-            r'class="[^"]*bc-image-inset-border[^"]*"'
-        )
-        cover_match = re.search(cover_pattern, html, re.IGNORECASE)
-        if cover_match:
-            cover_url = cover_match.group(1)
+        cover_urls_list: list[str] = []
+        cover_img = soup.select_one("img.bc-image-inset-border")
+        if cover_img and cover_img.get("src"):
+            cover_url = cover_img.get("src")
             if cover_url.startswith("//"):
                 cover_url = "https:" + cover_url
             cover_urls_list.append(cover_url)
+        else:
+            cover_pattern = (
+                r'<img[^>]*src="([^"]*audible[^"]*\.(jpg|png))"[^>]*'
+                r'class="[^"]*bc-image-inset-border[^"]*"'
+            )
+            cover_match = re.search(cover_pattern, html, re.IGNORECASE)
+            if cover_match:
+                cover_url = cover_match.group(1)
+                if cover_url.startswith("//"):
+                    cover_url = "https:" + cover_url
+                cover_urls_list.append(cover_url)
 
-        # Extract runtime
         runtime = None
-        runtime_pattern = (
-            r'<span[^>]*class="[^"]*bc-text[^"]*"[^>]*>\s*Length:\s*</span>'
-            r"\s*<span[^>]*>([^<]+)</span>"
-        )
-        runtime_match = re.search(runtime_pattern, html, re.IGNORECASE)
-        if runtime_match:
-            runtime = self._clean_text(runtime_match.group(1))
+        runtime_element = soup.select_one("li.runtimeLabel span")
+        if runtime_element:
+            runtime = self._clean_text(runtime_element.get_text())
+        else:
+            runtime_pattern = (
+                r'<span[^>]*class="[^"]*bc-text[^"]*"[^>]*>\s*Length:\s*</span>'
+                r"\s*<span[^>]*>([^<]+)</span>"
+            )
+            runtime_match = re.search(runtime_pattern, html, re.IGNORECASE)
+            if runtime_match:
+                runtime = self._clean_text(runtime_match.group(1))
 
         return ProviderIdentity(
             provider=self.name,
@@ -283,6 +345,7 @@ class AudibleProvider(MetadataProvider):
             year=year,
             language="en",  # Audible is primarily English
             asin=asin,
+            narrator=narrator,
             cover_urls=cover_urls_list,
             description=description,
             raw_data={
@@ -348,7 +411,7 @@ class AudibleProvider(MetadataProvider):
             total_weight += 0.15
 
         # Narrator bonus if available (weight: 0.1)
-        narrator = identity.metadata.get("narrator")
+        narrator = identity.narrator
         if narrator and audiobook_set.narrator_guess:
             narrator_ratio = (
                 fuzz.ratio(audiobook_set.narrator_guess.lower(), narrator.lower())

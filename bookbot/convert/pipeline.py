@@ -63,7 +63,13 @@ class ConversionPipeline:
 
     def __init__(self, config_manager: ConfigManager):
         self.config_manager = config_manager
-        self.ffmpeg = FFmpegWrapper()
+        self._ffmpeg: FFmpegWrapper | None = None
+
+    def _get_ffmpeg(self) -> FFmpegWrapper:
+        """Lazily instantiate and return the FFmpeg wrapper."""
+        if self._ffmpeg is None:
+            self._ffmpeg = FFmpegWrapper()
+        return self._ffmpeg
 
     def create_conversion_plan(
         self, source_path: Path, config: ConversionConfig
@@ -78,27 +84,7 @@ class ConversionPipeline:
         audiobook_sets = scanner.scan_directory(source_path)
 
         for audiobook_set in audiobook_sets:
-            # Determine output filename
-            if audiobook_set.chosen_identity:
-                identity = audiobook_set.chosen_identity
-                if identity.series_name and identity.series_index:
-                    filename = (
-                        f"{identity.series_name} {identity.series_index} - "
-                        f"{identity.title}"
-                    )
-                else:
-                    filename = identity.title
-
-                if identity.authors:
-                    filename = f"{identity.authors[0]} - {filename}"
-            else:
-                filename = (
-                    audiobook_set.raw_title_guess or audiobook_set.source_path.name
-                )
-
-            # Sanitize filename
-            filename = self._sanitize_filename(filename)
-            output_path = config.output_directory / f"{filename}.m4b"
+            output_path = self._build_output_path(audiobook_set, config)
 
             operation = ConversionOperation(audiobook_set, output_path, config)
             plan.add_operation(operation)
@@ -144,15 +130,17 @@ class ConversionPipeline:
                     temp_dir / f"track_{track.disc:02d}_{track.track_index:03d}.aac"
                 )
 
+                ffmpeg = self._get_ffmpeg()
+
                 if (
-                    self.ffmpeg.can_stream_copy(track.src_path)
+                    ffmpeg.can_stream_copy(track.src_path)
                     and not config.normalize_audio
                 ):
                     # Stream copy for AAC files
                     success = self._stream_copy(track.src_path, temp_file)
                 else:
                     # Convert to AAC
-                    success = self.ffmpeg.convert_to_aac(
+                    success = ffmpeg.convert_to_aac(
                         track.src_path,
                         temp_file,
                         bitrate=config.bitrate if not config.use_vbr else None,
@@ -169,7 +157,7 @@ class ConversionPipeline:
 
                 # Calculate chapter information
                 if config.create_chapters:
-                    duration = self.ffmpeg.get_duration(temp_file)
+                    duration = ffmpeg.get_duration(temp_file)
 
                     if (
                         config.chapter_naming == "from_tags"
@@ -200,7 +188,7 @@ class ConversionPipeline:
                 aac_files[0].rename(output_path)
             else:
                 # Multiple files - concatenate
-                success = self.ffmpeg.concatenate_files(
+                success = self._get_ffmpeg().concatenate_files(
                     aac_files,
                     output_path,
                     chapters=chapter_data if config.create_chapters else None,
@@ -275,7 +263,7 @@ class ConversionPipeline:
         metadata["comment"] = "Converted by BookBot"
 
         # Apply metadata using FFmpeg
-        self.ffmpeg.set_metadata(file_path, metadata)
+        self._get_ffmpeg().set_metadata(file_path, metadata)
 
     async def _embed_cover_art(
         self, file_path: Path, identity: ProviderIdentity
@@ -289,7 +277,7 @@ class ConversionPipeline:
             try:
                 cover_path = await self._download_cover(cover_url, file_path.parent)
                 if cover_path:
-                    success = self.ffmpeg.embed_cover_art(file_path, cover_path)
+                    success = self._get_ffmpeg().embed_cover_art(file_path, cover_path)
                     cover_path.unlink()  # Clean up downloaded cover
                     if success:
                         break
@@ -323,6 +311,31 @@ class ConversionPipeline:
 
         return None
 
+    def _build_output_path(
+        self, audiobook_set: AudiobookSet, config: ConversionConfig
+    ) -> Path:
+        """Construct the output path for a converted audiobook."""
+        if audiobook_set.chosen_identity:
+            identity = audiobook_set.chosen_identity
+            if identity.series_name and identity.series_index:
+                filename = (
+                    f"{identity.series_name} {identity.series_index} - {identity.title}"
+                )
+            else:
+                filename = identity.title
+
+            if identity.authors:
+                filename = f"{identity.authors[0]} - {filename}"
+        else:
+            filename = audiobook_set.raw_title_guess or audiobook_set.source_path.name
+
+        filename = self._sanitize_filename(filename)
+
+        output_dir = config.output_directory or audiobook_set.source_path.parent
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        return output_dir / f"{filename}.m4b"
+
     def _sanitize_filename(self, filename: str) -> str:
         """Sanitize filename for filesystem compatibility."""
         # Remove or replace problematic characters
@@ -335,6 +348,16 @@ class ConversionPipeline:
             filename = filename[:200]
 
         return filename.strip()
+
+    async def convert_audiobook_set(
+        self, audiobook_set: AudiobookSet, config: ConversionConfig
+    ) -> bool:
+        """Convert a single audiobook set to M4B format."""
+        operation = ConversionOperation(
+            audiobook_set, self._build_output_path(audiobook_set, config), config
+        )
+        await self._execute_operation(operation)
+        return True
 
     def convert_directory(self, source_path: Path, config: ConversionConfig) -> bool:
         """Convert all audiobooks in a directory to M4B format."""

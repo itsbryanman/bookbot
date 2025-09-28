@@ -1,9 +1,10 @@
 """TUI screens for BookBot."""
 
+import asyncio
+from asyncio import to_thread
 import webbrowser
 from pathlib import Path
 
-from textual import work
 from textual.app import ComposeResult
 from textual.containers import Container, Horizontal
 from textual.message import Message
@@ -20,7 +21,7 @@ from textual.widgets import (
 )
 
 from ..config.manager import ConfigManager
-from ..core.models import AudiobookSet
+from ..core.models import AudiobookSet, RenameOperation
 from ..core.operations import TransactionManager
 from ..drm.audible_client import AudibleAuthClient
 from ..providers.base import MetadataProvider
@@ -43,7 +44,12 @@ class DRMLoginScreen(Screen):
 
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
-        self.auth_client = AudibleAuthClient()
+        try:
+            self.auth_client = AudibleAuthClient()
+            self._auth_error: str | None = None
+        except ImportError as exc:
+            self.auth_client = None
+            self._auth_error = str(exc)
 
     def compose(self) -> ComposeResult:
         yield Container(
@@ -63,28 +69,31 @@ class DRMLoginScreen(Screen):
         if event.button.id == "begin_login":
             await self.begin_auth()
 
-    @work
     async def begin_auth(self) -> None:
         """Start the authentication process."""
         self.query_one("#begin_login", Button).disabled = True
         user_code_display = self.query_one("#user_code_display", Static)
-        user_code_display.update("Requesting device code...")
+        user_code_display.update("Starting Audible authentication...")
+
+        if not self.auth_client:
+            error_message = self._auth_error or "Audible authentication is unavailable."
+            user_code_display.update(error_message)
+            self.post_message(LoginFailure(error_message))
+            self.query_one("#begin_login", Button).disabled = False
+            return
 
         try:
-            device_code_response = self.auth_client.get_device_code()
-            webbrowser.open(device_code_response.verification_uri)
-            user_code_display.update(
-                "Please enter this code in your browser: "
-                f"[b]{device_code_response.user_code}[/b]"
-            )
-            token = self.auth_client.poll_for_token()
-            if token:
+            success = await to_thread(self.auth_client.authenticate)
+            if success:
+                user_code_display.update("Authentication successful.")
                 self.post_message(LoginSuccess())
             else:
+                user_code_display.update("Failed to authenticate with Audible.")
                 self.post_message(LoginFailure("Failed to authenticate"))
         except Exception as e:
-            self.post_message(LoginFailure(str(e)))
             user_code_display.update(f"An error occurred: {e}")
+            self.post_message(LoginFailure(str(e)))
+        finally:
             self.query_one("#begin_login", Button).disabled = False
 
 
@@ -108,6 +117,21 @@ class SourceSelectionScreen(Static):
             yield Label("No folders selected")
 
         yield Button("Add Folder", id="add_folder")
+        yield Label("", id="add_folder_hint")
+
+    async def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "add_folder":
+            hint_label = self.query_one("#add_folder_hint", Label)
+            hint_label.update(
+                "Tip: Launch BookBot with folder paths, e.g. `bookbot tui /audiobooks`."
+            )
+            try:
+                status_label = self.app.query_one("#status_label", Label)
+                status_label.update(
+                    "Add folders by restarting BookBot with target directories."
+                )
+            except Exception:
+                pass
 
 
 class ScanResultsScreen(Static):
@@ -171,9 +195,15 @@ class MatchReviewScreen(Static):
         table.clear(columns=True)
         table.add_columns("Audiobook", "Best Match", "Confidence", "Action")
 
-        for audiobook_set in audiobook_sets:
-            # Find matches using the provider
-            candidates = await self.provider.find_matches(audiobook_set)
+        match_tasks = [self.provider.find_matches(a) for a in audiobook_sets]
+        results = await asyncio.gather(*match_tasks, return_exceptions=True)
+
+        for audiobook_set, result in zip(audiobook_sets, results):
+            candidates: list = []
+            if isinstance(result, Exception):
+                candidates = []
+            else:
+                candidates = result
 
             if candidates:
                 best_match = candidates[0]
@@ -247,7 +277,7 @@ class PreviewScreen(Static):
             template_engine = TemplateEngine()
 
             # Create rename plan
-            rename_operations = []
+            rename_operations: list[RenameOperation] = []
 
             for audiobook_set in self.audiobook_sets:
                 if not audiobook_set.chosen_identity:
@@ -261,22 +291,21 @@ class PreviewScreen(Static):
                     if new_filename != track.src_path.name:
                         new_path = track.src_path.parent / new_filename
                         rename_operations.append(
-                            {
-                                "operation": "rename",
-                                "source": track.src_path,
-                                "destination": new_path,
-                                "audiobook_set": audiobook_set,
-                                "track": track,
-                            }
+                            RenameOperation(
+                                old_path=track.src_path,
+                                new_path=new_path,
+                                track=track,
+                            )
                         )
 
             if not rename_operations:
                 return True  # No operations needed
 
-            # Execute operations in transaction
-            transaction_id = await transaction_manager.execute_operations(
-                rename_operations
-            )
+            plan = transaction_manager.create_rename_plan(rename_operations)
+
+            await to_thread(transaction_manager.execute_plan, plan, dry_run=False)
+
+            transaction_id = plan.plan_id
 
             # Update table to show completion
             table = self.query_one("#preview_table", DataTable)
@@ -307,6 +336,7 @@ class ConversionScreen(Static):
         self.config_manager = config_manager
         self.audiobook_sets: list[AudiobookSet] = []
         self.conversion_in_progress = False
+        self._result_row_keys: list[str] = []
 
     class ConversionComplete(Message):
         """Message sent when conversion is complete."""
@@ -359,6 +389,7 @@ class ConversionScreen(Static):
     def set_audiobook_sets(self, audiobook_sets: list[AudiobookSet]) -> None:
         """Set the audiobook sets for conversion."""
         self.audiobook_sets = audiobook_sets
+        self._result_row_keys: list[str] = []
 
         # Update results table to show what will be converted
         table = self.query_one("#conversion_results", DataTable)
@@ -373,12 +404,13 @@ class ConversionScreen(Static):
             else:
                 output_name = f"{audiobook_set.source_path.name}.m4b"
 
-            table.add_row(
+            row_key = table.add_row(
                 audiobook_set.raw_title_guess or "Unknown",
                 str(audiobook_set.total_tracks),
                 output_name,
                 "⏳ Pending",
             )
+            self._result_row_keys.append(row_key)
 
         # Enable conversion button if we have audiobooks
         start_button = self.query_one("#start_conversion", Button)
@@ -460,7 +492,8 @@ class ConversionScreen(Static):
                 )
 
                 # Update table row status
-                table.update_cell(f"row{i}", "Status", "🔄 Converting")
+                if i < len(self._result_row_keys):
+                    table.update_cell(self._result_row_keys[i], "Status", "🔄 Converting")
 
                 try:
                     # Perform conversion
@@ -469,14 +502,23 @@ class ConversionScreen(Static):
                     )
 
                     if success:
-                        table.update_cell(f"row{i}", "Status", "✅ Complete")
+                        if i < len(self._result_row_keys):
+                            table.update_cell(
+                                self._result_row_keys[i], "Status", "✅ Complete"
+                            )
                     else:
-                        table.update_cell(f"row{i}", "Status", "❌ Failed")
+                        if i < len(self._result_row_keys):
+                            table.update_cell(
+                                self._result_row_keys[i], "Status", "❌ Failed"
+                            )
 
                 except Exception as e:
-                    table.update_cell(
-                        f"row{i}", "Status", f"❌ Error: {str(e)[:20]}..."
-                    )
+                    if i < len(self._result_row_keys):
+                        table.update_cell(
+                            self._result_row_keys[i],
+                            "Status",
+                            f"❌ Error: {str(e)[:20]}...",
+                        )
 
                 # Update progress
                 progress_bar.progress = i + 1

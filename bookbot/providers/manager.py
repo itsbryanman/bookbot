@@ -1,6 +1,7 @@
 """Provider manager for handling multiple metadata sources."""
 
 from ..config.manager import ConfigManager
+from ..io.cache import CacheManager
 from .audible import AudibleProvider
 from .base import MetadataProvider
 from .googlebooks import GoogleBooksProvider
@@ -13,6 +14,7 @@ class ProviderManager:
 
     def __init__(self, config_manager: ConfigManager):
         self.config_manager = config_manager
+        self.cache_manager = CacheManager(config_manager)
         self.providers: dict[str, MetadataProvider] = {}
         self._initialize_providers()
 
@@ -22,7 +24,9 @@ class ProviderManager:
         provider_config = config.providers
 
         # Always include OpenLibrary as it's free and reliable
-        self.providers["openlibrary"] = OpenLibraryProvider()
+        self.providers["openlibrary"] = OpenLibraryProvider(
+            cache_manager=self.cache_manager
+        )
 
         # Add Google Books if API key is provided
         if (
@@ -30,17 +34,23 @@ class ProviderManager:
             and provider_config.google_books.api_key
         ):
             self.providers["googlebooks"] = GoogleBooksProvider(
-                api_key=provider_config.google_books.api_key
+                api_key=provider_config.google_books.api_key,
+                cache_manager=self.cache_manager,
             )
 
         # Add LibriVox if enabled (no API key required)
         if provider_config.librivox.enabled:
-            self.providers["librivox"] = LibriVoxProvider()
+            self.providers["librivox"] = LibriVoxProvider(
+                cache_manager=self.cache_manager
+            )
 
         # Add Audible if enabled (no API key required, web scraping)
         if provider_config.audible.enabled:
             marketplace = provider_config.audible.marketplace
-            self.providers["audible"] = AudibleProvider(marketplace=marketplace)
+            self.providers["audible"] = AudibleProvider(
+                marketplace=marketplace,
+                cache_manager=self.cache_manager,
+            )
 
     def get_enabled_providers(self) -> list[MetadataProvider]:
         """Get list of enabled providers in priority order."""

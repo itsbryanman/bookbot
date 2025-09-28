@@ -14,8 +14,8 @@ from .base import MetadataProvider
 class LibriVoxProvider(MetadataProvider):
     """Provider for LibriVox public domain audiobooks."""
 
-    def __init__(self):
-        super().__init__("LibriVox")
+    def __init__(self, cache_manager=None):
+        super().__init__("LibriVox", cache_manager=cache_manager)
         self.base_url = "https://librivox.org/api/feed"
         self.session: aiohttp.ClientSession | None = None
 
@@ -44,6 +44,26 @@ class LibriVoxProvider(MetadataProvider):
         limit: int = 10,
     ) -> list[ProviderIdentity]:
         """Search for audiobooks using LibriVox API."""
+        cache_key = None
+        cache_namespace = "librivox_search"
+        if self.cache_manager:
+            cache_key = self.cache_manager.generate_query_hash(
+                title=title,
+                author=author,
+                series=series,
+                language=language,
+                limit=limit,
+            )
+            cached_entry = self.cache_manager.get(cache_namespace, cache_key)
+            if cached_entry:
+                try:
+                    return [
+                        ProviderIdentity.model_validate(item)
+                        for item in cached_entry["data"]
+                    ]
+                except Exception:
+                    pass
+
         session = await self._get_session()
 
         # LibriVox supports title and author searches
@@ -74,6 +94,14 @@ class LibriVoxProvider(MetadataProvider):
                     if identity:
                         identities.append(identity)
 
+                if identities and self.cache_manager and cache_key:
+                    self.cache_manager.set(
+                        cache_namespace,
+                        cache_key,
+                        [identity.model_dump(mode="json") for identity in identities],
+                        ttl_seconds=12 * 60 * 60,
+                    )
+
                 return identities
 
         except (aiohttp.ClientError, asyncio.TimeoutError, json.JSONDecodeError):
@@ -81,6 +109,18 @@ class LibriVoxProvider(MetadataProvider):
 
     async def get_by_id(self, external_id: str) -> ProviderIdentity | None:
         """Get a book by its LibriVox ID."""
+        cache_key = None
+        cache_namespace = "librivox_id"
+        if self.cache_manager:
+            cache_key = self.cache_manager.generate_query_hash(external_id=external_id)
+            cached_entry = self.cache_manager.get(cache_namespace, cache_key)
+            if cached_entry:
+                try:
+                    data = cached_entry["data"][0]
+                    return ProviderIdentity.model_validate(data)
+                except Exception:
+                    pass
+
         session = await self._get_session()
 
         params = {"format": "json", "id": external_id}
@@ -94,7 +134,15 @@ class LibriVoxProvider(MetadataProvider):
                 books = data.get("books", [])
 
                 if books:
-                    return self._parse_book(books[0])
+                    identity = self._parse_book(books[0])
+                    if identity and self.cache_manager and cache_key:
+                        self.cache_manager.set(
+                            cache_namespace,
+                            cache_key,
+                            [identity.model_dump(mode="json")],
+                            ttl_seconds=12 * 60 * 60,
+                        )
+                    return identity
 
                 return None
 

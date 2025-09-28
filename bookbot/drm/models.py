@@ -5,7 +5,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class Token(BaseModel):
@@ -36,7 +36,7 @@ class DRMInfo(BaseModel):
     drm_type: DRMType
     file_path: Path
     is_protected: bool
-    metadata: dict[str, Any] = {}
+    metadata: dict[str, Any] = Field(default_factory=dict)
     activation_bytes: str | None = None
     checksum: str | None = None
 

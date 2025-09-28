@@ -1,5 +1,6 @@
 """Main TUI application for BookBot."""
 
+import asyncio
 from pathlib import Path
 
 from textual.app import App, ComposeResult
@@ -292,7 +293,7 @@ class BookBotApp(App):
         with Container(classes="main-container"):
             yield Label("BookBot - Ultimate Audiobook Organizer", classes="title")
 
-            with TabbedContent(initial="scan"):
+            with TabbedContent(initial="source"):
                 with TabPane("Source Selection", id="source"):
                     yield SourceSelectionScreen(
                         self.config_manager, self.source_folders, id="source_screen"
@@ -399,14 +400,23 @@ class BookBotApp(App):
         self.update_status("Scanning for audiobooks...")
 
         try:
-            # Run scanning in background
-            scanner = AudioFileScanner(recursive=True, max_depth=5)
-            all_audiobook_sets = []
-
+            scanner_tasks = []
             for folder in self.source_folders:
                 self.update_status(f"Scanning {folder.name}...")
-                audiobook_sets = scanner.scan_directory(folder)
-                all_audiobook_sets.extend(audiobook_sets)
+                scanner_tasks.append(
+                    asyncio.to_thread(
+                        AudioFileScanner(recursive=True, max_depth=5).scan_directory,
+                        folder,
+                    )
+                )
+
+            results = await asyncio.gather(*scanner_tasks, return_exceptions=True)
+
+            all_audiobook_sets: list[AudiobookSet] = []
+            for result in results:
+                if isinstance(result, Exception):
+                    raise result
+                all_audiobook_sets.extend(result)
 
             self.audiobook_sets = all_audiobook_sets
             self.scanning_complete = True

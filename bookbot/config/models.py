@@ -3,7 +3,7 @@
 from enum import Enum
 from pathlib import Path
 
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator
 
 
 class CasePolicy(str, Enum):
@@ -72,7 +72,7 @@ class TaggingConfig(BaseModel):
     write_series: bool = True
     write_identifiers: bool = True
 
-    @validator("overwrite_policy", pre=True)
+    @field_validator("overwrite_policy", mode="before")
     def validate_overwrite_policy(cls, v):
         if isinstance(v, str):
             return OverwritePolicy(v)
@@ -93,7 +93,7 @@ class ConversionConfig(BaseModel):
     chapter_naming: str = "auto"  # "auto", "from_tags", "track_number"
     temp_directory: Path | None = None
 
-    @validator("output_directory", "temp_directory", pre=True)
+    @field_validator("output_directory", "temp_directory", mode="before")
     def validate_paths(cls, v):
         return Path(v) if isinstance(v, str) else v
 
@@ -169,11 +169,11 @@ class Config(BaseModel):
     max_concurrent_operations: int = 5
     scan_timeout: int = 300  # seconds
 
-    @validator("cache_directory", "log_directory", pre=True)
+    @field_validator("cache_directory", "log_directory", mode="before")
     def validate_paths(cls, v):
         return Path(v) if isinstance(v, str) else v
 
-    @validator("case_policy", pre=True)
+    @field_validator("case_policy", mode="before")
     def validate_case_policy(cls, v):
         if isinstance(v, str):
             return CasePolicy(v)

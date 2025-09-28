@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import hashlib
+import platform
+import sys
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator
+from pydantic_core import PydanticUndefined
 
 
 class AudioFormat(str, Enum):
@@ -85,7 +88,7 @@ class Track(BaseModel):
     status: TrackStatus = TrackStatus.PENDING
     warnings: list[str] = Field(default_factory=list)
 
-    @validator("src_path", pre=True)
+    @field_validator("src_path", mode="before")
     def validate_path(cls, v: str | Path) -> Path:
         return Path(v) if isinstance(v, str) else v
 
@@ -140,14 +143,12 @@ class MatchCandidate(BaseModel):
     confidence_level: MatchConfidence
     match_reasons: list[str] = Field(default_factory=list)
 
-    @validator("confidence_level", pre=True, always=True)
-    def set_confidence_level(
-        cls, v: MatchConfidence | None, values: dict[str, Any]
-    ) -> MatchConfidence:
-        if v is not None:
+    @field_validator("confidence_level", mode="before")
+    def set_confidence_level(cls, v, info) -> MatchConfidence:
+        if v is not None and v is not PydanticUndefined:
             return v
 
-        confidence = values.get("confidence", 0.0)
+        confidence = info.data.get("confidence", 0.0)
         if confidence > 0.85:
             return MatchConfidence.HIGH
         elif confidence >= 0.65:
@@ -179,7 +180,7 @@ class AudiobookSet(BaseModel):
     # Validation warnings
     warnings: list[str] = Field(default_factory=list)
 
-    @validator("source_path", pre=True)
+    @field_validator("source_path", mode="before")
     def validate_path(cls, v: str | Path) -> Path:
         return Path(v) if isinstance(v, str) else v
 
@@ -247,7 +248,7 @@ class OperationRecord(BaseModel):
     # Additional metadata
     metadata: dict[str, Any] = Field(default_factory=dict)
 
-    @validator("old_path", "new_path", pre=True)
+    @field_validator("old_path", "new_path", mode="before")
     def validate_paths(cls, v: str | Path | None) -> Path | None:
         return Path(v) if isinstance(v, str) else v
 
@@ -260,7 +261,7 @@ class RenameOperation(BaseModel):
     temp_path: Path | None = None
     track: Track
 
-    @validator("old_path", "new_path", "temp_path", pre=True)
+    @field_validator("old_path", "new_path", "temp_path", mode="before")
     def validate_paths(cls, v: str | Path | None) -> Path | None:
         return Path(v) if isinstance(v, str) else v
 
@@ -279,7 +280,7 @@ class RenamePlan(BaseModel):
     conflicts: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
 
-    @validator("source_path", pre=True)
+    @field_validator("source_path", mode="before")
     def validate_path(cls, v: str | Path) -> Path:
         return Path(v) if isinstance(v, str) else v
 
@@ -297,9 +298,11 @@ class RenamePlan(BaseModel):
             )
 
         # Check for case-insensitive conflicts on case-insensitive filesystems
-        if (
-            Path.cwd().resolve().as_posix().startswith(("/System", "/Applications"))
-        ):  # macOS
+        is_case_insensitive = (
+            sys.platform in {"darwin", "win32"}
+            or platform.system().lower() == "windows"
+        )
+        if is_case_insensitive:
             lower_paths = [p.as_posix().lower() for p in new_paths]
             if len(lower_paths) != len(set(lower_paths)):
                 self.warnings.append(

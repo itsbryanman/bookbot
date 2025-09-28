@@ -1,15 +1,20 @@
 """Base provider interface for metadata sources."""
 
 from abc import ABC, abstractmethod
+from typing import TYPE_CHECKING
 
 from ..core.models import AudiobookSet, MatchCandidate, ProviderIdentity
+
+if TYPE_CHECKING:
+    from ..io.cache import CacheManager
 
 
 class MetadataProvider(ABC):
     """Abstract base class for metadata providers."""
 
-    def __init__(self, name: str):
+    def __init__(self, name: str, cache_manager: "CacheManager" | None = None):
         self.name = name
+        self.cache_manager = cache_manager
 
     @abstractmethod
     async def search(

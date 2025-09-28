@@ -51,6 +51,8 @@ class TransactionManager:
                 temp_path = self._get_temp_path(operation.old_path)
                 operation.temp_path = temp_path
 
+                original_hash = self._calculate_file_hash(operation.old_path)
+
                 # Record original state
                 record = OperationRecord(
                     operation_id=transaction_id,
@@ -58,7 +60,7 @@ class TransactionManager:
                     operation_type="rename",
                     old_path=operation.old_path,
                     new_path=temp_path,
-                    old_content_hash=operation.track.get_content_hash(),
+                    old_content_hash=original_hash,
                 )
 
                 # Move to temp location
@@ -71,6 +73,13 @@ class TransactionManager:
                 # Ensure target directory exists
                 operation.new_path.parent.mkdir(parents=True, exist_ok=True)
 
+                if operation.new_path.exists():
+                    raise FileExistsError(
+                        f"Target already exists: {operation.new_path}"
+                    )
+
+                final_hash = self._calculate_file_hash(operation.temp_path)
+
                 # Record final state
                 record = OperationRecord(
                     operation_id=transaction_id,
@@ -78,11 +87,12 @@ class TransactionManager:
                     operation_type="rename",
                     old_path=operation.temp_path,
                     new_path=operation.new_path,
-                    new_content_hash=operation.track.get_content_hash(),
+                    new_content_hash=final_hash,
                 )
 
                 # Move to final location
                 operation.temp_path.rename(operation.new_path)
+                operation.track.src_path = operation.new_path
                 transaction_log.append(record)
 
             # Save transaction log for undo
