@@ -2,13 +2,17 @@
 
 import asyncio
 import re
-from typing import Any
+import time
+from typing import Any, Dict, List, Optional
 
 import aiohttp
 from rapidfuzz import fuzz
 
+from ..core.logging import get_logger
 from ..core.models import AudiobookSet, ProviderIdentity
 from .base import MetadataProvider
+
+logger = get_logger('openlibrary_provider')
 
 
 class OpenLibraryProvider(MetadataProvider):
@@ -20,7 +24,7 @@ class OpenLibraryProvider(MetadataProvider):
 
     def __init__(self, cache_manager=None):
         super().__init__("Open Library", cache_manager=cache_manager)
-        self._session: aiohttp.ClientSession | None = None
+        self._session: Optional[aiohttp.ClientSession] = None
         self._last_request_time = 0.0
 
     async def _get_session(self) -> aiohttp.ClientSession:
@@ -40,23 +44,24 @@ class OpenLibraryProvider(MetadataProvider):
             await self._session.close()
 
     async def _rate_limit(self) -> None:
-        """Ensure we don't exceed rate limits."""
-        current_time = asyncio.get_event_loop().time()
-        time_since_last = current_time - self._last_request_time
-        if time_since_last < self.RATE_LIMIT_DELAY:
-            await asyncio.sleep(self.RATE_LIMIT_DELAY - time_since_last)
-        self._last_request_time = asyncio.get_event_loop().time()
+        """Enforce rate limiting - be respectful to Open Library."""
+        current_time = time.time()
+        elapsed = current_time - self._last_request_time
+        if elapsed < self.RATE_LIMIT_DELAY:
+            await asyncio.sleep(self.RATE_LIMIT_DELAY - elapsed)
+        self._last_request_time = time.time()
 
     async def search(
         self,
-        title: str | None = None,
-        author: str | None = None,
-        series: str | None = None,
-        isbn: str | None = None,
-        year: int | None = None,
-        language: str | None = None,
+        *,
+        title: Optional[str] = None,
+        author: Optional[str] = None,
+        series: Optional[str] = None,
+        isbn: Optional[str] = None,
+        year: Optional[int] = None,
+        language: Optional[str] = None,
         limit: int = 10,
-    ) -> list[ProviderIdentity]:
+    ) -> List[ProviderIdentity]:
         """Search Open Library for books."""
         await self._rate_limit()
 
@@ -148,7 +153,7 @@ class OpenLibraryProvider(MetadataProvider):
         except Exception:
             return []
 
-    async def _search_by_isbn(self, isbn: str) -> ProviderIdentity | None:
+    async def _search_by_isbn(self, isbn: str) -> Optional[ProviderIdentity]:
         """Search by ISBN using the books API."""
         clean_isbn = re.sub(r"[^0-9X]", "", isbn.upper())
         if not clean_isbn:
@@ -199,7 +204,7 @@ class OpenLibraryProvider(MetadataProvider):
 
         return None
 
-    async def get_by_id(self, external_id: str) -> ProviderIdentity | None:
+    async def get_by_id(self, external_id: str) -> Optional[ProviderIdentity]:
         """Get a book by Open Library ID."""
         await self._rate_limit()
 
@@ -264,7 +269,7 @@ class OpenLibraryProvider(MetadataProvider):
         except Exception:
             return None
 
-    def _parse_search_result(self, doc: dict[str, Any]) -> ProviderIdentity | None:
+    def _parse_search_result(self, doc: Dict[str, Any]) -> Optional[ProviderIdentity]:
         """Parse a search result document into a ProviderIdentity."""
         try:
             key = doc.get("key", "")
@@ -321,8 +326,8 @@ class OpenLibraryProvider(MetadataProvider):
             return None
 
     def _parse_book_data(
-        self, book_data: dict[str, Any], isbn: str
-    ) -> ProviderIdentity | None:
+        self, book_data: Dict[str, Any], isbn: str
+    ) -> Optional[ProviderIdentity]:
         """Parse book data from the books API."""
         try:
             title = book_data.get("title", "")
@@ -380,10 +385,10 @@ class OpenLibraryProvider(MetadataProvider):
         except Exception:
             return None
 
-    def _pick_best_edition(self, editions: list[dict[str, Any]]) -> dict[str, Any]:
+    def _pick_best_edition(self, editions: List[Dict[str, Any]]) -> Dict[str, Any]:
         """Pick the best edition from a list based on data completeness."""
 
-        def score_edition(edition: dict[str, Any]) -> int:
+        def score_edition(edition: Dict[str, Any]) -> int:
             score = 0
 
             # Prefer editions with ISBN
@@ -404,8 +409,8 @@ class OpenLibraryProvider(MetadataProvider):
         return max(editions, key=score_edition)
 
     def _parse_work_and_edition(
-        self, work_data: dict[str, Any], edition_data: dict[str, Any]
-    ) -> ProviderIdentity:
+        self, work_data: Dict[str, Any], edition_data: Dict[str, Any]
+    ) -> Optional[ProviderIdentity]:
         """Combine work and edition data into a ProviderIdentity."""
         # Start with work data
         identity = self._parse_work_data(work_data)
@@ -445,7 +450,7 @@ class OpenLibraryProvider(MetadataProvider):
 
         return identity
 
-    def _parse_work_data(self, work_data: dict[str, Any]) -> ProviderIdentity | None:
+    def _parse_work_data(self, work_data: Dict[str, Any]) -> Optional[ProviderIdentity]:
         """Parse work data into a ProviderIdentity."""
         try:
             key = work_data.get("key", "")

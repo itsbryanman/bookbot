@@ -4,6 +4,7 @@ import re
 import string
 import unicodedata
 from pathlib import Path
+from typing import Optional
 
 from ..config.models import CasePolicy
 from .models import AudiobookSet, ProviderIdentity, Track
@@ -28,7 +29,7 @@ class TemplateEngine:
     def generate_folder_name(
         self,
         audiobook_set: AudiobookSet,
-        identity: ProviderIdentity | None = None,
+        identity: Optional[ProviderIdentity] = None,
         template: str = "{AuthorLastFirst}/{Title} ({Year})",
     ) -> str:
         """Generate folder name from template."""
@@ -40,7 +41,7 @@ class TemplateEngine:
         self,
         track: Track,
         audiobook_set: AudiobookSet,
-        identity: ProviderIdentity | None = None,
+        identity: Optional[ProviderIdentity] = None,
         template: str = "{DiscPad}{TrackPad} - {Title}",
         zero_padding_width: int = 0,
     ) -> str:
@@ -58,8 +59,8 @@ class TemplateEngine:
     def _build_tokens(
         self,
         audiobook_set: AudiobookSet,
-        identity: ProviderIdentity | None = None,
-        track: Track | None = None,
+        identity: Optional[ProviderIdentity] = None,
+        track: Optional[Track] = None,
         zero_padding_width: int = 0,
     ) -> dict[str, str]:
         """Build template tokens from metadata."""

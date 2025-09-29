@@ -2,7 +2,7 @@
 
 import asyncio
 import json
-from typing import Any
+from typing import Any, List, Optional
 
 import aiohttp
 from rapidfuzz import fuzz
@@ -17,7 +17,7 @@ class LibriVoxProvider(MetadataProvider):
     def __init__(self, cache_manager=None):
         super().__init__("LibriVox", cache_manager=cache_manager)
         self.base_url = "https://librivox.org/api/feed"
-        self.session: aiohttp.ClientSession | None = None
+        self.session: Optional[aiohttp.ClientSession] = None
 
     async def _get_session(self) -> aiohttp.ClientSession:
         """Get or create HTTP session."""
@@ -35,14 +35,15 @@ class LibriVoxProvider(MetadataProvider):
 
     async def search(
         self,
-        title: str | None = None,
-        author: str | None = None,
-        series: str | None = None,
-        isbn: str | None = None,
-        year: int | None = None,
-        language: str | None = None,
+        *,
+        title: Optional[str] = None,
+        author: Optional[str] = None,
+        series: Optional[str] = None,
+        isbn: Optional[str] = None,
+        year: Optional[int] = None,
+        language: Optional[str] = None,
         limit: int = 10,
-    ) -> list[ProviderIdentity]:
+    ) -> List[ProviderIdentity]:
         """Search for audiobooks using LibriVox API."""
         cache_key = None
         cache_namespace = "librivox_search"
@@ -107,7 +108,7 @@ class LibriVoxProvider(MetadataProvider):
         except (aiohttp.ClientError, asyncio.TimeoutError, json.JSONDecodeError):
             return []
 
-    async def get_by_id(self, external_id: str) -> ProviderIdentity | None:
+    async def get_by_id(self, external_id: str) -> Optional[ProviderIdentity]:
         """Get a book by its LibriVox ID."""
         cache_key = None
         cache_namespace = "librivox_id"

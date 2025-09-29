@@ -1,12 +1,17 @@
 """Provider manager for handling multiple metadata sources."""
 
+from typing import Dict, List, Optional
+
 from ..config.manager import ConfigManager
+from ..core.logging import get_logger
 from ..io.cache import CacheManager
 from .audible import AudibleProvider
 from .base import MetadataProvider
 from .googlebooks import GoogleBooksProvider
 from .librivox import LibriVoxProvider
 from .openlibrary import OpenLibraryProvider
+
+logger = get_logger('provider_manager')
 
 
 class ProviderManager:
@@ -15,61 +20,60 @@ class ProviderManager:
     def __init__(self, config_manager: ConfigManager):
         self.config_manager = config_manager
         self.cache_manager = CacheManager(config_manager)
-        self.providers: dict[str, MetadataProvider] = {}
+        self.providers: Dict[str, MetadataProvider] = {}
         self._initialize_providers()
 
     def _initialize_providers(self) -> None:
-        """Initialize available providers based on configuration."""
+        """Initialize providers with Open Library FIRST (always enabled)."""
         config = self.config_manager.load_config()
         provider_config = config.providers
 
-        # Always include OpenLibrary as it's free and reliable
+        # ALWAYS initialize Open Library first - no API key needed
         self.providers["openlibrary"] = OpenLibraryProvider(
             cache_manager=self.cache_manager
         )
+        logger.info("Initialized Open Library provider (default, always enabled)")
 
-        # Add Google Books if API key is provided
-        if (
-            provider_config.google_books.enabled
-            and provider_config.google_books.api_key
-        ):
+        # Optional providers only if configured
+        google_books_config = provider_config.google_books
+        if google_books_config.enabled and google_books_config.api_key:
             self.providers["googlebooks"] = GoogleBooksProvider(
-                api_key=provider_config.google_books.api_key,
+                api_key=google_books_config.api_key,
                 cache_manager=self.cache_manager,
             )
+            logger.info("Initialized Google Books provider")
 
-        # Add LibriVox if enabled (no API key required)
         if provider_config.librivox.enabled:
             self.providers["librivox"] = LibriVoxProvider(
                 cache_manager=self.cache_manager
             )
+            logger.info("Initialized LibriVox provider")
 
-        # Add Audible if enabled (no API key required, web scraping)
         if provider_config.audible.enabled:
             marketplace = provider_config.audible.marketplace
             self.providers["audible"] = AudibleProvider(
                 marketplace=marketplace,
                 cache_manager=self.cache_manager,
             )
+            logger.info(f"Initialized Audible provider (marketplace: {marketplace})")
 
-    def get_enabled_providers(self) -> list[MetadataProvider]:
-        """Get list of enabled providers in priority order."""
+    def get_enabled_providers(self) -> List[MetadataProvider]:
+        """Get providers with Open Library ALWAYS first."""
+        # Open Library is always first
+        enabled = [self.providers["openlibrary"]]
+
         config = self.config_manager.load_config()
-        provider_order = config.providers.priority_order
 
-        enabled_providers = []
-        for provider_name in provider_order:
+        # Add others based on priority order in config
+        for provider_name in config.providers.priority_order:
+            if provider_name == "openlibrary":
+                continue  # Already added
             if provider_name in self.providers:
-                enabled_providers.append(self.providers[provider_name])
+                enabled.append(self.providers[provider_name])
 
-        # Add any remaining providers not in the priority list
-        for _, provider in self.providers.items():
-            if provider not in enabled_providers:
-                enabled_providers.append(provider)
+        return enabled
 
-        return enabled_providers
-
-    def get_provider(self, name: str) -> MetadataProvider | None:
+    def get_provider(self, name: str) -> Optional[MetadataProvider]:
         """Get a specific provider by name."""
         return self.providers.get(name.lower())
 
@@ -84,7 +88,7 @@ class ProviderManager:
             if hasattr(provider, "close"):
                 await provider.close()
 
-    def list_providers(self) -> dict[str, dict[str, str]]:
+    def list_providers(self) -> Dict[str, Dict[str, str]]:
         """List all available providers with their status."""
         config = self.config_manager.load_config()
         provider_config = config.providers

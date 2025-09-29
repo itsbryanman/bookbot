@@ -43,12 +43,16 @@ class DRMLoginScreen(Screen):
 
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
+        self.auth_client: AudibleAuthClient | None
+        self._auth_error: str | None
+
         try:
             self.auth_client = AudibleAuthClient()
-            self._auth_error: str | None = None
         except ImportError as exc:
             self.auth_client = None
             self._auth_error = str(exc)
+        else:
+            self._auth_error = None
 
     def compose(self) -> ComposeResult:
         yield Container(

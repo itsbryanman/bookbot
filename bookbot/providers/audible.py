@@ -2,6 +2,7 @@
 
 import asyncio
 import re
+from typing import List, Optional
 
 import aiohttp
 from bs4 import BeautifulSoup
@@ -64,14 +65,15 @@ class AudibleProvider(MetadataProvider):
 
     async def search(
         self,
-        title: str | None = None,
-        author: str | None = None,
-        series: str | None = None,
-        isbn: str | None = None,
-        year: int | None = None,
-        language: str | None = None,
+        *,
+        title: Optional[str] = None,
+        author: Optional[str] = None,
+        series: Optional[str] = None,
+        isbn: Optional[str] = None,
+        year: Optional[int] = None,
+        language: Optional[str] = None,
         limit: int = 10,
-    ) -> list[ProviderIdentity]:
+    ) -> List[ProviderIdentity]:
         """Search for audiobooks using Audible search."""
         session = await self._get_session()
 
@@ -109,7 +111,7 @@ class AudibleProvider(MetadataProvider):
         except (aiohttp.ClientError, asyncio.TimeoutError):
             return []
 
-    async def get_by_id(self, external_id: str) -> ProviderIdentity | None:
+    async def get_by_id(self, external_id: str) -> Optional[ProviderIdentity]:
         """Get audiobook details by Audible ASIN."""
         session = await self._get_session()
 

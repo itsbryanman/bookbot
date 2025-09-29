@@ -1,7 +1,7 @@
 """Base provider interface for metadata sources."""
 
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, List, Optional
 
 from ..core.models import AudiobookSet, MatchCandidate, ProviderIdentity
 
@@ -12,26 +12,29 @@ if TYPE_CHECKING:
 class MetadataProvider(ABC):
     """Abstract base class for metadata providers."""
 
-    def __init__(self, name: str, cache_manager: "CacheManager" | None = None):
+    def __init__(
+        self, name: str, cache_manager: Optional["CacheManager"] = None
+    ) -> None:
         self.name = name
         self.cache_manager = cache_manager
 
     @abstractmethod
     async def search(
         self,
-        title: str | None = None,
-        author: str | None = None,
-        series: str | None = None,
-        isbn: str | None = None,
-        year: int | None = None,
-        language: str | None = None,
+        *,
+        title: Optional[str] = None,
+        author: Optional[str] = None,
+        series: Optional[str] = None,
+        isbn: Optional[str] = None,
+        year: Optional[int] = None,
+        language: Optional[str] = None,
         limit: int = 10,
-    ) -> list[ProviderIdentity]:
+    ) -> List[ProviderIdentity]:
         """Search for books matching the given criteria."""
         pass
 
     @abstractmethod
-    async def get_by_id(self, external_id: str) -> ProviderIdentity | None:
+    async def get_by_id(self, external_id: str) -> Optional[ProviderIdentity]:
         """Get a book by its external ID."""
         pass
 
@@ -44,7 +47,7 @@ class MetadataProvider(ABC):
 
     async def find_matches(
         self, audiobook_set: AudiobookSet, limit: int = 10
-    ) -> list[MatchCandidate]:
+    ) -> List[MatchCandidate]:
         """Find potential matches for an audiobook set."""
         # Perform search using available metadata
         identities = await self.search(
@@ -78,7 +81,7 @@ class MetadataProvider(ABC):
 
     def _get_match_reasons(
         self, audiobook_set: AudiobookSet, identity: ProviderIdentity, score: float
-    ) -> list[str]:
+    ) -> List[str]:
         """Generate human-readable match reasons."""
         reasons = []
 

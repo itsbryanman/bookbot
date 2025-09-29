@@ -4,7 +4,7 @@ import json
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import Any
+from typing import Any, Dict, List, Optional
 
 
 class FFmpegWrapper:
@@ -40,7 +40,7 @@ class FFmpegWrapper:
 
         raise RuntimeError("FFprobe not found. Please install FFmpeg.")
 
-    def probe_file(self, file_path: Path) -> dict[str, Any]:
+    def probe_file(self, file_path: Path) -> Dict[str, Any]:
         """Get detailed information about an audio file."""
         cmd = [
             self.ffprobe_path,
@@ -58,7 +58,8 @@ class FFmpegWrapper:
             if result.returncode != 0:
                 raise RuntimeError(f"FFprobe failed: {result.stderr}")
 
-            return json.loads(result.stdout)
+            probe_data: Dict[str, Any] = json.loads(result.stdout)
+            return probe_data
         except (subprocess.TimeoutExpired, json.JSONDecodeError) as e:
             raise RuntimeError(f"Failed to probe file {file_path}: {e}") from e
 
@@ -76,7 +77,7 @@ class FFmpegWrapper:
 
         raise RuntimeError(f"Could not determine duration for {file_path}")
 
-    def analyze_loudness(self, file_path: Path) -> dict[str, float]:
+    def analyze_loudness(self, file_path: Path) -> Dict[str, float]:
         """Analyze loudness using EBU R128."""
         cmd = [
             self.ffmpeg_path,
@@ -172,9 +173,9 @@ class FFmpegWrapper:
 
     def concatenate_files(
         self,
-        input_files: list[Path],
+        input_files: List[Path],
         output_path: Path,
-        chapters: list[dict] | None = None,
+        chapters: Optional[List[Dict]] = None,
     ) -> bool:
         """Concatenate multiple audio files into one."""
         # Create a temporary file list for FFmpeg concat
@@ -218,7 +219,7 @@ class FFmpegWrapper:
             except FileNotFoundError:
                 pass
 
-    def add_chapters(self, file_path: Path, chapters: list[dict]) -> bool:
+    def add_chapters(self, file_path: Path, chapters: List[Dict]) -> bool:
         """Add chapter markers to an audio file."""
         # Create chapters metadata file
         with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
@@ -333,7 +334,7 @@ class FFmpegWrapper:
         except Exception:
             return False
 
-    def set_metadata(self, file_path: Path, metadata: dict[str, str]) -> bool:
+    def set_metadata(self, file_path: Path, metadata: Dict[str, str]) -> bool:
         """Set metadata tags on an audio file."""
         temp_output = file_path.with_suffix(".tmp.m4b")
 
