@@ -185,7 +185,7 @@ def show_package_info(project_root: Path) -> None:
     print(f"  {'Total:':<30} {total_mb:>8.2f} MB")
 
 
-def main():
+def main() -> int:
     parser = argparse.ArgumentParser(description="Package BookBot for distribution")
     parser.add_argument("--wheel-only", action="store_true",
                        help="Build wheel only (skip source distribution)")

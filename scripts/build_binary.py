@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 
 
-def get_platform_info():
+def get_platform_info() -> tuple[str, str, str]:
     """Get platform-specific information."""
     system = platform.system().lower()
     machine = platform.machine().lower()
@@ -35,7 +35,7 @@ def get_platform_info():
     return target_name, arch, ext
 
 
-def build_binary(target=None, output_dir=None):
+def build_binary(target: str | None = None, output_dir: Path | None = None) -> bool:
     """Build binary using PyInstaller."""
     project_root = Path(__file__).parent.parent
     dist_dir = output_dir or project_root / "dist"
@@ -184,7 +184,7 @@ exe = EXE(
     return True
 
 
-def create_installer(target=None, output_dir=None):
+def create_installer(target: str | None = None, output_dir: Path | None = None) -> bool:
     """Create platform-specific installer."""
     platform_name, arch, ext = get_platform_info()
     if target:
@@ -199,25 +199,25 @@ def create_installer(target=None, output_dir=None):
         return create_linux_package(output_dir)
 
 
-def create_windows_installer(output_dir=None):
+def create_windows_installer(output_dir: Path | None = None) -> bool:
     """Create Windows installer using NSIS (if available)."""
     print("Windows installer creation not implemented yet")
     return True
 
 
-def create_macos_app(output_dir=None):
+def create_macos_app(output_dir: Path | None = None) -> bool:
     """Create macOS .app bundle."""
     print("macOS app bundle creation not implemented yet")
     return True
 
 
-def create_linux_package(output_dir=None):
+def create_linux_package(output_dir: Path | None = None) -> bool:
     """Create Linux package (AppImage or tarball)."""
     print("Linux package creation not implemented yet")
     return True
 
 
-def main():
+def main() -> int:
     parser = argparse.ArgumentParser(description="Build BookBot binary distributions")
     parser.add_argument("--target", choices=["linux", "windows", "macos"],
                        help="Target platform (auto-detected if not specified)")

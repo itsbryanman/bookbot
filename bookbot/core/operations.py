@@ -5,6 +5,8 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 
+from mutagen import File as MutagenFile
+
 from ..config.manager import ConfigManager
 from .models import AudioTags, OperationRecord, RenameOperation, RenamePlan, Track
 
@@ -78,6 +80,9 @@ class TransactionManager:
                         f"Target already exists: {operation.new_path}"
                     )
 
+                if operation.temp_path is None:
+                    raise ValueError("Temporary path not set for operation")
+
                 final_hash = self._calculate_file_hash(operation.temp_path)
 
                 # Record final state
@@ -89,6 +94,9 @@ class TransactionManager:
                     new_path=operation.new_path,
                     new_content_hash=final_hash,
                 )
+
+                if operation.temp_path is None:
+                    raise ValueError("Temporary path not set for operation")
 
                 # Move to final location
                 operation.temp_path.rename(operation.new_path)
@@ -315,7 +323,7 @@ class TagManager:
             print(f"Failed to apply tags to {track.src_path}: {e}")
             return False
 
-    def _write_all_tags(self, audio_file, new_tags: AudioTags) -> None:
+    def _write_all_tags(self, audio_file: MutagenFile, new_tags: AudioTags) -> None:
         """Write all tags, overwriting existing ones."""
         tag_mapping = {
             "title": new_tags.title,
@@ -333,7 +341,7 @@ class TagManager:
                 audio_file[key] = value
 
     def _write_missing_tags(
-        self, audio_file, new_tags: AudioTags, original_tags: AudioTags
+        self, audio_file: MutagenFile, new_tags: AudioTags, original_tags: AudioTags
     ) -> None:
         """Write tags only if they don't already exist."""
         tag_mapping = {

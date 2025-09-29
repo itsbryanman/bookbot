@@ -2,6 +2,7 @@
 
 from enum import Enum
 from pathlib import Path
+from typing import Any
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -73,7 +74,7 @@ class TaggingConfig(BaseModel):
     write_identifiers: bool = True
 
     @field_validator("overwrite_policy", mode="before")
-    def validate_overwrite_policy(cls, v):
+    def validate_overwrite_policy(cls, v: str | OverwritePolicy) -> OverwritePolicy:
         if isinstance(v, str):
             return OverwritePolicy(v)
         return v
@@ -93,8 +94,7 @@ class ConversionConfig(BaseModel):
     chapter_naming: str = "auto"  # "auto", "from_tags", "track_number"
     temp_directory: Path | None = None
 
-    @field_validator("output_directory", "temp_directory", mode="before")
-    def validate_paths(cls, v):
+    def validate_paths(cls, v: str | Path | None) -> Path | None:
         return Path(v) if isinstance(v, str) else v
 
 
@@ -170,16 +170,16 @@ class Config(BaseModel):
     scan_timeout: int = 300  # seconds
 
     @field_validator("cache_directory", "log_directory", mode="before")
-    def validate_paths(cls, v):
+    def validate_paths(cls, v: str | Path | None) -> Path | None:
         return Path(v) if isinstance(v, str) else v
 
     @field_validator("case_policy", mode="before")
-    def validate_case_policy(cls, v):
+    def validate_case_policy(cls, v: str | CasePolicy) -> CasePolicy:
         if isinstance(v, str):
             return CasePolicy(v)
         return v
 
-    def model_post_init(self, __context):
+    def model_post_init(self, __context: Any) -> None:
         """Initialize default templates if none exist."""
         if not self.templates:
             self.templates = self._get_default_templates()

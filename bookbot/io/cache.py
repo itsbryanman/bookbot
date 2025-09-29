@@ -216,7 +216,7 @@ class CacheManager:
                 "cache_size_mb": round(cache_size / (1024 * 1024), 2),
             }
 
-    def generate_query_hash(self, **kwargs) -> str:
+    def generate_query_hash(self, **kwargs: Any) -> str:
         """Generate a hash for query parameters."""
         import hashlib
 

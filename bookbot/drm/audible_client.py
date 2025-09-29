@@ -95,7 +95,7 @@ class AudibleAuthClient:
                     num_results=999,
                     response_groups="product_desc,product_attrs,series,media,price",
                 )
-                return library.get("items", [])
+                return list(library.get("items", []))
         except Exception as e:
             raise Exception(f"Failed to get library: {e}") from e
 
@@ -136,7 +136,7 @@ class AudibleAuthClient:
         try:
             # Extract activation bytes from the authentication
             if hasattr(self._auth, "activation_bytes"):
-                return self._auth.activation_bytes
+                return str(self._auth.activation_bytes)
             return None
         except Exception:
             return None

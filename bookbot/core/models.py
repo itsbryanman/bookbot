@@ -10,7 +10,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, ValidationInfo, field_validator
 from pydantic_core import PydanticUndefined
 
 
@@ -144,9 +144,9 @@ class MatchCandidate(BaseModel):
     match_reasons: list[str] = Field(default_factory=list)
 
     @field_validator("confidence_level", mode="before")
-    def set_confidence_level(cls, v, info) -> MatchConfidence:
+    def set_confidence_level(cls, v, info: ValidationInfo) -> MatchConfidence:
         if v is not None and v is not PydanticUndefined:
-            return v
+            return MatchConfidence(v)
 
         confidence = info.data.get("confidence", 0.0)
         if confidence > 0.85:

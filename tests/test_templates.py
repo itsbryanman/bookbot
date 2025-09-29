@@ -13,7 +13,7 @@ class TestTemplateEngine:
     """Test cases for TemplateEngine."""
 
     @pytest.fixture
-    def sample_audiobook_set(self):
+    def sample_audiobook_set(self) -> AudiobookSet:
         """Create a sample audiobook set for testing."""
         return AudiobookSet(
             source_path=Path("/path/to/audiobook"),
@@ -26,7 +26,7 @@ class TestTemplateEngine:
         )
 
     @pytest.fixture
-    def sample_identity(self):
+    def sample_identity(self) -> ProviderIdentity:
         """Create a sample provider identity for testing."""
         return ProviderIdentity(
             provider="Open Library",
@@ -40,7 +40,7 @@ class TestTemplateEngine:
         )
 
     @pytest.fixture
-    def sample_track(self):
+    def sample_track(self) -> Track:
         """Create a sample track for testing."""
         return Track(
             src_path=Path("/path/to/track01.mp3"),

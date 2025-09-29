@@ -105,10 +105,8 @@ def run_linting() -> bool:
 
 def create_changelog_entry(version: str) -> str:
     """Create a changelog entry for the new version."""
-    return (
-        f"## [{version}] - "
-        f"{subprocess.check_output(['date', '+%Y-%m-%d']).decode().strip()}"
-    )
+    date = subprocess.check_output(['date', '+%Y-%m-%d']).decode().strip()
+    return f"""## [{version}] - {date}
 
 ### Added
 - New features and enhancements
@@ -121,7 +119,6 @@ def create_changelog_entry(version: str) -> str:
 
 ### Removed
 - Deprecated features removed
-
 """
 
 
@@ -223,7 +220,7 @@ def create_github_release(version: str) -> None:
         print("Please create the release manually on GitHub")
 
 
-def main():
+def main() -> int:
     parser = argparse.ArgumentParser(description="Release BookBot")
     parser.add_argument("bump_type", choices=["major", "minor", "patch"],
                        help="Type of version bump")

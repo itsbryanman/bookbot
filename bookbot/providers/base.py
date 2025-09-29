@@ -64,7 +64,10 @@ class MetadataProvider(ABC):
             reasons = self._get_match_reasons(audiobook_set, identity, score)
 
             candidate = MatchCandidate(
-                identity=identity, confidence=score, match_reasons=reasons
+                identity=identity,
+                confidence=score,
+                confidence_level=self._get_confidence_level(score),
+                match_reasons=reasons,
             )
             candidates.append(candidate)
 
@@ -101,3 +104,11 @@ class MetadataProvider(ABC):
             reasons.append("Possible match")
 
         return reasons
+
+    def _get_confidence_level(self, score: float) -> str:
+        if score > 0.85:
+            return "high"
+        elif score > 0.65:
+            return "medium"
+        else:
+            return "low"

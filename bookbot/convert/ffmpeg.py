@@ -4,12 +4,13 @@ import json
 import subprocess
 import tempfile
 from pathlib import Path
+from typing import Any
 
 
 class FFmpegWrapper:
     """Wrapper for FFmpeg operations."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.ffmpeg_path = self._find_ffmpeg()
         self.ffprobe_path = self._find_ffprobe()
 
@@ -39,7 +40,7 @@ class FFmpegWrapper:
 
         raise RuntimeError("FFprobe not found. Please install FFmpeg.")
 
-    def probe_file(self, file_path: Path) -> dict:
+    def probe_file(self, file_path: Path) -> dict[str, Any]:
         """Get detailed information about an audio file."""
         cmd = [
             self.ffprobe_path,
@@ -326,7 +327,7 @@ class FFmpegWrapper:
             for stream in probe_data.get("streams", []):
                 if stream.get("codec_type") == "audio":
                     codec = stream.get("codec_name", "").lower()
-                    return codec == "aac"
+                    return bool(codec == "aac")
 
             return False
         except Exception:
