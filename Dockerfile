@@ -21,6 +21,9 @@ RUN apt-get update \
 # Copy dependency definitions first for better caching
 COPY pyproject.toml README.md /app/
 
+# Copy the Python package so the install step has the sources available.
+COPY bookbot /app/bookbot
+
 # Install project dependencies (runtime + dev for testing)
 RUN pip install --upgrade pip \
     && pip install .[dev]

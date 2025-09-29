@@ -1,10 +1,14 @@
-# BookBot
+<p align="center">
+  <img src="logo.png" alt="BookBot logo" width="220" />
+</p>
 
-_declarative audiobook command center for collectors who care about clean metadata._
+<h1 align="center">BookBot</h1>
+
+<p align="center"><em>Declarative audiobook command center for collectors who care about clean metadata.</em></p>
 
 <p align="center">
-  <a href="https://github.com/itsbryanman/BookBot/actions">
-    <img alt="CI" src="https://img.shields.io/github/actions/workflow/status/itsbryanman/BookBot/ci.yml?branch=main&style=for-the-badge&logo=githubactions&logoColor=white" />
+  <a href="https://ghcr.io/itsbryanman/bookbot">
+    <img alt="Docker" src="https://img.shields.io/badge/docker-ghcr.io%2Fitsbryanman%2Fbookbot-2496ED?style=for-the-badge&logo=docker&logoColor=white" />
   </a>
   <a href="https://pypi.org/project/bookbot/">
     <img alt="PyPI" src="https://img.shields.io/pypi/v/bookbot?style=for-the-badge&logo=pypi&logoColor=white" />
@@ -39,7 +43,28 @@ BookBot is a Textual powered terminal app and command line toolkit for taming la
 
 ## Installation
 
-### pipx (recommended)
+Docker is the fastest way to run BookBot with every dependency pre-baked. It keeps FFmpeg, optional DRM tooling, and Python libraries in one container so your host stays clean.
+
+### Docker (recommended)
+
+```bash
+docker run -it --rm \
+  -v "/path/to/audiobooks:/data" \
+  -v "$HOME/.config/bookbot:/root/.config/bookbot" \
+  ghcr.io/itsbryanman/bookbot:latest tui /data
+```
+
+Mount your library into `/data` (or any path you prefer) and persist configuration under `~/.config/bookbot`. Swap `tui /data` for other commands like `scan /data` or `convert /book --profile conversion`.
+
+You can also add a convenience alias:
+
+```bash
+alias bookbot-docker='docker run -it --rm -v "$HOME/.config/bookbot:/root/.config/bookbot" -v "$PWD:/data" ghcr.io/itsbryanman/bookbot:latest'
+```
+
+Then run `bookbot-docker tui /data` from any library directory.
+
+### pipx (alternative)
 
 ```bash
 pipx install bookbot
@@ -47,15 +72,10 @@ pipx install bookbot
 
 pipx keeps BookBot isolated and ensures the `bookbot` command lands on your PATH. If the executable is not found after install, add `$HOME/.local/bin` to your shell profile.
 
-### pip / virtualenv
+### pip / virtualenv (alternative)
 
 ```bash
 python -m pip install bookbot
-```
-
-To enable conversion helpers install the extra tools:
-
-```bash
 python -m pip install "bookbot[conversion]"
 ```
 
@@ -203,4 +223,3 @@ We welcome issues and pull requests. Please:
 ## License
 
 BookBot is released under the MIT License. See [LICENSE](LICENSE) for the full text.
-
