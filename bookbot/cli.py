@@ -2,6 +2,7 @@
 
 import sys
 from pathlib import Path
+from typing import Optional
 
 import click
 
@@ -569,27 +570,51 @@ def audible_auth(ctx: click.Context, country: str) -> None:
 
 
 @audible.command("import")
-@click.argument("asin", type=str)
+@click.argument("numbers", type=str)
 @click.option(
     "-o",
     "--output-dir",
     type=click.Path(path_type=Path),
-    help="Output directory for downloaded book",
+    help="Output directory for downloaded books",
 )
 @click.option("--remove-drm", is_flag=True, help="Remove DRM after download")
 @click.option("--activation-bytes", type=str, help="Activation bytes for DRM removal")
 @click.pass_context
 def audible_import(
     ctx: click.Context,
-    asin: str,
-    output_dir: Path | None,
+    numbers: str,
+    output_dir: Optional[Path],
     remove_drm: bool,
-    activation_bytes: str | None,
+    activation_bytes: Optional[str],
 ) -> None:
-    """Import an Audible book by ASIN."""
+    """Import Audible books by number from 'audible list' (e.g., '1,2,3' or '1')."""
+    import json
+
     try:
         from .drm.audible_client import AudibleAuthClient
         from .drm.remover import DRMRemover
+
+        # Load cached library
+        cache_file = Path.home() / ".config" / "bookbot" / ".audible_library_cache.json"
+        if not cache_file.exists():
+            click.echo("❌ No library cache found. Run 'bookbot audible list' first.", err=True)
+            sys.exit(1)
+
+        library = json.loads(cache_file.read_text())
+
+        # Parse numbers (comma or space separated)
+        numbers = numbers.replace(" ", ",")
+        try:
+            book_indices = [int(n.strip()) - 1 for n in numbers.split(",") if n.strip()]
+        except ValueError:
+            click.echo("❌ Invalid book numbers. Use format: 1,2,3", err=True)
+            sys.exit(1)
+
+        # Validate indices
+        invalid = [i + 1 for i in book_indices if i < 0 or i >= len(library)]
+        if invalid:
+            click.echo(f"❌ Invalid book numbers: {invalid}. Library has {len(library)} books.", err=True)
+            sys.exit(1)
 
         if not output_dir:
             output_dir = Path.cwd() / "audible_books"
@@ -600,47 +625,49 @@ def audible_import(
 
         # Check if authenticated
         if not client._load_stored_auth():
-            click.echo(
-                "❌ Not authenticated. Run 'bookbot audible auth' first.",
-                err=True,
-            )
+            click.echo("❌ Not authenticated. Run 'bookbot audible auth' first.", err=True)
             sys.exit(1)
 
-        client._auth = client._load_stored_auth()
+        # Import each book
+        click.echo(f"📚 Importing {len(book_indices)} book(s)...\n")
 
-        click.echo(f"📚 Importing Audible book {asin}...")
+        for idx in book_indices:
+            book = library[idx]
+            asin = book.get("asin", "")
+            title = book.get("title", "Unknown")
 
-        # Download the book
-        book_path = output_dir / f"{asin}.aax"
-        success = client.download_book(asin, str(book_path))
+            click.echo(f"[{book_indices.index(idx) + 1}/{len(book_indices)}] {title} [{asin}]")
 
-        if success:
-            click.echo(f"Book downloaded to: {book_path}")
+            # Download the book
+            book_path = output_dir / f"{asin}.aax"
+            success = client.download_book(asin, str(book_path))
 
-            if remove_drm:
-                click.echo("Removing DRM...")
+            if success:
+                click.echo(f"  ✅ Downloaded to: {book_path}")
 
-                # Try to get activation bytes from client if not provided
-                if not activation_bytes:
-                    activation_bytes = client.get_activation_bytes()
+                if remove_drm:
+                    click.echo("  🔓 Removing DRM...")
 
-                if not activation_bytes:
-                    click.echo(
-                        "Warning: No activation bytes available. DRM removal may fail."
-                    )
+                    # Try to get activation bytes from client if not provided
+                    if not activation_bytes:
+                        activation_bytes = client.get_activation_bytes()
 
-                remover = DRMRemover(activation_bytes=activation_bytes)
-                result = remover.remove_drm(book_path)
+                    if not activation_bytes:
+                        click.echo("  ⚠️  No activation bytes available. Skipping DRM removal.")
+                    else:
+                        remover = DRMRemover(activation_bytes=activation_bytes)
+                        result = remover.remove_drm(book_path)
 
-                if result.success:
-                    click.echo(
-                        f"DRM removed successfully! Output: {result.output_file}"
-                    )
-                else:
-                    click.echo(f"DRM removal failed: {result.error_message}", err=True)
-        else:
-            click.echo("Download failed", err=True)
-            sys.exit(1)
+                        if result.success:
+                            click.echo(f"  ✅ DRM removed: {result.output_file}")
+                        else:
+                            click.echo(f"  ❌ DRM removal failed: {result.error_message}", err=True)
+            else:
+                click.echo(f"  ❌ Download failed")
+
+            click.echo("")
+
+        click.echo(f"✨ Import complete!")
 
     except Exception as e:
         click.echo(f"Import failed: {e}", err=True)
@@ -648,10 +675,10 @@ def audible_import(
 
 
 @audible.command("list")
-@click.option("--limit", type=int, default=20, help="Maximum number of books to show")
+@click.option("--limit", type=int, help="Maximum number of books to show")
 @click.pass_context
-def audible_list(ctx: click.Context, limit: int) -> None:
-    """List user's Audible library."""
+def audible_list(ctx: click.Context, limit: Optional[int]) -> None:
+    """List user's Audible library with numbers for easy importing."""
     try:
         from .drm.audible_client import AudibleAuthClient
 
@@ -665,39 +692,35 @@ def audible_list(ctx: click.Context, limit: int) -> None:
             )
             sys.exit(1)
 
-        client._auth = client._load_stored_auth()
         library = client.get_library()
 
         if not library:
             click.echo("No books found in your library")
             return
 
-        click.echo(f"Found {len(library)} books in your library:")
-        click.echo("")
+        # Cache library for import command
+        cache_file = Path.home() / ".config" / "bookbot" / ".audible_library_cache.json"
+        cache_file.parent.mkdir(parents=True, exist_ok=True)
+        import json
+        cache_file.write_text(json.dumps(library, indent=2))
 
-        for i, book in enumerate(library[:limit], 1):
-            title = book.get("title", "Unknown Title")
+        display_count = len(library) if limit is None else min(limit, len(library))
+
+        click.echo(f"📚 Found {len(library)} books in your library\n")
+
+        for i, book in enumerate(library[:display_count], 1):
+            title = book.get("title", "Unknown")
             authors = book.get("authors", [])
             author_names = [author.get("name", "") for author in authors]
-            author_str = ", ".join(author_names) if author_names else "Unknown Author"
+            author_str = ", ".join(author_names) if author_names else "Unknown"
             asin = book.get("asin", "")
 
-            click.echo(f"{i:3}. {title}")
-            click.echo(f"     Author: {author_str}")
-            click.echo(f"     ASIN: {asin}")
+            click.echo(f"{i:3}. {title} - {author_str} [{asin}]")
 
-            # Show series info if available
-            series = book.get("series")
-            if series:
-                series_title = series[0].get("title", "") if series else ""
-                series_sequence = series[0].get("sequence", "") if series else ""
-                if series_title:
-                    click.echo(f"     Series: {series_title} #{series_sequence}")
+        if limit and len(library) > limit:
+            click.echo(f"\n... and {len(library) - limit} more (use --limit to show all)")
 
-            click.echo("")
-
-        if len(library) > limit:
-            click.echo(f"... and {len(library) - limit} more books")
+        click.echo(f"\n💡 To import books, use: bookbot audible import 1,2,3")
 
     except Exception as e:
         click.echo(f"Failed to list library: {e}", err=True)
