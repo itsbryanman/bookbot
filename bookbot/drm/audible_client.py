@@ -144,11 +144,6 @@ class AudibleAuthClient:
     def _save_auth(self) -> None:
         """Save authentication data securely."""
         if self._auth:
-            if keyring is None:
-                print("⚠️ Keyring is not available; authentication will not be stored.")
-                return
-
-            # Save the authentication data to keyring
             auth_data = {
                 "access_token": self._auth.access_token,
                 "refresh_token": self._auth.refresh_token,
@@ -160,18 +155,52 @@ class AudibleAuthClient:
                 "website_cookies": self._auth.website_cookies,
             }
 
-            keyring.set_password("bookbot", "audible_auth", json.dumps(auth_data))
+            # Try to save with keyring first
+            if keyring is not None:
+                try:
+                    keyring.set_password("bookbot", "audible_auth", json.dumps(auth_data))
+                    print("✅ Authentication saved securely to system keyring")
+                    return
+                except Exception as e:
+                    print(f"⚠️ Keyring not available ({e}), using fallback file storage")
+
+            # Fallback: save to config directory
+            try:
+                config_dir = Path.home() / ".config" / "bookbot"
+                config_dir.mkdir(parents=True, exist_ok=True)
+                auth_file = config_dir / ".audible_auth.json"
+                auth_file.write_text(json.dumps(auth_data))
+                auth_file.chmod(0o600)  # Read/write for owner only
+                print(f"✅ Authentication saved to {auth_file}")
+            except Exception as e:
+                print(f"⚠️ Failed to save authentication: {e}")
+                print("Authentication will work for this session only")
 
     def _load_stored_auth(self) -> audible.Authenticator | None:
         """Load stored authentication data."""
+        auth_data_str = None
+
+        # Try keyring first
+        if keyring is not None:
+            try:
+                auth_data_str = keyring.get_password("bookbot", "audible_auth")
+            except Exception:
+                pass  # Fallback to file
+
+        # Try fallback file if keyring didn't work
+        if not auth_data_str:
+            try:
+                config_dir = Path.home() / ".config" / "bookbot"
+                auth_file = config_dir / ".audible_auth.json"
+                if auth_file.exists():
+                    auth_data_str = auth_file.read_text()
+            except Exception:
+                pass
+
+        if not auth_data_str:
+            return None
+
         try:
-            if keyring is None:
-                return None
-
-            auth_data_str = keyring.get_password("bookbot", "audible_auth")
-            if not auth_data_str:
-                return None
-
             auth_data = json.loads(auth_data_str)
 
             # Reconstruct the authenticator
@@ -195,10 +224,19 @@ class AudibleAuthClient:
 
     def logout(self) -> None:
         """Clear stored authentication."""
+        # Try to delete from keyring
+        if keyring is not None:
+            try:
+                keyring.delete_password("bookbot", "audible_auth")
+            except Exception:
+                pass
+
+        # Try to delete fallback file
         try:
-            if keyring is None:
-                return
-            keyring.delete_password("bookbot", "audible_auth")
+            config_dir = Path.home() / ".config" / "bookbot"
+            auth_file = config_dir / ".audible_auth.json"
+            if auth_file.exists():
+                auth_file.unlink()
         except Exception:
             pass
 
