@@ -49,6 +49,7 @@ Thumbs.db
 # Project specific
 demo_library/
 SampleFiles/
+audible_books/
 
 
 *.m4b
