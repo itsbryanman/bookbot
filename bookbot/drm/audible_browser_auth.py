@@ -1,6 +1,8 @@
 """Browser-based Audible authentication using Playwright (OpenAudible approach)."""
 
 import json
+import subprocess
+import sys
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -19,6 +21,55 @@ try:
     import keyring
 except ImportError:
     keyring = None  # type: ignore[assignment]
+
+
+def _ensure_playwright_browsers() -> bool:
+    """
+    Ensure Playwright browsers are installed.
+
+    Returns:
+        True if browsers are available, False otherwise
+    """
+    try:
+        # Try to check if chromium is already installed
+        result = subprocess.run(
+            [sys.executable, "-m", "playwright", "install", "--dry-run", "chromium"],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+
+        # If dry-run succeeds and shows it's already installed, we're good
+        if result.returncode == 0:
+            return True
+
+    except Exception:
+        pass
+
+    # Browsers not found - install them
+    print("\n📦 Installing Chromium browser for authentication...")
+    print("⏳ This is a one-time setup and may take a minute...")
+
+    try:
+        result = subprocess.run(
+            [sys.executable, "-m", "playwright", "install", "chromium"],
+            capture_output=False,  # Show output to user
+            timeout=300  # 5 minute timeout
+        )
+
+        if result.returncode == 0:
+            print("✅ Browser installation complete!")
+            return True
+        else:
+            print(f"❌ Browser installation failed with code {result.returncode}")
+            return False
+
+    except subprocess.TimeoutExpired:
+        print("❌ Browser installation timed out")
+        return False
+    except Exception as e:
+        print(f"❌ Browser installation error: {e}")
+        return False
 
 
 class AudibleBrowserAuth:
@@ -75,6 +126,11 @@ class AudibleBrowserAuth:
                 return True
             else:
                 print("⚠️ Existing authentication expired, re-authenticating...")
+
+        # Ensure browsers are installed before attempting authentication
+        if not _ensure_playwright_browsers():
+            print("❌ Failed to install browser dependencies")
+            return False
 
         print("\n🌐 Opening browser for Audible authentication...")
         print("📝 Please log in to your Audible account in the browser window")
