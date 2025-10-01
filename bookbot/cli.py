@@ -114,8 +114,18 @@ def scan(
     "folders", nargs=-1, type=click.Path(exists=True, file_okay=False, path_type=Path)
 )
 @click.option("--profile", type=str, help="Configuration profile to use")
+@click.option(
+    "--metadata-from-files",
+    is_flag=True,
+    help="Use local metadata sidecar files instead of online providers",
+)
 @click.pass_context
-def tui(ctx: click.Context, folders: tuple[Path, ...], profile: str | None) -> None:
+def tui(
+    ctx: click.Context,
+    folders: tuple[Path, ...],
+    profile: str | None,
+    metadata_from_files: bool,
+) -> None:
     """Launch the interactive TUI for audiobook processing."""
     config_manager = ctx.obj["config_manager"]
 
@@ -131,9 +141,11 @@ def tui(ctx: click.Context, folders: tuple[Path, ...], profile: str | None) -> N
 
     try:
         # Import TUI app here to avoid issues if textual is not installed
+        from .providers.local import LocalMetadataProvider
         from .tui.app import BookBotApp
 
-        app = BookBotApp(config_manager, list(folders))
+        provider = LocalMetadataProvider() if metadata_from_files else None
+        app = BookBotApp(config_manager, list(folders), provider=provider)
         app.run()
 
     except ImportError:

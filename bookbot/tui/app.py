@@ -12,6 +12,7 @@ from textual.widgets import Button, Footer, Header, Label, TabbedContent, TabPan
 from ..config.manager import ConfigManager
 from ..core.discovery import AudioFileScanner
 from ..core.models import AudiobookSet
+from ..providers.base import MetadataProvider
 from ..providers.openlibrary import OpenLibraryProvider
 from .screens import (
     ConversionScreen,
@@ -275,12 +276,17 @@ class BookBotApp(App):
         ("ctrl+r", "refresh", "Refresh"),
     ]
 
-    def __init__(self, config_manager: ConfigManager, source_folders: list[Path]):
+    def __init__(
+        self,
+        config_manager: ConfigManager,
+        source_folders: list[Path],
+        provider: MetadataProvider | None = None,
+    ):
         super().__init__()
         self.config_manager = config_manager
         self.source_folders = source_folders
         self.audiobook_sets: list[AudiobookSet] = []
-        self.provider = OpenLibraryProvider()
+        self.provider = provider or OpenLibraryProvider()
 
         # Application state
         self.current_step = "source_selection"

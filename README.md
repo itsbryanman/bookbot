@@ -100,6 +100,9 @@ bookbot scan /path/to/audiobooks
 # 2. Launch the Textual TUI to review matches and approve changes
 bookbot tui /path/to/audiobooks
 
+#    Stay offline by reusing existing sidecar metadata
+bookbot tui /path/to/audiobooks --metadata-from-files
+
 # 3. Convert a finished book to a single tagged M4B
 bookbot convert /path/to/book -o /path/to/output --normalize --chapters auto
 
@@ -145,7 +148,7 @@ Prefer a desktop entry point? `bookbot gui` launches the same Textual applicatio
 | Command | Purpose |
 | --- | --- |
 | `bookbot scan DIR` | Inspect directories, infer series/disc structure, and surface warnings without touching files. |
-| `bookbot tui DIR...` | Launch the interactive Textual interface to match metadata, approve rename plans, and start conversions. |
+| `bookbot tui DIR...` | Launch the interactive Textual interface to match metadata, approve rename plans, and start conversions. Add `--metadata-from-files` to reuse local NFO/JSON sidecars instead of online providers. |
 | `bookbot convert DIR -o OUT` | Build single-file, chaptered M4B releases with optional normalization and artwork. |
 | `bookbot history --days 7` | Review completed transactions and identify undo candidates. |
 | `bookbot undo ID` | Roll back an operation safely using its transaction identifier. |
