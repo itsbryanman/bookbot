@@ -674,6 +674,153 @@ def audible_import(
         sys.exit(1)
 
 
+@audible.command("get-activation-bytes")
+@click.option("--username", prompt=True)
+@click.option("--password", prompt=True, hide_input=True)
+@click.option(
+    "--lang",
+    default="us",
+    help="us (default) / au / in / de / fr / jp / uk (untested)",
+)
+def get_activation_bytes(username, password, lang):
+    """Get activation bytes from Audible using your username and password."""
+    try:
+        from selenium import webdriver
+        import base64
+        import hashlib
+        import binascii
+        import requests
+        from urllib.parse import urlencode, urlparse, parse_qsl
+
+        def extract_activation_bytes(data: bytes):
+            if (b"BAD_LOGIN" in data or b"Whoops" in data) or b"group_id" not in data:
+                raise Exception("Activation failed! Please check your credentials.")
+            k = data.rfind(b"group_id")
+            l = data[k:].find(b")")
+            keys = data[k + l + 1 + 1 :]
+            output_keys = []
+            for i in range(0, 8):
+                key = keys[i * 70 + i : (i + 1) * 70 + i]
+                h = binascii.hexlify(bytes(key))
+                h = b",".join(h[i : i + 2] for i in range(0, len(h), 2))
+                output_keys.append(h)
+
+            activation_bytes = output_keys[0].replace(b",", b"")[0:8]
+            activation_bytes = b"".join(
+                reversed([activation_bytes[i : i + 2] for i in range(0, len(activation_bytes), 2)])
+            )
+            return activation_bytes.decode("ascii")
+
+        base_url = "https://www.audible.com/"
+        base_url_license = "https://www.audible.com/"
+
+        if lang == "uk":
+            base_url = base_url.replace(".com", ".co.uk")
+        elif lang == "jp":
+            base_url = base_url.replace(".com", ".co.jp")
+        elif lang == "au":
+            base_url = base_url.replace(".com", ".com.au")
+        elif lang == "in":
+            base_url = base_url.replace(".com", ".in")
+        elif lang != "us":
+            base_url = base_url.replace(".com", "." + lang)
+
+        player_id = base64.encodebytes(hashlib.sha1(b"").digest()).rstrip().decode("ascii")
+
+        opts = webdriver.ChromeOptions()
+        opts.add_argument("user-agent=Mozilla/5.0 (Windows NT 6.1; WOW64; Trident/7.0; AS; rv:11.0) like Gecko")
+        opts.add_argument("--headless")
+        opts.add_argument("--no-sandbox")
+        opts.add_argument("--disable-dev-shm-usage")
+
+        if sys.platform == "win32":
+            chromedriver_path = "chromedriver.exe"
+        elif Path("/usr/bin/chromedriver").is_file():
+            chromedriver_path = "/usr/bin/chromedriver"
+        elif Path("/usr/lib/chromium-browser/chromedriver").is_file():
+            chromedriver_path = "/usr/lib/chromium-browser/chromedriver"
+        elif Path("/usr/local/bin/chromedriver").is_file():
+            chromedriver_path = "/usr/local/bin/chromedriver"
+        else:
+            chromedriver_path = "./chromedriver"
+
+        with webdriver.Chrome(options=opts, executable_path=chromedriver_path) as driver:
+            payload = {
+                "openid.ns": "http://specs.openid.net/auth/2.0",
+                "openid.identity": "http://specs.openid.net/auth/2.0/identifier_select",
+                "openid.claimed_id": "http://specs.openid.net/auth/2.0/identifier_select",
+                "openid.mode": "logout",
+                "openid.assoc_handle": "amzn_audible_" + lang,
+                "openid.return_to": base_url
+                + "player-auth-token?playerType=software&playerId=%s=&bp_ua=y&playerModel=Desktop&playerManufacturer=Audible"
+                % (player_id),
+            }
+            if "@" in username:
+                login_url = "https://www.amazon.com/ap/signin?"
+            else:
+                login_url = "https://www.audible.com/sign-in/ref=ap_to_private?forcePrivateSignIn=true&rdPath=https%3A%2F%2Fwww.audible.com%2F%3F"
+
+            query_string = urlencode(payload)
+            url = login_url + query_string
+            driver.get(base_url + "?ipRedirectOverride=true")
+            driver.get(url)
+
+            search_box = driver.find_element_by_id("ap_email")
+            search_box.send_keys(username)
+            search_box = driver.find_element_by_id("ap_password")
+            search_box.send_keys(password)
+            search_box.submit()
+            time.sleep(2)
+
+            click.echo("ATTENTION: Now you may have to enter a one-time password manually. Once you are done, press enter to continue...")
+            input()
+
+            driver.get(
+                base_url
+                + "player-auth-token?playerType=software&bp_ua=y&playerModel=Desktop&playerId=%s&playerManufacturer=Audible&serial="
+                % (player_id)
+            )
+            current_url = driver.current_url
+            o = urlparse(current_url)
+            data = dict(parse_qsl(o.query))
+
+            headers = {"User-Agent": "Audible Download Manager"}
+            cookies = driver.get_cookies()
+            s = requests.Session()
+            for cookie in cookies:
+                s.cookies.set(cookie["name"], cookie["value"])
+
+            durl = (
+                base_url_license
+                + "license/licenseForCustomerToken?"
+                + "customer_token="
+                + data["playerToken"]
+                + "&action=de-register"
+            )
+            s.get(durl, headers=headers)
+
+            url = (
+                base_url_license
+                + "license/licenseForCustomerToken?"
+                + "customer_token="
+                + data["playerToken"]
+            )
+            response = s.get(url, headers=headers)
+
+            activation_bytes = extract_activation_bytes(response.content)
+            click.echo(f"Activation bytes: {activation_bytes}")
+
+            from .drm.secure_storage import save_activation_bytes
+            save_activation_bytes(activation_bytes)
+            click.echo("Activation bytes saved securely.")
+
+            s.get(durl, headers=headers)
+
+    except Exception as e:
+        click.echo(f"An error occurred: {e}", err=True)
+        sys.exit(1)
+
+
 @audible.command("list")
 @click.option("--limit", type=int, help="Maximum number of books to show")
 @click.pass_context
@@ -848,6 +995,20 @@ def drm_remove(
     if not files:
         click.echo("Error: At least one file or directory must be specified", err=True)
         sys.exit(1)
+
+    if not activation_bytes:
+        try:
+            from .drm.audible_client import AudibleAuthClient
+            client = AudibleAuthClient()
+            if client.is_authenticated():
+                click.echo("Attempting to automatically fetch activation bytes...")
+                activation_bytes = client.get_activation_bytes()
+                if activation_bytes:
+                    click.echo("✅ Activation bytes fetched successfully!")
+                else:
+                    click.echo("⚠️  Could not automatically fetch activation bytes.")
+        except ImportError:
+            pass
 
     try:
         from .drm.detector import DRMDetector

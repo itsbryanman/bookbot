@@ -197,7 +197,30 @@ BookBot includes a focused DRM toolkit backed by `ffmpeg` and the `audible` Pyth
 2. List your library (`bookbot audible list --limit 50`) or import specific titles by ASIN.
 3. Use `bookbot drm detect` to map protected files and `bookbot drm remove` to produce DRM-free audio. Activation bytes can be supplied per run or cached via `bookbot drm set-activation-bytes`.
 
-These features depend on optional packages (`audible`, `cryptography`, `keyring`) that are already declared in `pyproject.toml`. Ensure FFmpeg is compiled with the modules required for Audible AAX/AAXC processing.
+### Retrieving Activation Bytes
+
+For DRM removal of Audible files, you'll need your account's activation bytes. BookBot can retrieve these for you.
+
+**Dependencies:**
+
+This feature requires `selenium` and `chromedriver`. If you are not using the Docker image, you will need to install them:
+
+```bash
+pip install selenium
+# Make sure chromedriver is in your PATH
+```
+
+**Usage:**
+
+Run the following command and follow the prompts to enter your Audible username and password:
+
+```bash
+bookbot audible get-activation-bytes
+```
+
+This will securely save your activation bytes for future use. After this one-time setup, you can remove DRM from your books without needing to provide the activation bytes every time.
+
+These features depend on optional packages (`audible`, `cryptography`, `keyring`, `selenium`) that are already declared in `pyproject.toml`. Ensure FFmpeg is compiled with the modules required for Audible AAX/AAXC processing.
 
 ## Development
 

@@ -55,6 +55,7 @@ audible_books/
 *.m4b
 *.mp3
 *.m4a
+*.aax
 *.flac
 *.ogg
 *.wav
