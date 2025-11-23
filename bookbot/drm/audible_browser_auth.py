@@ -9,8 +9,9 @@ from typing import Any, Dict, List, Optional
 
 try:
     from playwright.sync_api import sync_playwright, Browser, Page, BrowserContext
+
     HAS_PLAYWRIGHT = True
-except ImportError:
+except ModuleNotFoundError:
     sync_playwright = None  # type: ignore[assignment]
     Browser = None  # type: ignore[assignment]
     Page = None  # type: ignore[assignment]
@@ -19,7 +20,7 @@ except ImportError:
 
 try:
     import keyring
-except ImportError:
+except ModuleNotFoundError:
     keyring = None  # type: ignore[assignment]
 
 
@@ -31,20 +32,19 @@ def _ensure_playwright_browsers() -> bool:
         True if browsers are available, False otherwise
     """
     try:
-        # Try to check if chromium is already installed
         result = subprocess.run(
             [sys.executable, "-m", "playwright", "install", "--dry-run", "chromium"],
             capture_output=True,
             text=True,
-            timeout=10
+            timeout=10,
+            check=False,
         )
 
-        # If dry-run succeeds and shows it's already installed, we're good
         if result.returncode == 0:
             return True
 
-    except Exception:
-        pass
+    except subprocess.TimeoutExpired:
+        return False
 
     # Browsers not found - install them
     print("\n📦 Installing Chromium browser for authentication...")
@@ -53,21 +53,22 @@ def _ensure_playwright_browsers() -> bool:
     try:
         result = subprocess.run(
             [sys.executable, "-m", "playwright", "install", "chromium"],
-            capture_output=False,  # Show output to user
-            timeout=300  # 5 minute timeout
+            capture_output=False,
+            timeout=300,
+            check=False,
         )
 
         if result.returncode == 0:
             print("✅ Browser installation complete!")
             return True
-        else:
-            print(f"❌ Browser installation failed with code {result.returncode}")
-            return False
+
+        print(f"❌ Browser installation failed with code {result.returncode}")
+        return False
 
     except subprocess.TimeoutExpired:
         print("❌ Browser installation timed out")
         return False
-    except Exception as e:
+    except (OSError, subprocess.SubprocessError) as e:
         print(f"❌ Browser installation error: {e}")
         return False
 
@@ -146,33 +147,31 @@ class AudibleBrowserAuth:
                         "Chrome/120.0.0.0 Safari/537.36"
                     )
                 )
-                page = context.new_page()
 
-                # Navigate to Audible homepage
-                audible_url = f"https://www.{self.base_domain}"
-                page.goto(audible_url, wait_until="domcontentloaded")
+                try:
+                    page = context.new_page()
 
-                # Wait for user to log in by checking for sign-out link
-                login_successful = self._wait_for_login(page)
+                    audible_url = f"https://www.{self.base_domain}"
+                    page.goto(audible_url, wait_until="domcontentloaded")
 
-                if not login_successful:
-                    print("❌ Login failed or timed out")
+                    login_successful = self._wait_for_login(page)
+
+                    if not login_successful:
+                        print("❌ Login failed or timed out")
+                        return False
+
+                    self.cookies = context.cookies()
+                    self._save_cookies()
+
+                    print("✅ Authentication successful!")
+                    print(f"✅ Saved {len(self.cookies)} cookies")
+
+                    return True
+                finally:
+                    context.close()
                     browser.close()
-                    return False
 
-                # Extract cookies
-                self.cookies = context.cookies()
-
-                # Save cookies for future use
-                self._save_cookies()
-
-                print("✅ Authentication successful!")
-                print(f"✅ Saved {len(self.cookies)} cookies")
-
-                browser.close()
-                return True
-
-        except Exception as e:
+        except (RuntimeError, ValueError, OSError) as e:
             print(f"❌ Authentication error: {e}")
             return False
 

@@ -542,12 +542,12 @@ class BookBotApp(App):
         # TODO: Implement help dialog
         self.update_status("Help: Use tabs to navigate, buttons to process")
 
-    def action_save_config(self) -> None:
-        """Save current configuration."""
+    async def action_save_config(self) -> None:
+        """Save current configuration without blocking the UI."""
         try:
-            self.config_manager.save_config()
+            await asyncio.to_thread(self.config_manager.save_config)
             self.update_status("Configuration saved")
-        except Exception as e:
+        except OSError as e:
             self.update_status(f"Failed to save config: {e}")
 
     def action_refresh(self) -> None:

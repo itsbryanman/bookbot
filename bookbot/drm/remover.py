@@ -117,7 +117,7 @@ class DRMRemover:
                 str(output_path),
             ]
 
-            subprocess.run(cmd, capture_output=True, text=True, check=True)
+            subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=600)
 
             return RemovalResult(
                 success=True,
@@ -127,20 +127,24 @@ class DRMRemover:
                 method_used="ffmpeg_activation_bytes",
             )
 
+        except subprocess.TimeoutExpired:
+            error_msg = "FFmpeg timed out during AAX DRM removal"
         except subprocess.CalledProcessError as e:
             error_msg = f"FFmpeg failed: {e.stderr}" if e.stderr else str(e)
-            return RemovalResult(
-                success=False,
-                original_file=input_path,
-                drm_info=self.detector.detect_drm(input_path),
-                error_message=error_msg,
-            )
+
+        if output_path.exists():
+            output_path.unlink(missing_ok=True)
+
+        return RemovalResult(
+            success=False,
+            original_file=input_path,
+            drm_info=self.detector.detect_drm(input_path),
+            error_message=error_msg,
+        )
 
     def _remove_aaxc_drm(self, input_path: Path, output_path: Path) -> RemovalResult:
         """Remove DRM from Audible AAXC files."""
         try:
-            # AAXC files can be processed similarly to AAX in some cases
-            # Try ffmpeg with copy codec first
             cmd = [
                 self.ffmpeg_path,
                 "-i",
@@ -152,7 +156,7 @@ class DRMRemover:
                 str(output_path),
             ]
 
-            result = subprocess.run(cmd, capture_output=True, text=True)
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
 
             if result.returncode == 0:
                 return RemovalResult(
@@ -162,39 +166,47 @@ class DRMRemover:
                     drm_info=self.detector.detect_drm(input_path),
                     method_used="ffmpeg_copy",
                 )
-            else:
-                # If copy fails, try re-encoding
-                cmd = [
-                    self.ffmpeg_path,
-                    "-i",
-                    str(input_path),
-                    "-vn",
-                    "-c:a",
-                    "aac",  # Re-encode to AAC
-                    "-b:a",
-                    "128k",
-                    "-y",
-                    str(output_path),
-                ]
 
-                result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+            # If copy fails, try re-encoding
+            cmd = [
+                self.ffmpeg_path,
+                "-i",
+                str(input_path),
+                "-vn",
+                "-c:a",
+                "aac",  # Re-encode to AAC
+                "-b:a",
+                "128k",
+                "-y",
+                str(output_path),
+            ]
 
-                return RemovalResult(
-                    success=True,
-                    original_file=input_path,
-                    output_file=output_path,
-                    drm_info=self.detector.detect_drm(input_path),
-                    method_used="ffmpeg_reencode",
-                )
+            result = subprocess.run(
+                cmd, capture_output=True, text=True, check=True, timeout=600
+            )
 
+            return RemovalResult(
+                success=True,
+                original_file=input_path,
+                output_file=output_path,
+                drm_info=self.detector.detect_drm(input_path),
+                method_used="ffmpeg_reencode",
+            )
+
+        except subprocess.TimeoutExpired:
+            error_msg = "FFmpeg timed out during AAXC DRM removal"
         except subprocess.CalledProcessError as e:
             error_msg = f"FFmpeg failed: {e.stderr}" if e.stderr else str(e)
-            return RemovalResult(
-                success=False,
-                original_file=input_path,
-                drm_info=self.detector.detect_drm(input_path),
-                error_message=error_msg,
-            )
+
+        if output_path.exists():
+            output_path.unlink(missing_ok=True)
+
+        return RemovalResult(
+            success=False,
+            original_file=input_path,
+            drm_info=self.detector.detect_drm(input_path),
+            error_message=error_msg,
+        )
 
     def _remove_fairplay_drm(
         self, input_path: Path, output_path: Path
