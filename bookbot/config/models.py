@@ -93,6 +93,7 @@ class ConversionConfig(BaseModel):
     create_chapters: bool = True
     chapter_naming: str = "auto"  # "auto", "from_tags", "track_number"
     temp_directory: Path | None = None
+    write_cover_art: bool = True  # Embed cover art in M4B files
 
     def validate_paths(cls, v: str | Path | None) -> Path | None:
         return Path(v) if isinstance(v, str) else v
