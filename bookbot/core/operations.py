@@ -6,6 +6,7 @@ from datetime import datetime
 from pathlib import Path
 
 from mutagen import File as MutagenFile
+from mutagen import MutagenError
 
 from ..config.manager import ConfigManager
 from .models import AudioTags, OperationRecord, RenameOperation, RenamePlan, Track
@@ -111,7 +112,7 @@ class TransactionManager:
 
             return True
 
-        except Exception as e:
+        except (OSError, ValueError) as e:
             # Rollback on failure
             self._rollback_operations(temp_operations, transaction_log)
             raise RuntimeError(f"Failed to execute rename plan: {e}") from e
@@ -137,7 +138,7 @@ class TransactionManager:
                         record.new_path.rename(record.old_path)
                     else:
                         record.new_path.unlink()  # Remove if no original path
-            except Exception:
+            except OSError:
                 # Best effort rollback
                 pass
 
@@ -185,7 +186,7 @@ class TransactionManager:
 
             return True
 
-        except Exception as e:
+        except (OSError, json.JSONDecodeError) as e:
             print(f"Failed to undo transaction {transaction_id}: {e}")
             return False
 
@@ -240,7 +241,7 @@ class TransactionManager:
                         "can_undo": True,
                     }
                 )
-            except Exception:
+            except (OSError, json.JSONDecodeError):
                 continue
 
         # Check for undone transactions
@@ -258,7 +259,7 @@ class TransactionManager:
                         "status": "undone",
                     }
                 )
-            except Exception:
+            except (OSError, json.JSONDecodeError):
                 continue
 
         return sorted(transactions, key=lambda x: x["timestamp"], reverse=True)
@@ -273,7 +274,7 @@ class TransactionManager:
                 try:
                     log_file.unlink()
                     removed_count += 1
-                except Exception:
+                except OSError:
                     pass
 
         return removed_count
@@ -319,7 +320,7 @@ class TagManager:
 
             return True
 
-        except Exception as e:
+        except (ImportError, MutagenError, OSError, ValueError) as e:
             print(f"Failed to apply tags to {track.src_path}: {e}")
             return False
 
