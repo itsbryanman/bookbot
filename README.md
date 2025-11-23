@@ -7,6 +7,9 @@
 <p align="center"><em>Declarative audiobook command center for collectors who care about clean metadata.</em></p>
 
 <p align="center">
+  <a href="https://github.com/itsbryanman/BookBot/actions/workflows/ci.yml">
+    <img alt="CI" src="https://github.com/itsbryanman/BookBot/actions/workflows/ci.yml/badge.svg?style=for-the-badge" />
+  </a>
   <a href="https://ghcr.io/itsbryanman/bookbot">
     <img alt="Docker" src="https://img.shields.io/badge/docker-ghcr.io%2Fitsbryanman%2Fbookbot-2496ED?style=for-the-badge&logo=docker&logoColor=white" />
   </a>
