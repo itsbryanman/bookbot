@@ -7,6 +7,18 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 
+def _safe_unlink(path: Path) -> None:
+    """Remove a file if it exists, suppressing common filesystem errors."""
+
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        pass
+    except OSError:
+        # Best-effort cleanup; leave other errors untouched
+        pass
+
+
 class FFmpegWrapper:
     """Wrapper for FFmpeg operations."""
 
@@ -52,16 +64,19 @@ class FFmpegWrapper:
             "-show_streams",
             str(file_path),
         ]
-
         try:
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-            if result.returncode != 0:
-                raise RuntimeError(f"FFprobe failed: {result.stderr}")
+        except subprocess.TimeoutExpired as e:
+            raise RuntimeError(f"FFprobe timed out for {file_path}") from e
 
+        if result.returncode != 0:
+            raise RuntimeError(f"FFprobe failed: {result.stderr}")
+
+        try:
             probe_data: Dict[str, Any] = json.loads(result.stdout)
             return probe_data
-        except (subprocess.TimeoutExpired, json.JSONDecodeError) as e:
-            raise RuntimeError(f"Failed to probe file {file_path}: {e}") from e
+        except json.JSONDecodeError as e:
+            raise RuntimeError(f"Failed to parse FFprobe output for {file_path}: {e}") from e
 
     def get_duration(self, file_path: Path) -> float:
         """Get duration of an audio file in seconds."""
@@ -89,41 +104,48 @@ class FFmpegWrapper:
             "null",
             "-",
         ]
-
         try:
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        except subprocess.TimeoutExpired as e:
+            raise RuntimeError(f"FFmpeg loudness analysis timed out for {file_path}") from e
 
-            # FFmpeg outputs the JSON to stderr for this filter
-            stderr_lines = result.stderr.strip().split("\n")
-            json_started = False
-            json_lines = []
+        # FFmpeg outputs the JSON to stderr for this filter
+        stderr_lines = result.stderr.strip().split("\n")
+        json_started = False
+        json_lines = []
 
-            for line in stderr_lines:
-                if line.strip() == "{":
-                    json_started = True
+        for line in stderr_lines:
+            if line.strip() == "{":
+                json_started = True
 
-                if json_started:
-                    json_lines.append(line)
+            if json_started:
+                json_lines.append(line)
 
-                if line.strip() == "}" and json_started:
-                    break
+            if line.strip() == "}" and json_started:
+                break
 
-            if json_lines:
+        if json_lines:
+            try:
                 json_text = "\n".join(json_lines)
                 loudness_data = json.loads(json_text)
+            except json.JSONDecodeError as e:
+                raise RuntimeError(
+                    f"Failed to parse loudness data for {file_path}: {e}"
+                ) from e
+
+            try:
                 return {
                     "input_i": float(loudness_data.get("input_i", 0)),
                     "input_tp": float(loudness_data.get("input_tp", 0)),
                     "input_lra": float(loudness_data.get("input_lra", 0)),
                     "target_offset": float(loudness_data.get("target_offset", 0)),
                 }
+            except (TypeError, ValueError) as e:
+                raise RuntimeError(
+                    f"Invalid loudness values returned for {file_path}: {e}"
+                ) from e
 
-            raise RuntimeError("No loudness data found in FFmpeg output")
-
-        except (subprocess.TimeoutExpired, json.JSONDecodeError, ValueError) as e:
-            raise RuntimeError(
-                f"Failed to analyze loudness for {file_path}: {e}"
-            ) from e
+        raise RuntimeError("No loudness data found in FFmpeg output")
 
     def convert_to_aac(
         self,
@@ -167,9 +189,15 @@ class FFmpegWrapper:
 
         try:
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
-            return result.returncode == 0
         except subprocess.TimeoutExpired:
+            _safe_unlink(output_path)
             return False
+
+        if result.returncode != 0:
+            _safe_unlink(output_path)
+            return False
+
+        return True
 
     def concatenate_files(
         self,
@@ -208,16 +236,16 @@ class FFmpegWrapper:
             if success and chapters:
                 success = self.add_chapters(output_path, chapters)
 
+            if not success:
+                _safe_unlink(output_path)
+
             return success
 
         except subprocess.TimeoutExpired:
+            _safe_unlink(output_path)
             return False
         finally:
-            # Clean up temporary file
-            try:
-                concat_file.unlink()
-            except FileNotFoundError:
-                pass
+            _safe_unlink(concat_file)
 
     def add_chapters(self, file_path: Path, chapters: List[Dict]) -> bool:
         """Add chapter markers to an audio file."""
@@ -238,10 +266,9 @@ class FFmpegWrapper:
                 f.write(f"END={end_time}\n")
                 f.write(f"title={title}\n")
 
-        try:
-            # Create a temporary output file
-            temp_output = file_path.with_suffix(".tmp.m4b")
+        temp_output = file_path.with_suffix(".tmp.m4b")
 
+        try:
             cmd = [
                 self.ffmpeg_path,
                 "-i",
@@ -259,24 +286,18 @@ class FFmpegWrapper:
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
 
             if result.returncode == 0:
-                # Replace original with chaptered version
                 file_path.unlink()
                 temp_output.rename(file_path)
                 return True
-            else:
-                # Clean up temp file on failure
-                if temp_output.exists():
-                    temp_output.unlink()
-                return False
+
+            _safe_unlink(temp_output)
+            return False
 
         except subprocess.TimeoutExpired:
+            _safe_unlink(temp_output)
             return False
         finally:
-            # Clean up chapters file
-            try:
-                chapters_file.unlink()
-            except FileNotFoundError:
-                pass
+            _safe_unlink(chapters_file)
 
     def embed_cover_art(self, file_path: Path, cover_path: Path) -> bool:
         """Embed cover art into an audio file."""
@@ -307,17 +328,15 @@ class FFmpegWrapper:
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
 
             if result.returncode == 0:
-                # Replace original with version that has cover art
                 file_path.unlink()
                 temp_output.rename(file_path)
                 return True
-            else:
-                # Clean up temp file on failure
-                if temp_output.exists():
-                    temp_output.unlink()
-                return False
+
+            _safe_unlink(temp_output)
+            return False
 
         except subprocess.TimeoutExpired:
+            _safe_unlink(temp_output)
             return False
 
     def can_stream_copy(self, file_path: Path) -> bool:
@@ -354,10 +373,10 @@ class FFmpegWrapper:
                 file_path.unlink()
                 temp_output.rename(file_path)
                 return True
-            else:
-                if temp_output.exists():
-                    temp_output.unlink()
-                return False
+
+            _safe_unlink(temp_output)
+            return False
 
         except subprocess.TimeoutExpired:
+            _safe_unlink(temp_output)
             return False

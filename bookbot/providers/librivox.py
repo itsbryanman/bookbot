@@ -7,6 +7,8 @@ from typing import Any, List, Optional
 import aiohttp
 from rapidfuzz import fuzz
 
+from pydantic import ValidationError
+
 from ..core.models import AudiobookSet, ProviderIdentity
 from .base import MetadataProvider
 
@@ -62,7 +64,7 @@ class LibriVoxProvider(MetadataProvider):
                         ProviderIdentity.model_validate(item)
                         for item in cached_entry["data"]
                     ]
-                except Exception:
+                except (ValidationError, KeyError, TypeError):
                     pass
 
         session = await self._get_session()
@@ -119,7 +121,7 @@ class LibriVoxProvider(MetadataProvider):
                 try:
                     data = cached_entry["data"][0]
                     return ProviderIdentity.model_validate(data)
-                except Exception:
+                except (ValidationError, KeyError, TypeError):
                     pass
 
         session = await self._get_session()

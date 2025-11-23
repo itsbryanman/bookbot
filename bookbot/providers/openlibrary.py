@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional
 
 import aiohttp
 from rapidfuzz import fuzz
+from pydantic import ValidationError
 
 from ..core.logging import get_logger
 from ..core.models import AudiobookSet, ProviderIdentity
@@ -85,7 +86,7 @@ class OpenLibraryProvider(MetadataProvider):
                         ProviderIdentity.model_validate(item)
                         for item in cached_entry["data"]
                     ]
-                except Exception:
+                except (ValidationError, KeyError, TypeError):
                     pass
 
         # If we have an ISBN, try that first
@@ -150,7 +151,7 @@ class OpenLibraryProvider(MetadataProvider):
 
                 return identities
 
-        except Exception:
+        except (aiohttp.ClientError, asyncio.TimeoutError, ValueError):
             return []
 
     async def _search_by_isbn(self, isbn: str) -> Optional[ProviderIdentity]:
@@ -168,7 +169,7 @@ class OpenLibraryProvider(MetadataProvider):
                 try:
                     data = cached_entry["data"][0]
                     return ProviderIdentity.model_validate(data)
-                except Exception:
+                except (ValidationError, KeyError, TypeError):
                     pass
 
         url = f"{self.BASE_URL}/api/books"
@@ -199,7 +200,7 @@ class OpenLibraryProvider(MetadataProvider):
                             )
                         return identity
 
-        except Exception:
+        except (aiohttp.ClientError, asyncio.TimeoutError, ValueError):
             pass
 
         return None
@@ -220,7 +221,7 @@ class OpenLibraryProvider(MetadataProvider):
                 try:
                     data = cached_entry["data"][0]
                     return ProviderIdentity.model_validate(data)
-                except Exception:
+                except (ValidationError, KeyError, TypeError):
                     pass
 
         url = f"{self.BASE_URL}{external_id}.json"
@@ -266,7 +267,7 @@ class OpenLibraryProvider(MetadataProvider):
                     )
                 return identity
 
-        except Exception:
+        except (aiohttp.ClientError, asyncio.TimeoutError, ValueError):
             return None
 
     def _parse_search_result(self, doc: Dict[str, Any]) -> Optional[ProviderIdentity]:
@@ -322,7 +323,7 @@ class OpenLibraryProvider(MetadataProvider):
                 raw_data=doc,
             )
 
-        except Exception:
+        except (KeyError, TypeError, ValueError):
             return None
 
     def _parse_book_data(
@@ -382,7 +383,7 @@ class OpenLibraryProvider(MetadataProvider):
                 raw_data=book_data,
             )
 
-        except Exception:
+        except (KeyError, TypeError, ValueError):
             return None
 
     def _pick_best_edition(self, editions: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -477,7 +478,7 @@ class OpenLibraryProvider(MetadataProvider):
                 raw_data=work_data,
             )
 
-        except Exception:
+        except (KeyError, TypeError, ValueError):
             return None
 
     def calculate_match_score(
