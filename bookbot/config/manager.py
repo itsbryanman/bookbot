@@ -21,6 +21,9 @@ class ConfigManager:
         self.config_dir.mkdir(parents=True, exist_ok=True)
         self.profiles_dir.mkdir(parents=True, exist_ok=True)
 
+        # Create default profiles if they don't exist
+        self.create_default_profiles()
+
         self._config: Config | None = None
 
     @staticmethod

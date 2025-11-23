@@ -1,5 +1,6 @@
 """Command-line interface for BookBot."""
 
+import shutil
 import sys
 from pathlib import Path
 from typing import Optional
@@ -100,9 +101,21 @@ def scan(
                     click.echo(f"     - {warning}")
 
         if dry_run:
-            click.echo(
-                "\nDry run completed. Use 'bookbot tui' for interactive processing."
-            )
+            click.echo("\n" + "─" * 60)
+            click.echo("✓ Scan completed. Next steps:")
+            click.echo("")
+            click.echo("  📱 Interactive mode:")
+            click.echo(f"     bookbot tui {folder}")
+            click.echo("")
+            click.echo("  🎵 Convert to M4B:")
+            if audiobook_sets:
+                example = audiobook_sets[0].source_path
+                click.echo(f"     bookbot convert \"{example}\" -o ./output --dry-run")
+            click.echo("")
+            click.echo("  ⚙️  View config:")
+            click.echo("     bookbot config show")
+            click.echo("")
+            click.echo("For more help, run: bookbot --help")
 
     except Exception as e:
         click.echo(f"Error scanning directory: {e}", err=True)
@@ -195,21 +208,46 @@ def convert(
     dry_run: bool,
 ) -> None:
     """Convert audiobooks to M4B format."""
+
+    # Pre-flight check: Ensure FFmpeg is installed
+    if not shutil.which("ffmpeg"):
+        click.echo("❌ Error: FFmpeg not found in PATH.", err=True)
+        click.echo("\nConversion requires FFmpeg. Please install it first:", err=True)
+        click.echo("  • Debian/Ubuntu: sudo apt install ffmpeg", err=True)
+        click.echo("  • macOS: brew install ffmpeg", err=True)
+        click.echo("  • Windows: winget install ffmpeg", err=True)
+        sys.exit(1)
+
     config_manager = ctx.obj["config_manager"]
 
     # Apply profile if specified
     if profile:
         if not config_manager.apply_profile(profile):
-            click.echo(f"Error: Profile '{profile}' not found", err=True)
+            profiles = config_manager.list_profiles()
+            click.echo(f"❌ Error: Profile '{profile}' not found", err=True)
+            if profiles:
+                click.echo("\nAvailable profiles:", err=True)
+                for name, prof in profiles.items():
+                    click.echo(f"  • {name}: {prof.description}", err=True)
+            else:
+                click.echo("\nNo profiles found. Profiles will be created automatically.", err=True)
             sys.exit(1)
 
     config = config_manager.load_config()
 
     # Check if conversion is enabled in config
     if not config.conversion.enabled:
-        click.echo("Error: M4B conversion is not enabled in configuration", err=True)
-        click.echo("Enable it with a conversion profile or modify your config")
-        sys.exit(1)
+        click.echo("⚠️  M4B conversion is currently disabled in your configuration.", err=True)
+        click.echo("")
+        if click.confirm("Would you like to enable it now?", default=True):
+            config.conversion.enabled = True
+            config_manager.save_config(config)
+            click.echo("✓ Conversion enabled and saved to config.")
+        else:
+            click.echo("\nTo enable conversion manually, edit:", err=True)
+            click.echo(f"  {config_manager.config_file}", err=True)
+            click.echo("\nSet: [conversion] enabled = true", err=True)
+            sys.exit(1)
 
     try:
         # Import conversion module
@@ -234,10 +272,20 @@ def convert(
         if dry_run:
             # Show conversion plan
             plan = pipeline.create_conversion_plan(folder, conv_config)
-            click.echo(
-                f"Conversion plan created with {len(plan.operations)} operation(s)"
-            )
-            # TODO: Display plan details
+            click.echo(f"\n📋 Conversion Plan ({len(plan.operations)} operation(s)):")
+            click.echo("─" * 60)
+            for i, op in enumerate(plan.operations, 1):
+                click.echo(f"\n{i}. {op.audiobook_set.source_path.name}")
+                click.echo(f"   Source: {op.audiobook_set.source_path}")
+                click.echo(f"   Output: {op.output_path}")
+                if op.audiobook_set.chosen_identity:
+                    identity = op.audiobook_set.chosen_identity
+                    click.echo(f"   Title: {identity.title}")
+                    if identity.author:
+                        click.echo(f"   Author: {identity.author}")
+            click.echo("\n" + "─" * 60)
+            click.echo("✓ Dry run complete. No files were modified.")
+            click.echo(f"\nTo execute, run the same command without --dry-run")
         else:
             # Execute conversion
             success = pipeline.convert_directory(folder, conv_config)
@@ -336,6 +384,137 @@ def config_reset(ctx: click.Context) -> None:
     config_manager = ctx.obj["config_manager"]
     config_manager.reset_to_defaults()
     click.echo("Configuration reset to defaults")
+
+
+@config.command("set")
+@click.argument("key", type=str)
+@click.argument("value", type=str)
+@click.pass_context
+def config_set(ctx: click.Context, key: str, value: str) -> None:
+    """Set a configuration value.
+
+    Examples:
+        bookbot config set conversion.enabled true
+        bookbot config set conversion.bitrate 256k
+        bookbot config set tagging.enabled false
+    """
+    config_manager = ctx.obj["config_manager"]
+    config = config_manager.load_config()
+
+    # Parse the key to get section and field
+    parts = key.split(".")
+    if len(parts) != 2:
+        click.echo("❌ Error: Key must be in format 'section.field'", err=True)
+        click.echo("\nExamples:", err=True)
+        click.echo("  bookbot config set conversion.enabled true", err=True)
+        click.echo("  bookbot config set conversion.bitrate 256k", err=True)
+        sys.exit(1)
+
+    section, field = parts
+
+    # Get the section object
+    if not hasattr(config, section):
+        click.echo(f"❌ Error: Unknown section '{section}'", err=True)
+        click.echo("\nAvailable sections: conversion, tagging, providers", err=True)
+        sys.exit(1)
+
+    section_obj = getattr(config, section)
+
+    # Check if field exists
+    if not hasattr(section_obj, field):
+        click.echo(f"❌ Error: Unknown field '{field}' in section '{section}'", err=True)
+        sys.exit(1)
+
+    # Convert value to appropriate type
+    original_value = getattr(section_obj, field)
+    if isinstance(original_value, bool):
+        value = value.lower() in ("true", "yes", "1", "on")
+    elif isinstance(original_value, int):
+        try:
+            value = int(value)
+        except ValueError:
+            click.echo(f"❌ Error: '{value}' is not a valid integer", err=True)
+            sys.exit(1)
+    elif isinstance(original_value, float):
+        try:
+            value = float(value)
+        except ValueError:
+            click.echo(f"❌ Error: '{value}' is not a valid number", err=True)
+            sys.exit(1)
+
+    # Set the value
+    setattr(section_obj, field, value)
+    config_manager.save_config(config)
+    click.echo(f"✓ Set {key} = {value}")
+
+
+@config.command("get")
+@click.argument("key", type=str)
+@click.pass_context
+def config_get(ctx: click.Context, key: str) -> None:
+    """Get a configuration value.
+
+    Example:
+        bookbot config get conversion.enabled
+    """
+    config_manager = ctx.obj["config_manager"]
+    config = config_manager.load_config()
+
+    # Parse the key
+    parts = key.split(".")
+    if len(parts) != 2:
+        click.echo("❌ Error: Key must be in format 'section.field'", err=True)
+        sys.exit(1)
+
+    section, field = parts
+
+    # Get the value
+    if not hasattr(config, section):
+        click.echo(f"❌ Error: Unknown section '{section}'", err=True)
+        sys.exit(1)
+
+    section_obj = getattr(config, section)
+
+    if not hasattr(section_obj, field):
+        click.echo(f"❌ Error: Unknown field '{field}' in section '{section}'", err=True)
+        sys.exit(1)
+
+    value = getattr(section_obj, field)
+    click.echo(f"{key} = {value}")
+
+
+@config.command("where")
+@click.pass_context
+def config_where(ctx: click.Context) -> None:
+    """Show the location of the configuration file."""
+    config_manager = ctx.obj["config_manager"]
+    click.echo(f"Configuration file: {config_manager.config_file}")
+    click.echo(f"Profiles directory: {config_manager.profiles_dir}")
+
+
+@config.command("edit")
+@click.pass_context
+def config_edit(ctx: click.Context) -> None:
+    """Open the configuration file in your default editor."""
+    import os
+    import subprocess
+
+    config_manager = ctx.obj["config_manager"]
+    config_file = config_manager.config_file
+
+    # Get editor from environment or use default
+    editor = os.environ.get("EDITOR", os.environ.get("VISUAL", "nano"))
+
+    try:
+        subprocess.run([editor, str(config_file)], check=True)
+        click.echo("✓ Configuration file closed")
+    except subprocess.CalledProcessError:
+        click.echo(f"❌ Error opening editor. Edit manually: {config_file}", err=True)
+        sys.exit(1)
+    except FileNotFoundError:
+        click.echo(f"❌ Editor '{editor}' not found.", err=True)
+        click.echo(f"\nEdit manually: {config_file}", err=True)
+        sys.exit(1)
 
 
 @cli.group()
