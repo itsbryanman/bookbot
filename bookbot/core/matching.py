@@ -3,7 +3,6 @@
 import re
 import unicodedata
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Set, Tuple
 
 from rapidfuzz import fuzz
 
@@ -22,24 +21,24 @@ class MatchScore:
     year_score: float
     combined_score: float
     confidence: str  # 'high' | 'medium' | 'low'
-    reasons: List[str]
+    reasons: list[str]
 
 
 class AdvancedMatcher:
     """Fuzzy matching for audiobook metadata."""
 
     # Common author aliases (expandable via JSON file)
-    AUTHOR_ALIASES: Dict[str, Set[str]] = {
+    AUTHOR_ALIASES: dict[str, set[str]] = {
         "j.k. rowling": {"joanne rowling", "robert galbraith"},
         "stephen king": {"richard bachman"},
         "iain banks": {"iain m. banks"},
     }
 
     # Articles to strip from titles
-    ARTICLES: Set[str] = {"the", "a", "an", "el", "la", "le", "der", "die"}
+    ARTICLES: set[str] = {"the", "a", "an", "el", "la", "le", "der", "die"}
 
     # Series detection patterns (pattern, confidence)
-    SERIES_PATTERNS: List[Tuple[re.Pattern[str], float]] = [
+    SERIES_PATTERNS: list[tuple[re.Pattern[str], float]] = [
         (re.compile(r"(.+?)\s+(?:book|vol(?:ume)?)\s+(\d+)", re.I), 0.95),
         (re.compile(r"(.+?)\s+#(\d+)", re.I), 0.90),
         (re.compile(r"(.+?)\s+part\s+(\d+)", re.I), 0.85),
@@ -122,7 +121,7 @@ class AdvancedMatcher:
 
         return ratio * 0.4 + token_set * 0.6
 
-    def extract_series(self, title: str) -> Optional[Tuple[str, Optional[int], float]]:
+    def extract_series(self, title: str) -> tuple[str, int | None, float] | None:
         """Extract (series_name, book_number, confidence) from title."""
         for pattern, confidence in self.SERIES_PATTERNS:
             match = pattern.search(title)
@@ -138,13 +137,13 @@ class AdvancedMatcher:
     def calculate_match(
         self,
         query_title: str,
-        query_author: Optional[str],
-        query_series: Optional[str],
-        query_year: Optional[int],
+        query_author: str | None,
+        query_series: str | None,
+        query_year: int | None,
         result_title: str,
-        result_authors: List[str],
-        result_series: Optional[str],
-        result_year: Optional[int],
+        result_authors: list[str],
+        result_series: str | None,
+        result_year: int | None,
     ) -> MatchScore:
         """Calculate comprehensive match score."""
 

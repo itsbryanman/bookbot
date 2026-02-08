@@ -2,7 +2,7 @@
 
 import asyncio
 import re
-from typing import List, Optional
+from typing import TYPE_CHECKING
 
 import aiohttp
 from bs4 import BeautifulSoup
@@ -11,11 +11,18 @@ from rapidfuzz import fuzz
 from ..core.models import AudiobookSet, ProviderIdentity
 from .base import MetadataProvider
 
+if TYPE_CHECKING:
+    from ..io.cache import CacheManager
+
 
 class AudibleProvider(MetadataProvider):
     """Provider for Audible audiobook metadata."""
 
-    def __init__(self, marketplace: str = "US", cache_manager=None):
+    def __init__(
+        self,
+        marketplace: str = "US",
+        cache_manager: "CacheManager | None" = None,
+    ) -> None:
         super().__init__("Audible", cache_manager=cache_manager)
         self.marketplace = marketplace.upper()
 
@@ -66,14 +73,14 @@ class AudibleProvider(MetadataProvider):
     async def search(
         self,
         *,
-        title: Optional[str] = None,
-        author: Optional[str] = None,
-        series: Optional[str] = None,
-        isbn: Optional[str] = None,
-        year: Optional[int] = None,
-        language: Optional[str] = None,
+        title: str | None = None,
+        author: str | None = None,
+        series: str | None = None,
+        isbn: str | None = None,
+        year: int | None = None,
+        language: str | None = None,
         limit: int = 10,
-    ) -> List[ProviderIdentity]:
+    ) -> list[ProviderIdentity]:
         """Search for audiobooks using Audible search."""
         session = await self._get_session()
 
@@ -111,7 +118,7 @@ class AudibleProvider(MetadataProvider):
         except (aiohttp.ClientError, asyncio.TimeoutError):
             return []
 
-    async def get_by_id(self, external_id: str) -> Optional[ProviderIdentity]:
+    async def get_by_id(self, external_id: str) -> ProviderIdentity | None:
         """Get audiobook details by Audible ASIN."""
         session = await self._get_session()
 
@@ -163,12 +170,15 @@ class AudibleProvider(MetadataProvider):
             cover_tag = item.select_one("img")
             cover_urls: list[str] = []
             if cover_tag and cover_tag.get("src"):
-                cover_url = cover_tag.get("src")
+                cover_url_raw = cover_tag.get("src")
+                cover_url = str(cover_url_raw) if cover_url_raw else ""
                 if cover_url.startswith("//"):
                     cover_url = "https:" + cover_url
-                cover_urls.append(cover_url)
+                if cover_url:
+                    cover_urls.append(cover_url)
 
-            product_href = link.get("href") if link else None
+            product_href_raw = link.get("href") if link else None
+            product_href = str(product_href_raw) if product_href_raw else None
             if product_href and product_href.startswith("/"):
                 product_url = f"https://www.{self.base_domain}{product_href}"
             else:
@@ -316,10 +326,12 @@ class AudibleProvider(MetadataProvider):
         cover_urls_list: list[str] = []
         cover_img = soup.select_one("img.bc-image-inset-border")
         if cover_img and cover_img.get("src"):
-            cover_url = cover_img.get("src")
+            cover_url_raw = cover_img.get("src")
+            cover_url = str(cover_url_raw) if cover_url_raw else ""
             if cover_url.startswith("//"):
                 cover_url = "https:" + cover_url
-            cover_urls_list.append(cover_url)
+            if cover_url:
+                cover_urls_list.append(cover_url)
         else:
             cover_pattern = (
                 r'<img[^>]*src="([^"]*audible[^"]*\.(jpg|png))"[^>]*'

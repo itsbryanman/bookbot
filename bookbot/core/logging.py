@@ -6,7 +6,7 @@ import logging.handlers
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any
 
 
 class StructuredLogger:
@@ -34,15 +34,13 @@ class StructuredLogger:
         # Console for errors only
         console = logging.StreamHandler(sys.stderr)
         console.setLevel(logging.ERROR)
-        console.setFormatter(
-            logging.Formatter("%(levelname)s: %(message)s")
-        )
+        console.setFormatter(logging.Formatter("%(levelname)s: %(message)s"))
         self.logger.addHandler(console)
 
     def _json_formatter(self) -> logging.Formatter:
         class JSONFormatter(logging.Formatter):
             def format(self, record: logging.LogRecord) -> str:
-                data: Dict[str, Any] = {
+                data: dict[str, Any] = {
                     "ts": datetime.utcnow().isoformat(),
                     "level": record.levelname,
                     "msg": record.getMessage(),
@@ -71,10 +69,10 @@ class StructuredLogger:
         self.logger.debug(msg, extra={"extra_data": kwargs})
 
 
-_loggers: Dict[str, StructuredLogger] = {}
+_loggers: dict[str, StructuredLogger] = {}
 
 
-def get_logger(name: str, log_dir: Optional[Path] = None) -> StructuredLogger:
+def get_logger(name: str, log_dir: Path | None = None) -> StructuredLogger:
     """Get or create logger."""
     if name not in _loggers:
         if log_dir is None:

@@ -124,7 +124,9 @@ class LocalMetadataProvider(MetadataProvider):
             elif suffix in {".nfo", ".info"}:
                 return self._parse_nfo(path)
         except (OSError, json.JSONDecodeError) as exc:
-            logger.warning("Failed to parse metadata file", path=str(path), exc=str(exc))
+            logger.warning(
+                "Failed to parse metadata file", path=str(path), exc=str(exc)
+            )
             return None
 
         return None
@@ -185,8 +187,9 @@ class LocalMetadataProvider(MetadataProvider):
     ) -> ProviderIdentity:
         authors = self._coerce_authors(metadata, audiobook_set)
         series_index = metadata.get("series_index")
+        year_raw = metadata.get("year")
         try:
-            year = int(metadata.get("year")) if metadata.get("year") else None
+            year = int(year_raw) if year_raw is not None else None
         except (TypeError, ValueError):
             year = None
 
@@ -205,11 +208,7 @@ class LocalMetadataProvider(MetadataProvider):
             series_name=metadata.get("series") or audiobook_set.series_guess,
             series_index=str(series_index) if series_index is not None else None,
             year=year,
-            language=(
-                metadata.get("language")
-                or audiobook_set.language_guess
-                or None
-            ),
+            language=(metadata.get("language") or audiobook_set.language_guess or None),
             narrator=metadata.get("narrator") or audiobook_set.narrator_guess,
             publisher=metadata.get("publisher"),
             isbn_10=metadata.get("isbn_10") or metadata.get("isbn"),
@@ -227,11 +226,13 @@ class LocalMetadataProvider(MetadataProvider):
         authors: list[str] = []
 
         if "authors" in metadata and isinstance(metadata["authors"], list):
-            authors.extend([str(author).strip() for author in metadata["authors"] if author])
+            authors.extend(
+                [str(author).strip() for author in metadata["authors"] if author]
+            )
         elif "authors" in metadata and isinstance(metadata["authors"], str):
             authors.extend(self._split_authors(metadata["authors"]))
         elif "author" in metadata and metadata["author"]:
-            authors.extend(self._split_authors(str(metadata["author"])) )
+            authors.extend(self._split_authors(str(metadata["author"])))
 
         if not authors and audiobook_set.author_guess:
             authors.append(audiobook_set.author_guess)
@@ -286,7 +287,9 @@ class LocalMetadataProvider(MetadataProvider):
         score = max(0.0, min(score, 1.0))
 
         # Ensure high confidence when the essentials are present
-        if metadata.get("title") and (metadata.get("authors") or metadata.get("author")):
+        if metadata.get("title") and (
+            metadata.get("authors") or metadata.get("author")
+        ):
             score = max(score, 0.9)
 
         return score, reasons
