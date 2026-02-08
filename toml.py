@@ -7,7 +7,7 @@ from collections.abc import Mapping
 from typing import Any
 
 try:  # Python 3.11+
-    import tomllib as _toml_reader
+    import tomllib as _toml_reader  # type: ignore[import-not-found]
 except ImportError:  # pragma: no cover - fallback for older interpreters
     _toml_reader = None  # type: ignore[assignment]
 
@@ -16,7 +16,7 @@ class TomlDecodeError(ValueError):
     """Mirror the exception type from the external toml package."""
 
 
-def load(fp) -> dict[str, Any]:
+def load(fp: Any) -> dict[str, Any]:
     """Load TOML data from a file-like object."""
     data = fp.read()
     return loads(data)
@@ -31,18 +31,20 @@ def loads(data: str | bytes) -> dict[str, Any]:
 
     if _toml_reader is not None:
         try:
-            return _toml_reader.loads(text)
+            result: dict[str, Any] = _toml_reader.loads(text)
+            return result
         except (ValueError, AttributeError) as exc:  # pragma: no cover - delegated errors
             raise TomlDecodeError(str(exc)) from exc
 
     # As a last resort parse via json for extremely simple configs
     try:
-        return json.loads(text)
+        json_result: dict[str, Any] = json.loads(text)
+        return json_result
     except json.JSONDecodeError as exc:  # pragma: no cover - alternate parsing path
         raise TomlDecodeError(str(exc)) from exc
 
 
-def dump(data: Mapping[str, Any], fp) -> None:
+def dump(data: Mapping[str, Any], fp: Any) -> None:
     """Serialize TOML data to a file-like object."""
     fp.write(dumps(data))
 
