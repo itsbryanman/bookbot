@@ -1,8 +1,8 @@
 """BookBot - A cross-platform TUI audiobook renamer and organizer."""
 
-__version__ = "0.2.2"
-__author__ = "BookBot"
-__email__ = "bookbot@example.com"
+__version__ = "0.3.0"
+__author__ = "itsbryanman"
+__email__ = "itsbryanman@users.noreply.github.com"
 
 
 def main() -> None:
