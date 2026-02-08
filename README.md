@@ -242,12 +242,16 @@ Textual ships with a live reload server: run `textual run --dev bookbot.tui.app:
 
 ## Contributing
 
-We welcome issues and pull requests. Please:
+I  welcome issues and pull requests. Please:
 
 1. Fork the repo and create a feature branch.
 2. Add or update tests under `tests/` for any new functionality.
 3. Run `make pre-commit` before submitting to keep style and typing checks green.
 4. Document user-facing changes in this README or the changelog if applicable.
+
+## did you like bookbot?
+[![Ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/itsbryandude)
+
 
 ## License
 
