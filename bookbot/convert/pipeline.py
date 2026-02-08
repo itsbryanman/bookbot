@@ -5,7 +5,7 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 
-import aiofiles
+import aiofiles  # type: ignore[import-untyped]
 import aiohttp
 
 from ..config.manager import ConfigManager
@@ -120,7 +120,7 @@ class ConversionPipeline:
         try:
             # Step 1: Convert tracks to AAC if needed
             aac_files = []
-            chapter_data = []
+            chapter_data: list[dict[str, object]] = []
             current_time = 0.0
 
             for track in sorted(
@@ -257,7 +257,7 @@ class ConversionPipeline:
             metadata["language"] = identity.language
 
         if identity.isbn_13 or identity.isbn_10:
-            metadata["isbn"] = identity.isbn_13 or identity.isbn_10
+            metadata["isbn"] = identity.isbn_13 or identity.isbn_10 or ""
 
         metadata["genre"] = "Audiobook"
         metadata["comment"] = "Converted by BookBot"

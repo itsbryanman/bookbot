@@ -1,9 +1,14 @@
 """Base provider interface for metadata sources."""
 
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
-from ..core.models import AudiobookSet, MatchCandidate, MatchConfidence, ProviderIdentity
+from ..core.models import (
+    AudiobookSet,
+    MatchCandidate,
+    MatchConfidence,
+    ProviderIdentity,
+)
 
 if TYPE_CHECKING:
     from ..io.cache import CacheManager
@@ -12,9 +17,7 @@ if TYPE_CHECKING:
 class MetadataProvider(ABC):
     """Abstract base class for metadata providers."""
 
-    def __init__(
-        self, name: str, cache_manager: Optional["CacheManager"] = None
-    ) -> None:
+    def __init__(self, name: str, cache_manager: "CacheManager | None" = None) -> None:
         self.name = name
         self.cache_manager = cache_manager
 
@@ -38,9 +41,8 @@ class MetadataProvider(ABC):
         """Get a book by its external ID."""
         pass
 
-    async def close(self) -> None:
+    async def close(self) -> None:  # noqa: B027
         """Close any open connections. Override in subclasses as needed."""
-        pass
 
     @abstractmethod
     def calculate_match_score(

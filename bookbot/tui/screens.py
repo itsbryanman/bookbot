@@ -53,8 +53,7 @@ class DRMLoginScreen(Static):
         if AudibleAuthClient is None:
             self.auth_client = None
             self._auth_error = (
-                "Audible DRM support is not available "
-                "(missing dependencies)."
+                "Audible DRM support is not available " "(missing dependencies)."
             )
         else:
             try:

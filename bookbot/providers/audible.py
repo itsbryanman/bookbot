@@ -141,7 +141,8 @@ class AudibleProvider(MetadataProvider):
         identities: list[ProviderIdentity] = []
 
         for item in soup.select("[data-asin]"):
-            asin = item.get("data-asin")
+            asin_raw = item.get("data-asin")
+            asin = str(asin_raw) if asin_raw else ""
             if not asin:
                 continue
 

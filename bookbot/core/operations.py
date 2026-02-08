@@ -4,8 +4,8 @@ import json
 import uuid
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
-from mutagen import File as MutagenFile
 from mutagen import MutagenError
 
 from ..config.manager import ConfigManager
@@ -324,7 +324,7 @@ class TagManager:
             print(f"Failed to apply tags to {track.src_path}: {e}")
             return False
 
-    def _write_all_tags(self, audio_file: MutagenFile, new_tags: AudioTags) -> None:
+    def _write_all_tags(self, audio_file: Any, new_tags: AudioTags) -> None:
         """Write all tags, overwriting existing ones."""
         tag_mapping = {
             "title": new_tags.title,
@@ -342,7 +342,7 @@ class TagManager:
                 audio_file[key] = value
 
     def _write_missing_tags(
-        self, audio_file: MutagenFile, new_tags: AudioTags, original_tags: AudioTags
+        self, audio_file: Any, new_tags: AudioTags, original_tags: AudioTags
     ) -> None:
         """Write tags only if they don't already exist."""
         tag_mapping = {
