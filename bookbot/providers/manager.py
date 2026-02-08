@@ -86,12 +86,12 @@ class ProviderManager:
             if hasattr(provider, "close"):
                 await provider.close()
 
-    def list_providers(self) -> dict[str, dict[str, str]]:
+    def list_providers(self) -> dict[str, dict[str, object]]:
         """List all available providers with their status."""
         config = self.config_manager.load_config()
         provider_config = config.providers
 
-        providers_info = {
+        providers_info: dict[str, dict[str, object]] = {
             "openlibrary": {
                 "name": "Open Library",
                 "status": "enabled" if "openlibrary" in self.providers else "disabled",

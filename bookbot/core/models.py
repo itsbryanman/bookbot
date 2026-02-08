@@ -144,7 +144,8 @@ class MatchCandidate(BaseModel):
     match_reasons: list[str] = Field(default_factory=list)
 
     @field_validator("confidence_level", mode="before")
-    def set_confidence_level(cls, v, info: ValidationInfo) -> MatchConfidence:
+    @classmethod
+    def set_confidence_level(cls, v: Any, info: ValidationInfo) -> MatchConfidence:
         if v is not None and v is not PydanticUndefined:
             return MatchConfidence(v)
 

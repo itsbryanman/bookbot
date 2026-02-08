@@ -285,8 +285,8 @@ def convert(
                 if op.audiobook_set.chosen_identity:
                     identity = op.audiobook_set.chosen_identity
                     click.echo(f"   Title: {identity.title}")
-                    if identity.author:
-                        click.echo(f"   Author: {identity.author}")
+                    if identity.authors:
+                        click.echo(f"   Author: {', '.join(identity.authors)}")
             click.echo("\n" + "─" * 60)
             click.echo("✓ Dry run complete. No files were modified.")
             click.echo("\nTo execute, run the same command without --dry-run")
@@ -433,23 +433,24 @@ def config_set(ctx: click.Context, key: str, value: str) -> None:
 
     # Convert value to appropriate type
     original_value = getattr(section_obj, field)
+    converted_value: object = value
     if isinstance(original_value, bool):
-        value = value.lower() in ("true", "yes", "1", "on")
+        converted_value = value.lower() in ("true", "yes", "1", "on")
     elif isinstance(original_value, int):
         try:
-            value = int(value)
+            converted_value = int(value)
         except ValueError:
             click.echo(f"❌ Error: '{value}' is not a valid integer", err=True)
             sys.exit(1)
     elif isinstance(original_value, float):
         try:
-            value = float(value)
+            converted_value = float(value)
         except ValueError:
             click.echo(f"❌ Error: '{value}' is not a valid number", err=True)
             sys.exit(1)
 
     # Set the value
-    setattr(section_obj, field, value)
+    setattr(section_obj, field, converted_value)
     config_manager.save_config(config)
     click.echo(f"✓ Set {key} = {value}")
 
@@ -896,7 +897,7 @@ def audible_import(
     default="us",
     help="us (default) / au / in / de / fr / jp / uk (untested)",
 )
-def get_activation_bytes(username, password, lang):
+def get_activation_bytes(username: str, password: str, lang: str) -> None:
     """Get activation bytes from Audible using your username and password."""
     try:
         import base64
@@ -904,8 +905,8 @@ def get_activation_bytes(username, password, lang):
         import hashlib
         from urllib.parse import parse_qsl, urlencode, urlparse
 
-        import requests
-        from selenium import webdriver
+        import requests  # type: ignore[import-untyped]
+        from selenium import webdriver  # type: ignore[import-not-found]
 
         def extract_activation_bytes(data: bytes):  # type: ignore[no-untyped-def]
             if (b"BAD_LOGIN" in data or b"Whoops" in data) or b"group_id" not in data:
