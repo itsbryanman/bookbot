@@ -76,7 +76,9 @@ async def test_local_provider_reads_nfo(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio()
-async def test_local_provider_returns_empty_when_missing_metadata(tmp_path: Path) -> None:
+async def test_local_provider_returns_empty_when_missing_metadata(
+    tmp_path: Path,
+) -> None:
     """No sidecar files should result in no matches."""
     audiobook_set = AudiobookSet(source_path=tmp_path)
 

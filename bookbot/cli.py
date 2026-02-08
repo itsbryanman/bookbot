@@ -3,7 +3,6 @@
 import shutil
 import sys
 from pathlib import Path
-from typing import Optional
 
 import click
 
@@ -110,7 +109,7 @@ def scan(
             click.echo("  🎵 Convert to M4B:")
             if audiobook_sets:
                 example = audiobook_sets[0].source_path
-                click.echo(f"     bookbot convert \"{example}\" -o ./output --dry-run")
+                click.echo(f'     bookbot convert "{example}" -o ./output --dry-run')
             click.echo("")
             click.echo("  ⚙️  View config:")
             click.echo("     bookbot config show")
@@ -230,14 +229,19 @@ def convert(
                 for name, prof in profiles.items():
                     click.echo(f"  • {name}: {prof.description}", err=True)
             else:
-                click.echo("\nNo profiles found. Profiles will be created automatically.", err=True)
+                click.echo(
+                    "\nNo profiles found. Profiles will be created automatically.",
+                    err=True,
+                )
             sys.exit(1)
 
     config = config_manager.load_config()
 
     # Check if conversion is enabled in config
     if not config.conversion.enabled:
-        click.echo("⚠️  M4B conversion is currently disabled in your configuration.", err=True)
+        click.echo(
+            "⚠️  M4B conversion is currently disabled in your configuration.", err=True
+        )
         click.echo("")
         if click.confirm("Would you like to enable it now?", default=True):
             config.conversion.enabled = True
@@ -281,11 +285,11 @@ def convert(
                 if op.audiobook_set.chosen_identity:
                     identity = op.audiobook_set.chosen_identity
                     click.echo(f"   Title: {identity.title}")
-                    if identity.author:
-                        click.echo(f"   Author: {identity.author}")
+                    if identity.authors:
+                        click.echo(f"   Author: {', '.join(identity.authors)}")
             click.echo("\n" + "─" * 60)
             click.echo("✓ Dry run complete. No files were modified.")
-            click.echo(f"\nTo execute, run the same command without --dry-run")
+            click.echo("\nTo execute, run the same command without --dry-run")
         else:
             # Execute conversion
             success = pipeline.convert_directory(folder, conv_config)
@@ -422,28 +426,31 @@ def config_set(ctx: click.Context, key: str, value: str) -> None:
 
     # Check if field exists
     if not hasattr(section_obj, field):
-        click.echo(f"❌ Error: Unknown field '{field}' in section '{section}'", err=True)
+        click.echo(
+            f"❌ Error: Unknown field '{field}' in section '{section}'", err=True
+        )
         sys.exit(1)
 
     # Convert value to appropriate type
     original_value = getattr(section_obj, field)
+    converted_value: object = value
     if isinstance(original_value, bool):
-        value = value.lower() in ("true", "yes", "1", "on")
+        converted_value = value.lower() in ("true", "yes", "1", "on")
     elif isinstance(original_value, int):
         try:
-            value = int(value)
+            converted_value = int(value)
         except ValueError:
             click.echo(f"❌ Error: '{value}' is not a valid integer", err=True)
             sys.exit(1)
     elif isinstance(original_value, float):
         try:
-            value = float(value)
+            converted_value = float(value)
         except ValueError:
             click.echo(f"❌ Error: '{value}' is not a valid number", err=True)
             sys.exit(1)
 
     # Set the value
-    setattr(section_obj, field, value)
+    setattr(section_obj, field, converted_value)
     config_manager.save_config(config)
     click.echo(f"✓ Set {key} = {value}")
 
@@ -476,7 +483,9 @@ def config_get(ctx: click.Context, key: str) -> None:
     section_obj = getattr(config, section)
 
     if not hasattr(section_obj, field):
-        click.echo(f"❌ Error: Unknown field '{field}' in section '{section}'", err=True)
+        click.echo(
+            f"❌ Error: Unknown field '{field}' in section '{section}'", err=True
+        )
         sys.exit(1)
 
     value = getattr(section_obj, field)
@@ -774,9 +783,9 @@ def audible_auth(ctx: click.Context, country: str) -> None:
 def audible_import(
     ctx: click.Context,
     numbers: str,
-    output_dir: Optional[Path],
+    output_dir: Path | None,
     remove_drm: bool,
-    activation_bytes: Optional[str],
+    activation_bytes: str | None,
 ) -> None:
     """Import Audible books by number from 'audible list' (e.g., '1,2,3' or '1')."""
     import json
@@ -788,7 +797,9 @@ def audible_import(
         # Load cached library
         cache_file = Path.home() / ".config" / "bookbot" / ".audible_library_cache.json"
         if not cache_file.exists():
-            click.echo("❌ No library cache found. Run 'bookbot audible list' first.", err=True)
+            click.echo(
+                "❌ No library cache found. Run 'bookbot audible list' first.", err=True
+            )
             sys.exit(1)
 
         library = json.loads(cache_file.read_text())
@@ -804,7 +815,11 @@ def audible_import(
         # Validate indices
         invalid = [i + 1 for i in book_indices if i < 0 or i >= len(library)]
         if invalid:
-            click.echo(f"❌ Invalid book numbers: {invalid}. Library has {len(library)} books.", err=True)
+            click.echo(
+                f"❌ Invalid book numbers: {invalid}. "
+                f"Library has {len(library)} books.",
+                err=True,
+            )
             sys.exit(1)
 
         if not output_dir:
@@ -816,7 +831,9 @@ def audible_import(
 
         # Check if authenticated
         if not client._load_stored_auth():
-            click.echo("❌ Not authenticated. Run 'bookbot audible auth' first.", err=True)
+            click.echo(
+                "❌ Not authenticated. Run 'bookbot audible auth' first.", err=True
+            )
             sys.exit(1)
 
         # Import each book
@@ -827,7 +844,9 @@ def audible_import(
             asin = book.get("asin", "")
             title = book.get("title", "Unknown")
 
-            click.echo(f"[{book_indices.index(idx) + 1}/{len(book_indices)}] {title} [{asin}]")
+            click.echo(
+                f"[{book_indices.index(idx) + 1}/{len(book_indices)}] {title} [{asin}]"
+            )
 
             # Download the book
             book_path = output_dir / f"{asin}.aax"
@@ -844,7 +863,9 @@ def audible_import(
                         activation_bytes = client.get_activation_bytes()
 
                     if not activation_bytes:
-                        click.echo("  ⚠️  No activation bytes available. Skipping DRM removal.")
+                        click.echo(
+                            "  ⚠️  No activation bytes available. Skipping DRM removal."
+                        )
                     else:
                         remover = DRMRemover(activation_bytes=activation_bytes)
                         result = remover.remove_drm(book_path)
@@ -852,13 +873,16 @@ def audible_import(
                         if result.success:
                             click.echo(f"  ✅ DRM removed: {result.output_file}")
                         else:
-                            click.echo(f"  ❌ DRM removal failed: {result.error_message}", err=True)
+                            click.echo(
+                                f"  ❌ DRM removal failed: {result.error_message}",
+                                err=True,
+                            )
             else:
-                click.echo(f"  ❌ Download failed")
+                click.echo("  ❌ Download failed")
 
             click.echo("")
 
-        click.echo(f"✨ Import complete!")
+        click.echo("✨ Import complete!")
 
     except Exception as e:
         click.echo(f"Import failed: {e}", err=True)
@@ -873,22 +897,23 @@ def audible_import(
     default="us",
     help="us (default) / au / in / de / fr / jp / uk (untested)",
 )
-def get_activation_bytes(username, password, lang):
+def get_activation_bytes(username: str, password: str, lang: str) -> None:
     """Get activation bytes from Audible using your username and password."""
     try:
-        from selenium import webdriver
         import base64
-        import hashlib
         import binascii
-        import requests
-        from urllib.parse import urlencode, urlparse, parse_qsl
+        import hashlib
+        from urllib.parse import parse_qsl, urlencode, urlparse
 
-        def extract_activation_bytes(data: bytes):
+        import requests  # type: ignore[import-untyped]
+        from selenium import webdriver  # type: ignore[import-not-found]
+
+        def extract_activation_bytes(data: bytes):  # type: ignore[no-untyped-def]
             if (b"BAD_LOGIN" in data or b"Whoops" in data) or b"group_id" not in data:
                 raise Exception("Activation failed! Please check your credentials.")
             k = data.rfind(b"group_id")
-            l = data[k:].find(b")")
-            keys = data[k + l + 1 + 1 :]
+            end_paren = data[k:].find(b")")
+            keys = data[k + end_paren + 1 + 1 :]
             output_keys = []
             for i in range(0, 8):
                 key = keys[i * 70 + i : (i + 1) * 70 + i]
@@ -898,7 +923,12 @@ def get_activation_bytes(username, password, lang):
 
             activation_bytes = output_keys[0].replace(b",", b"")[0:8]
             activation_bytes = b"".join(
-                reversed([activation_bytes[i : i + 2] for i in range(0, len(activation_bytes), 2)])
+                reversed(
+                    [
+                        activation_bytes[i : i + 2]
+                        for i in range(0, len(activation_bytes), 2)
+                    ]
+                )
             )
             return activation_bytes.decode("ascii")
 
@@ -916,10 +946,15 @@ def get_activation_bytes(username, password, lang):
         elif lang != "us":
             base_url = base_url.replace(".com", "." + lang)
 
-        player_id = base64.encodebytes(hashlib.sha1(b"").digest()).rstrip().decode("ascii")
+        player_id = (
+            base64.encodebytes(hashlib.sha1(b"").digest()).rstrip().decode("ascii")
+        )
 
         opts = webdriver.ChromeOptions()
-        opts.add_argument("user-agent=Mozilla/5.0 (Windows NT 6.1; WOW64; Trident/7.0; AS; rv:11.0) like Gecko")
+        opts.add_argument(
+            "user-agent=Mozilla/5.0 (Windows NT 6.1; "
+            "WOW64; Trident/7.0; AS; rv:11.0) like Gecko"
+        )
         opts.add_argument("--headless")
         opts.add_argument("--no-sandbox")
         opts.add_argument("--disable-dev-shm-usage")
@@ -935,21 +970,33 @@ def get_activation_bytes(username, password, lang):
         else:
             chromedriver_path = "./chromedriver"
 
-        with webdriver.Chrome(options=opts, executable_path=chromedriver_path) as driver:
+        with webdriver.Chrome(
+            options=opts, executable_path=chromedriver_path
+        ) as driver:
             payload = {
                 "openid.ns": "http://specs.openid.net/auth/2.0",
                 "openid.identity": "http://specs.openid.net/auth/2.0/identifier_select",
                 "openid.claimed_id": "http://specs.openid.net/auth/2.0/identifier_select",
                 "openid.mode": "logout",
                 "openid.assoc_handle": "amzn_audible_" + lang,
-                "openid.return_to": base_url
-                + "player-auth-token?playerType=software&playerId=%s=&bp_ua=y&playerModel=Desktop&playerManufacturer=Audible"
-                % (player_id),
+                "openid.return_to": (
+                    base_url
+                    + "player-auth-token?playerType=software"
+                    + f"&playerId={player_id}="
+                    + "&bp_ua=y&playerModel=Desktop"
+                    + "&playerManufacturer=Audible"
+                ),
             }
             if "@" in username:
                 login_url = "https://www.amazon.com/ap/signin?"
             else:
-                login_url = "https://www.audible.com/sign-in/ref=ap_to_private?forcePrivateSignIn=true&rdPath=https%3A%2F%2Fwww.audible.com%2F%3F"
+                login_url = (
+                    "https://www.audible.com/sign-in/"
+                    "ref=ap_to_private?"
+                    "forcePrivateSignIn=true"
+                    "&rdPath=https%3A%2F%2Fwww.audible.com"
+                    "%2F%3F"
+                )
 
             query_string = urlencode(payload)
             url = login_url + query_string
@@ -961,15 +1008,23 @@ def get_activation_bytes(username, password, lang):
             search_box = driver.find_element_by_id("ap_password")
             search_box.send_keys(password)
             search_box.submit()
+            import time
+
             time.sleep(2)
 
-            click.echo("ATTENTION: Now you may have to enter a one-time password manually. Once you are done, press enter to continue...")
+            click.echo(
+                "ATTENTION: Now you may have to enter a "
+                "one-time password manually. Once you are "
+                "done, press enter to continue..."
+            )
             input()
 
             driver.get(
                 base_url
-                + "player-auth-token?playerType=software&bp_ua=y&playerModel=Desktop&playerId=%s&playerManufacturer=Audible&serial="
-                % (player_id)
+                + "player-auth-token?playerType=software"
+                + "&bp_ua=y&playerModel=Desktop"
+                + f"&playerId={player_id}"
+                + "&playerManufacturer=Audible&serial="
             )
             current_url = driver.current_url
             o = urlparse(current_url)
@@ -1002,6 +1057,7 @@ def get_activation_bytes(username, password, lang):
             click.echo(f"Activation bytes: {activation_bytes}")
 
             from .drm.secure_storage import save_activation_bytes
+
             save_activation_bytes(activation_bytes)
             click.echo("Activation bytes saved securely.")
 
@@ -1015,7 +1071,7 @@ def get_activation_bytes(username, password, lang):
 @audible.command("list")
 @click.option("--limit", type=int, help="Maximum number of books to show")
 @click.pass_context
-def audible_list(ctx: click.Context, limit: Optional[int]) -> None:
+def audible_list(ctx: click.Context, limit: int | None) -> None:
     """List user's Audible library with numbers for easy importing."""
     try:
         from .drm.audible_client import AudibleAuthClient
@@ -1040,6 +1096,7 @@ def audible_list(ctx: click.Context, limit: Optional[int]) -> None:
         cache_file = Path.home() / ".config" / "bookbot" / ".audible_library_cache.json"
         cache_file.parent.mkdir(parents=True, exist_ok=True)
         import json
+
         cache_file.write_text(json.dumps(library, indent=2))
 
         display_count = len(library) if limit is None else min(limit, len(library))
@@ -1056,9 +1113,11 @@ def audible_list(ctx: click.Context, limit: Optional[int]) -> None:
             click.echo(f"{i:3}. {title} - {author_str} [{asin}]")
 
         if limit and len(library) > limit:
-            click.echo(f"\n... and {len(library) - limit} more (use --limit to show all)")
+            click.echo(
+                f"\n... and {len(library) - limit} more (use --limit to show all)"
+            )
 
-        click.echo(f"\n💡 To import books, use: bookbot audible import 1,2,3")
+        click.echo("\n💡 To import books, use: bookbot audible import 1,2,3")
 
     except Exception as e:
         click.echo(f"Failed to list library: {e}", err=True)
@@ -1190,6 +1249,7 @@ def drm_remove(
     if not activation_bytes:
         try:
             from .drm.audible_client import AudibleAuthClient
+
             client = AudibleAuthClient()
             if client.is_authenticated():
                 click.echo("Attempting to automatically fetch activation bytes...")

@@ -76,6 +76,7 @@ include = ["bookbot*"]
 [tool.black]
 line-length = 88
 target-version = ['py310']
+extend-exclude = "bookbot/drm"
 
 [tool.mypy]
 python_version = "3.10"
@@ -85,10 +86,16 @@ disallow_untyped_defs = true
 disallow_incomplete_defs = true
 check_untyped_defs = true
 disallow_untyped_decorators = true
+exclude = ["bookbot/drm/"]
+
+[[tool.mypy.overrides]]
+module = "bookbot.drm.*"
+ignore_errors = true
 
 [tool.ruff]
 target-version = "py310"
 line-length = 88
+extend-exclude = ["bookbot/drm"]
 
 [tool.ruff.lint]
 select = [

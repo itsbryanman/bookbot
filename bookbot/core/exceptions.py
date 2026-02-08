@@ -1,6 +1,6 @@
 """Exception hierarchy with structured error details."""
 
-from typing import Any, Dict, Optional
+from typing import Any
 
 
 class BookBotError(Exception):
@@ -9,7 +9,7 @@ class BookBotError(Exception):
     def __init__(
         self,
         message: str,
-        details: Optional[Dict[str, Any]] = None,
+        details: dict[str, Any] | None = None,
         recoverable: bool = False,
     ):
         super().__init__(message)

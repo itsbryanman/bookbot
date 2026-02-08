@@ -5,10 +5,10 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 try:
-    from playwright.sync_api import sync_playwright, Browser, Page, BrowserContext
+    from playwright.sync_api import Browser, BrowserContext, Page, sync_playwright
 
     HAS_PLAYWRIGHT = True
 except ModuleNotFoundError:
@@ -107,7 +107,7 @@ class AudibleBrowserAuth:
             "IN": "audible.in",
         }
         self.base_domain = self.marketplace_domains.get(country_code, "audible.com")
-        self.cookies: List[Dict[str, Any]] = []
+        self.cookies: list[dict[str, Any]] = []
 
     def authenticate(self, headless: bool = False) -> bool:
         """
@@ -327,7 +327,7 @@ class AudibleBrowserAuth:
         Returns:
             True if cookies loaded successfully, False otherwise
         """
-        cookie_data_str: Optional[str] = None
+        cookie_data_str: str | None = None
 
         # Try keyring first
         if keyring is not None:
@@ -368,7 +368,7 @@ class AudibleBrowserAuth:
             print(f"⚠️ Failed to load cookies: {e}")
             return False
 
-    def get_cookies_dict(self) -> Dict[str, str]:
+    def get_cookies_dict(self) -> dict[str, str]:
         """
         Get cookies as a simple dict for use with requests.
 
@@ -377,7 +377,7 @@ class AudibleBrowserAuth:
         """
         return {cookie["name"]: cookie["value"] for cookie in self.cookies}
 
-    def get_cookies_for_domain(self, domain: Optional[str] = None) -> List[Dict[str, Any]]:
+    def get_cookies_for_domain(self, domain: str | None = None) -> list[dict[str, Any]]:
         """
         Get cookies filtered by domain.
 
