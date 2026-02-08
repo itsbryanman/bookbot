@@ -4,9 +4,6 @@ import base64
 import binascii
 import hashlib
 import sys
-import time
-from pathlib import Path
-from typing import Tuple, List
 
 import requests
 from selenium import webdriver
@@ -14,13 +11,12 @@ from selenium import webdriver
 PY3 = sys.version_info[0] == 3
 
 if PY3:
-    from urllib.parse import urlencode, urlparse, parse_qsl
+    from urllib.parse import parse_qsl, urlparse
 else:
-    from urllib import urlencode
-    from urlparse import urlparse, parse_qsl
+    from urlparse import parse_qsl, urlparse
 
 
-def extract_activation_bytes(data: bytes) -> Tuple[str, List[str]]:
+def extract_activation_bytes(data: bytes) -> tuple[str, list[str]]:
     """Extracts activation bytes from the activation blob."""
     if (b"BAD_LOGIN" in data or b"Whoops" in data) or b"group_id" not in data:
         raise Exception("Activation failed. Please check your credentials.")

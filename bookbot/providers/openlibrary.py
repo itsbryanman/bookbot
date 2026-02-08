@@ -3,17 +3,20 @@
 import asyncio
 import re
 import time
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any
 
 import aiohttp
-from rapidfuzz import fuzz
 from pydantic import ValidationError
+from rapidfuzz import fuzz
 
 from ..core.logging import get_logger
 from ..core.models import AudiobookSet, ProviderIdentity
 from .base import MetadataProvider
 
-logger = get_logger('openlibrary_provider')
+if TYPE_CHECKING:
+    from ..io.cache import CacheManager
+
+logger = get_logger("openlibrary_provider")
 
 
 class OpenLibraryProvider(MetadataProvider):
@@ -23,9 +26,9 @@ class OpenLibraryProvider(MetadataProvider):
     API_TIMEOUT = 30
     RATE_LIMIT_DELAY = 0.1  # 100ms between requests
 
-    def __init__(self, cache_manager=None):
+    def __init__(self, cache_manager: "CacheManager | None" = None) -> None:
         super().__init__("Open Library", cache_manager=cache_manager)
-        self._session: Optional[aiohttp.ClientSession] = None
+        self._session: aiohttp.ClientSession | None = None
         self._last_request_time = 0.0
 
     async def _get_session(self) -> aiohttp.ClientSession:
@@ -55,14 +58,14 @@ class OpenLibraryProvider(MetadataProvider):
     async def search(
         self,
         *,
-        title: Optional[str] = None,
-        author: Optional[str] = None,
-        series: Optional[str] = None,
-        isbn: Optional[str] = None,
-        year: Optional[int] = None,
-        language: Optional[str] = None,
+        title: str | None = None,
+        author: str | None = None,
+        series: str | None = None,
+        isbn: str | None = None,
+        year: int | None = None,
+        language: str | None = None,
         limit: int = 10,
-    ) -> List[ProviderIdentity]:
+    ) -> list[ProviderIdentity]:
         """Search Open Library for books."""
         await self._rate_limit()
 
@@ -154,7 +157,7 @@ class OpenLibraryProvider(MetadataProvider):
         except (aiohttp.ClientError, asyncio.TimeoutError, ValueError):
             return []
 
-    async def _search_by_isbn(self, isbn: str) -> Optional[ProviderIdentity]:
+    async def _search_by_isbn(self, isbn: str) -> ProviderIdentity | None:
         """Search by ISBN using the books API."""
         clean_isbn = re.sub(r"[^0-9X]", "", isbn.upper())
         if not clean_isbn:
@@ -205,7 +208,7 @@ class OpenLibraryProvider(MetadataProvider):
 
         return None
 
-    async def get_by_id(self, external_id: str) -> Optional[ProviderIdentity]:
+    async def get_by_id(self, external_id: str) -> ProviderIdentity | None:
         """Get a book by Open Library ID."""
         await self._rate_limit()
 
@@ -270,7 +273,7 @@ class OpenLibraryProvider(MetadataProvider):
         except (aiohttp.ClientError, asyncio.TimeoutError, ValueError):
             return None
 
-    def _parse_search_result(self, doc: Dict[str, Any]) -> Optional[ProviderIdentity]:
+    def _parse_search_result(self, doc: dict[str, Any]) -> ProviderIdentity | None:
         """Parse a search result document into a ProviderIdentity."""
         try:
             key = doc.get("key", "")
@@ -327,8 +330,8 @@ class OpenLibraryProvider(MetadataProvider):
             return None
 
     def _parse_book_data(
-        self, book_data: Dict[str, Any], isbn: str
-    ) -> Optional[ProviderIdentity]:
+        self, book_data: dict[str, Any], isbn: str
+    ) -> ProviderIdentity | None:
         """Parse book data from the books API."""
         try:
             title = book_data.get("title", "")
@@ -386,10 +389,10 @@ class OpenLibraryProvider(MetadataProvider):
         except (KeyError, TypeError, ValueError):
             return None
 
-    def _pick_best_edition(self, editions: List[Dict[str, Any]]) -> Dict[str, Any]:
+    def _pick_best_edition(self, editions: list[dict[str, Any]]) -> dict[str, Any]:
         """Pick the best edition from a list based on data completeness."""
 
-        def score_edition(edition: Dict[str, Any]) -> int:
+        def score_edition(edition: dict[str, Any]) -> int:
             score = 0
 
             # Prefer editions with ISBN
@@ -410,8 +413,8 @@ class OpenLibraryProvider(MetadataProvider):
         return max(editions, key=score_edition)
 
     def _parse_work_and_edition(
-        self, work_data: Dict[str, Any], edition_data: Dict[str, Any]
-    ) -> Optional[ProviderIdentity]:
+        self, work_data: dict[str, Any], edition_data: dict[str, Any]
+    ) -> ProviderIdentity | None:
         """Combine work and edition data into a ProviderIdentity."""
         # Start with work data
         identity = self._parse_work_data(work_data)
@@ -451,7 +454,7 @@ class OpenLibraryProvider(MetadataProvider):
 
         return identity
 
-    def _parse_work_data(self, work_data: Dict[str, Any]) -> Optional[ProviderIdentity]:
+    def _parse_work_data(self, work_data: dict[str, Any]) -> ProviderIdentity | None:
         """Parse work data into a ProviderIdentity."""
         try:
             key = work_data.get("key", "")
@@ -461,7 +464,7 @@ class OpenLibraryProvider(MetadataProvider):
                 return None
 
             # Parse authors
-            authors = []
+            authors: list[str] = []
             if "authors" in work_data:
                 for author_ref in work_data["authors"]:
                     if "author" in author_ref and "key" in author_ref["author"]:
