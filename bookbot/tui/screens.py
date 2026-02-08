@@ -3,11 +3,11 @@
 import asyncio
 from asyncio import to_thread
 from pathlib import Path
+from typing import Any
 
 from textual.app import ComposeResult
 from textual.containers import Container, Horizontal
 from textual.message import Message
-from textual.screen import Screen
 from textual.widgets import (
     Button,
     Checkbox,
@@ -20,10 +20,14 @@ from textual.widgets import (
 )
 
 from ..config.manager import ConfigManager
-from ..core.models import AudiobookSet, RenameOperation
+from ..core.models import AudiobookSet, MatchCandidate, RenameOperation
 from ..core.operations import TransactionManager
-from ..drm.audible_client import AudibleAuthClient
 from ..providers.base import MetadataProvider
+
+try:
+    from ..drm.audible_client import AudibleAuthClient
+except Exception:  # pragma: no cover
+    AudibleAuthClient = None  # type: ignore[assignment,misc]
 
 
 class LoginSuccess(Message):
@@ -38,21 +42,27 @@ class LoginFailure(Message):
         self.error = error
 
 
-class DRMLoginScreen(Screen):
-    """Screen for handling Audible DRM login."""
+class DRMLoginScreen(Static):
+    """Widget for handling Audible DRM login."""
 
-    def __init__(self, *args, **kwargs) -> None:
-        super().__init__(*args, **kwargs)
-        self.auth_client: AudibleAuthClient | None
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.auth_client: Any | None
         self._auth_error: str | None
 
-        try:
-            self.auth_client = AudibleAuthClient()
-        except ImportError as exc:
+        if AudibleAuthClient is None:
             self.auth_client = None
-            self._auth_error = str(exc)
+            self._auth_error = (
+                "Audible DRM support is not available " "(missing dependencies)."
+            )
         else:
-            self._auth_error = None
+            try:
+                self.auth_client = AudibleAuthClient()
+            except Exception as exc:
+                self.auth_client = None
+                self._auth_error = str(exc)
+            else:
+                self._auth_error = None
 
     def compose(self) -> ComposeResult:
         yield Container(
@@ -104,13 +114,16 @@ class SourceSelectionScreen(Static):
     """Screen for selecting source directories."""
 
     def __init__(
-        self, config_manager: ConfigManager, source_folders: list[Path], **kwargs
-    ):
+        self,
+        config_manager: ConfigManager,
+        source_folders: list[Path],
+        **kwargs: Any,
+    ) -> None:
         super().__init__(**kwargs)
         self.config_manager = config_manager
         self.source_folders = source_folders
 
-    def compose(self):
+    def compose(self) -> ComposeResult:
         yield Label("Source Folders:", classes="section-title")
 
         if self.source_folders:
@@ -140,16 +153,16 @@ class SourceSelectionScreen(Static):
 class ScanResultsScreen(Static):
     """Screen showing scan results."""
 
-    def __init__(self, config_manager: ConfigManager, **kwargs):
+    def __init__(self, config_manager: ConfigManager, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self.config_manager = config_manager
         self.audiobook_sets: list[AudiobookSet] = []
 
-    def compose(self):
+    def compose(self) -> ComposeResult:
         yield Label("Scan Results", classes="section-title")
         yield DataTable(id="scan_results_table")
 
-    def set_audiobook_sets(self, audiobook_sets: list[AudiobookSet]):
+    def set_audiobook_sets(self, audiobook_sets: list[AudiobookSet]) -> None:
         """Set the audiobook sets to display."""
         self.audiobook_sets = audiobook_sets
 
@@ -179,18 +192,21 @@ class MatchReviewScreen(Static):
     """Screen for reviewing metadata matches."""
 
     def __init__(
-        self, config_manager: ConfigManager, provider: MetadataProvider, **kwargs
-    ):
+        self,
+        config_manager: ConfigManager,
+        provider: MetadataProvider,
+        **kwargs: Any,
+    ) -> None:
         super().__init__(**kwargs)
         self.config_manager = config_manager
         self.provider = provider
         self.audiobook_sets: list[AudiobookSet] = []
 
-    def compose(self):
+    def compose(self) -> ComposeResult:
         yield Label("Metadata Matches", classes="section-title")
         yield DataTable(id="matches_table")
 
-    async def find_matches(self, audiobook_sets: list[AudiobookSet]):
+    async def find_matches(self, audiobook_sets: list[AudiobookSet]) -> None:
         """Find matches for audiobook sets."""
         self.audiobook_sets = audiobook_sets
 
@@ -202,8 +218,8 @@ class MatchReviewScreen(Static):
         results = await asyncio.gather(*match_tasks, return_exceptions=True)
 
         for audiobook_set, result in zip(audiobook_sets, results, strict=False):
-            candidates: list = []
-            if isinstance(result, Exception):
+            candidates: list[MatchCandidate] = []
+            if isinstance(result, BaseException):
                 candidates = []
             else:
                 candidates = result
@@ -234,16 +250,16 @@ class MatchReviewScreen(Static):
 class PreviewScreen(Static):
     """Screen for previewing changes."""
 
-    def __init__(self, config_manager: ConfigManager, **kwargs):
+    def __init__(self, config_manager: ConfigManager, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self.config_manager = config_manager
         self.audiobook_sets: list[AudiobookSet] = []
 
-    def compose(self):
+    def compose(self) -> ComposeResult:
         yield Label("Preview Changes", classes="section-title")
         yield DataTable(id="preview_table")
 
-    def set_audiobook_sets(self, audiobook_sets: list[AudiobookSet]):
+    def set_audiobook_sets(self, audiobook_sets: list[AudiobookSet]) -> None:
         """Set audiobook sets and generate preview."""
         self.audiobook_sets = audiobook_sets
 
@@ -334,12 +350,12 @@ class PreviewScreen(Static):
 class ConversionScreen(Static):
     """Screen for M4B conversion options."""
 
-    def __init__(self, config_manager: ConfigManager, **kwargs):
+    def __init__(self, config_manager: ConfigManager, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self.config_manager = config_manager
         self.audiobook_sets: list[AudiobookSet] = []
         self.conversion_in_progress = False
-        self._result_row_keys: list[str] = []
+        self._result_row_keys: list[Any] = []
 
     class ConversionComplete(Message):
         """Message sent when conversion is complete."""
@@ -392,7 +408,7 @@ class ConversionScreen(Static):
     def set_audiobook_sets(self, audiobook_sets: list[AudiobookSet]) -> None:
         """Set the audiobook sets for conversion."""
         self.audiobook_sets = audiobook_sets
-        self._result_row_keys: list[str] = []
+        self._result_row_keys = []
 
         # Update results table to show what will be converted
         table = self.query_one("#conversion_results", DataTable)
@@ -442,7 +458,8 @@ class ConversionScreen(Static):
             if output_dir_input.value
             else Path.cwd() / "converted"
         )
-        quality = quality_select.value
+        quality_raw = quality_select.value
+        quality: str = str(quality_raw) if quality_raw is not None else "128k"
         normalize = normalize_check.value
         include_cover = cover_art_check.value
 
@@ -476,12 +493,12 @@ class ConversionScreen(Static):
             conv_config.normalize_audio = normalize
             conv_config.write_cover_art = include_cover
 
-            if quality.startswith("vbr"):
+            if isinstance(quality, str) and quality.startswith("vbr"):
                 conv_config.use_vbr = True
                 conv_config.vbr_quality = int(quality[-1])
             else:
                 conv_config.use_vbr = False
-                conv_config.bitrate = quality
+                conv_config.bitrate = str(quality)
 
             table = self.query_one("#conversion_results", DataTable)
 

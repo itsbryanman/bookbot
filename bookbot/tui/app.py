@@ -420,7 +420,7 @@ class BookBotApp(App):
 
             all_audiobook_sets: list[AudiobookSet] = []
             for result in results:
-                if isinstance(result, Exception):
+                if isinstance(result, BaseException):
                     raise result
                 all_audiobook_sets.extend(result)
 

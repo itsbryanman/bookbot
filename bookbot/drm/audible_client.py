@@ -1,8 +1,6 @@
 """Audible authentication client using browser-based cookie authentication."""
 
-import json
-from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 try:
     import requests
@@ -18,7 +16,7 @@ class AudibleAuthClient:
     def __init__(self, country_code: str = "US") -> None:
         self.country_code = country_code
         self._browser_auth = AudibleBrowserAuth(country_code=country_code)
-        self._session: Optional[requests.Session] = None
+        self._session: requests.Session | None = None
 
     def authenticate(self, headless: bool = False) -> bool:
         """
@@ -51,7 +49,7 @@ class AudibleAuthClient:
                 self._session.cookies.set(name, value, domain=f".{self._browser_auth.base_domain}")
         return self._session
 
-    def get_library(self) -> List[Dict[str, Any]]:
+    def get_library(self) -> list[dict[str, Any]]:
         """Get user's Audible library by scraping with Playwright."""
         # Make sure cookies are loaded
         if not self._browser_auth.cookies:
@@ -59,8 +57,9 @@ class AudibleAuthClient:
                 raise Exception("Not authenticated. Call authenticate() first.")
 
         try:
-            from playwright.sync_api import sync_playwright
             import time
+
+            from playwright.sync_api import sync_playwright
 
             books = []
 
@@ -192,7 +191,7 @@ class AudibleAuthClient:
         except Exception as e:
             raise Exception(f"Failed to download book: {e}") from e
 
-    def get_activation_bytes(self) -> Optional[str]:
+    def get_activation_bytes(self) -> str | None:
         """
         Get activation bytes for DRM removal.
 
@@ -203,7 +202,7 @@ class AudibleAuthClient:
         # and may need to use the audible-activator approach
         return None
 
-    def get_cookies(self) -> Dict[str, str]:
+    def get_cookies(self) -> dict[str, str]:
         """Get authentication cookies as a dictionary."""
         return self._browser_auth.get_cookies_dict()
 

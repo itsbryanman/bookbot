@@ -3,8 +3,9 @@
 import os
 from pathlib import Path
 
-import toml
 from pydantic import ValidationError
+
+import toml
 
 from .models import Config, Profile
 

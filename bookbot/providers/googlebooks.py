@@ -2,25 +2,31 @@
 
 import asyncio
 import json
-from typing import Any, List, Optional
+from typing import TYPE_CHECKING, Any
 
 import aiohttp
-from rapidfuzz import fuzz
-
 from pydantic import ValidationError
+from rapidfuzz import fuzz
 
 from ..core.models import AudiobookSet, ProviderIdentity
 from .base import MetadataProvider
+
+if TYPE_CHECKING:
+    from ..io.cache import CacheManager
 
 
 class GoogleBooksProvider(MetadataProvider):
     """Provider for Google Books API."""
 
-    def __init__(self, api_key: Optional[str] = None, cache_manager=None):
+    def __init__(
+        self,
+        api_key: str | None = None,
+        cache_manager: "CacheManager | None" = None,
+    ) -> None:
         super().__init__("Google Books", cache_manager=cache_manager)
         self.api_key = api_key
         self.base_url = "https://www.googleapis.com/books/v1"
-        self.session: Optional[aiohttp.ClientSession] = None
+        self.session: aiohttp.ClientSession | None = None
 
     async def _get_session(self) -> aiohttp.ClientSession:
         """Get or create HTTP session."""
@@ -39,14 +45,14 @@ class GoogleBooksProvider(MetadataProvider):
     async def search(
         self,
         *,
-        title: Optional[str] = None,
-        author: Optional[str] = None,
-        series: Optional[str] = None,
-        isbn: Optional[str] = None,
-        year: Optional[int] = None,
-        language: Optional[str] = None,
+        title: str | None = None,
+        author: str | None = None,
+        series: str | None = None,
+        isbn: str | None = None,
+        year: int | None = None,
+        language: str | None = None,
         limit: int = 10,
-    ) -> List[ProviderIdentity]:
+    ) -> list[ProviderIdentity]:
         """Search for books using Google Books API."""
         # Build search query
         query_parts = []
@@ -132,7 +138,7 @@ class GoogleBooksProvider(MetadataProvider):
         except (aiohttp.ClientError, asyncio.TimeoutError, json.JSONDecodeError):
             return []
 
-    async def get_by_id(self, external_id: str) -> Optional[ProviderIdentity]:
+    async def get_by_id(self, external_id: str) -> ProviderIdentity | None:
         """Get a book by its Google Books volume ID."""
         cache_key = None
         cache_namespace = "googlebooks_volume"

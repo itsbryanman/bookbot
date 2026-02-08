@@ -1,7 +1,5 @@
 """Provider manager for handling multiple metadata sources."""
 
-from typing import Dict, List, Optional
-
 from ..config.manager import ConfigManager
 from ..core.logging import get_logger
 from ..io.cache import CacheManager
@@ -11,7 +9,7 @@ from .googlebooks import GoogleBooksProvider
 from .librivox import LibriVoxProvider
 from .openlibrary import OpenLibraryProvider
 
-logger = get_logger('provider_manager')
+logger = get_logger("provider_manager")
 
 
 class ProviderManager:
@@ -20,7 +18,7 @@ class ProviderManager:
     def __init__(self, config_manager: ConfigManager):
         self.config_manager = config_manager
         self.cache_manager = CacheManager(config_manager)
-        self.providers: Dict[str, MetadataProvider] = {}
+        self.providers: dict[str, MetadataProvider] = {}
         self._initialize_providers()
 
     def _initialize_providers(self) -> None:
@@ -57,7 +55,7 @@ class ProviderManager:
             )
             logger.info(f"Initialized Audible provider (marketplace: {marketplace})")
 
-    def get_enabled_providers(self) -> List[MetadataProvider]:
+    def get_enabled_providers(self) -> list[MetadataProvider]:
         """Get providers with Open Library ALWAYS first."""
         # Open Library is always first
         enabled = [self.providers["openlibrary"]]
@@ -73,7 +71,7 @@ class ProviderManager:
 
         return enabled
 
-    def get_provider(self, name: str) -> Optional[MetadataProvider]:
+    def get_provider(self, name: str) -> MetadataProvider | None:
         """Get a specific provider by name."""
         return self.providers.get(name.lower())
 
@@ -88,12 +86,12 @@ class ProviderManager:
             if hasattr(provider, "close"):
                 await provider.close()
 
-    def list_providers(self) -> Dict[str, Dict[str, str]]:
+    def list_providers(self) -> dict[str, dict[str, object]]:
         """List all available providers with their status."""
         config = self.config_manager.load_config()
         provider_config = config.providers
 
-        providers_info = {
+        providers_info: dict[str, dict[str, object]] = {
             "openlibrary": {
                 "name": "Open Library",
                 "status": "enabled" if "openlibrary" in self.providers else "disabled",

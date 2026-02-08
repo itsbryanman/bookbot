@@ -4,9 +4,8 @@ import json
 import uuid
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional
 
-import aiofiles
+import aiofiles  # type: ignore[import-untyped]
 import aiohttp
 
 from ..config.manager import ConfigManager
@@ -21,13 +20,13 @@ class ConversionPlan:
     def __init__(self, plan_id: str):
         self.plan_id = plan_id
         self.created_at = datetime.now()
-        self.operations: List[ConversionOperation] = []
+        self.operations: list[ConversionOperation] = []
 
     def add_operation(self, operation: "ConversionOperation") -> None:
         """Add a conversion operation to the plan."""
         self.operations.append(operation)
 
-    def to_dict(self) -> Dict:
+    def to_dict(self) -> dict:
         """Convert plan to dictionary for serialization."""
         return {
             "plan_id": self.plan_id,
@@ -45,10 +44,10 @@ class ConversionOperation:
         self.audiobook_set = audiobook_set
         self.output_path = output_path
         self.config = config
-        self.chapters: List[Dict] = []
-        self.temp_files: List[Path] = []
+        self.chapters: list[dict] = []
+        self.temp_files: list[Path] = []
 
-    def to_dict(self) -> Dict:
+    def to_dict(self) -> dict:
         """Convert operation to dictionary for serialization."""
         return {
             "source_path": str(self.audiobook_set.source_path),
@@ -121,7 +120,7 @@ class ConversionPipeline:
         try:
             # Step 1: Convert tracks to AAC if needed
             aac_files = []
-            chapter_data = []
+            chapter_data: list[dict[str, object]] = []
             current_time = 0.0
 
             for track in sorted(
@@ -258,7 +257,7 @@ class ConversionPipeline:
             metadata["language"] = identity.language
 
         if identity.isbn_13 or identity.isbn_10:
-            metadata["isbn"] = identity.isbn_13 or identity.isbn_10
+            metadata["isbn"] = identity.isbn_13 or identity.isbn_10 or ""
 
         metadata["genre"] = "Audiobook"
         metadata["comment"] = "Converted by BookBot"
@@ -285,7 +284,7 @@ class ConversionPipeline:
             except Exception:
                 continue
 
-    async def _download_cover(self, url: str, temp_dir: Path) -> Optional[Path]:
+    async def _download_cover(self, url: str, temp_dir: Path) -> Path | None:
         """Download cover art from URL."""
         try:
             async with aiohttp.ClientSession() as session:

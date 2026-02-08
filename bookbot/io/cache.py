@@ -20,8 +20,7 @@ class CacheManager:
     def _init_database(self) -> None:
         """Initialize the SQLite cache database."""
         with sqlite3.connect(self.db_path) as conn:
-            conn.execute(
-                """
+            conn.execute("""
                 CREATE TABLE IF NOT EXISTS api_cache (
                     key TEXT PRIMARY KEY,
                     provider TEXT NOT NULL,
@@ -32,22 +31,17 @@ class CacheManager:
                     etag TEXT,
                     last_modified TEXT
                 )
-            """
-            )
+            """)
 
-            conn.execute(
-                """
+            conn.execute("""
                 CREATE INDEX IF NOT EXISTS idx_provider_query
                 ON api_cache (provider, query_hash)
-            """
-            )
+            """)
 
-            conn.execute(
-                """
+            conn.execute("""
                 CREATE INDEX IF NOT EXISTS idx_expires_at
                 ON api_cache (expires_at)
-            """
-            )
+            """)
 
     def get(self, provider: str, query_hash: str) -> dict[str, Any] | None:
         """Get cached response for a query."""
@@ -180,13 +174,11 @@ class CacheManager:
             total_count = total_cursor.fetchone()["count"]
 
             # Entries by provider
-            provider_cursor = conn.execute(
-                """
+            provider_cursor = conn.execute("""
                 SELECT provider, COUNT(*) as count
                 FROM api_cache
                 GROUP BY provider
-            """
-            )
+            """)
             providers = {row["provider"]: row["count"] for row in provider_cursor}
 
             # Expired entries
@@ -201,11 +193,9 @@ class CacheManager:
             expired_count = expired_cursor.fetchone()["count"]
 
             # Cache size (approximate)
-            size_cursor = conn.execute(
-                """
+            size_cursor = conn.execute("""
                 SELECT SUM(LENGTH(response_data)) as size FROM api_cache
-            """
-            )
+            """)
             cache_size = size_cursor.fetchone()["size"] or 0
 
             return {

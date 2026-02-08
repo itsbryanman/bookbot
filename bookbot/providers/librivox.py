@@ -2,24 +2,26 @@
 
 import asyncio
 import json
-from typing import Any, List, Optional
+from typing import TYPE_CHECKING, Any
 
 import aiohttp
-from rapidfuzz import fuzz
-
 from pydantic import ValidationError
+from rapidfuzz import fuzz
 
 from ..core.models import AudiobookSet, ProviderIdentity
 from .base import MetadataProvider
+
+if TYPE_CHECKING:
+    from ..io.cache import CacheManager
 
 
 class LibriVoxProvider(MetadataProvider):
     """Provider for LibriVox public domain audiobooks."""
 
-    def __init__(self, cache_manager=None):
+    def __init__(self, cache_manager: "CacheManager | None" = None) -> None:
         super().__init__("LibriVox", cache_manager=cache_manager)
         self.base_url = "https://librivox.org/api/feed"
-        self.session: Optional[aiohttp.ClientSession] = None
+        self.session: aiohttp.ClientSession | None = None
 
     async def _get_session(self) -> aiohttp.ClientSession:
         """Get or create HTTP session."""
@@ -38,14 +40,14 @@ class LibriVoxProvider(MetadataProvider):
     async def search(
         self,
         *,
-        title: Optional[str] = None,
-        author: Optional[str] = None,
-        series: Optional[str] = None,
-        isbn: Optional[str] = None,
-        year: Optional[int] = None,
-        language: Optional[str] = None,
+        title: str | None = None,
+        author: str | None = None,
+        series: str | None = None,
+        isbn: str | None = None,
+        year: int | None = None,
+        language: str | None = None,
         limit: int = 10,
-    ) -> List[ProviderIdentity]:
+    ) -> list[ProviderIdentity]:
         """Search for audiobooks using LibriVox API."""
         cache_key = None
         cache_namespace = "librivox_search"
@@ -110,7 +112,7 @@ class LibriVoxProvider(MetadataProvider):
         except (aiohttp.ClientError, asyncio.TimeoutError, json.JSONDecodeError):
             return []
 
-    async def get_by_id(self, external_id: str) -> Optional[ProviderIdentity]:
+    async def get_by_id(self, external_id: str) -> ProviderIdentity | None:
         """Get a book by its LibriVox ID."""
         cache_key = None
         cache_namespace = "librivox_id"
