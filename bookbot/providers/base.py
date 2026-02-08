@@ -1,9 +1,9 @@
 """Base provider interface for metadata sources."""
 
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, List, Optional
+from typing import TYPE_CHECKING, Optional
 
-from ..core.models import AudiobookSet, MatchCandidate, ProviderIdentity
+from ..core.models import AudiobookSet, MatchCandidate, MatchConfidence, ProviderIdentity
 
 if TYPE_CHECKING:
     from ..io.cache import CacheManager
@@ -22,20 +22,24 @@ class MetadataProvider(ABC):
     async def search(
         self,
         *,
-        title: Optional[str] = None,
-        author: Optional[str] = None,
-        series: Optional[str] = None,
-        isbn: Optional[str] = None,
-        year: Optional[int] = None,
-        language: Optional[str] = None,
+        title: str | None = None,
+        author: str | None = None,
+        series: str | None = None,
+        isbn: str | None = None,
+        year: int | None = None,
+        language: str | None = None,
         limit: int = 10,
-    ) -> List[ProviderIdentity]:
+    ) -> list[ProviderIdentity]:
         """Search for books matching the given criteria."""
         pass
 
     @abstractmethod
-    async def get_by_id(self, external_id: str) -> Optional[ProviderIdentity]:
+    async def get_by_id(self, external_id: str) -> ProviderIdentity | None:
         """Get a book by its external ID."""
+        pass
+
+    async def close(self) -> None:
+        """Close any open connections. Override in subclasses as needed."""
         pass
 
     @abstractmethod
@@ -47,7 +51,7 @@ class MetadataProvider(ABC):
 
     async def find_matches(
         self, audiobook_set: AudiobookSet, limit: int = 10
-    ) -> List[MatchCandidate]:
+    ) -> list[MatchCandidate]:
         """Find potential matches for an audiobook set."""
         # Perform search using available metadata
         identities = await self.search(
@@ -81,7 +85,7 @@ class MetadataProvider(ABC):
 
     def _get_match_reasons(
         self, audiobook_set: AudiobookSet, identity: ProviderIdentity, score: float
-    ) -> List[str]:
+    ) -> list[str]:
         """Generate human-readable match reasons."""
         reasons = []
 
@@ -108,10 +112,10 @@ class MetadataProvider(ABC):
 
         return reasons
 
-    def _get_confidence_level(self, score: float) -> str:
+    def _get_confidence_level(self, score: float) -> MatchConfidence:
         if score > 0.85:
-            return "high"
+            return MatchConfidence.HIGH
         elif score > 0.65:
-            return "medium"
+            return MatchConfidence.MEDIUM
         else:
-            return "low"
+            return MatchConfidence.LOW

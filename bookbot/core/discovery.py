@@ -2,7 +2,6 @@
 
 import re
 from pathlib import Path
-from typing import Optional
 
 from mutagen import File as MutagenFile
 from mutagen.id3 import ID3NoHeaderError
@@ -149,7 +148,7 @@ class AudioFileScanner:
 
         return audiobook_set
 
-    def _create_track_from_file(self, file_path: Path) -> Optional[Track]:
+    def _create_track_from_file(self, file_path: Path) -> Track | None:
         """Create a Track object from an audio file."""
         stat = None
         try:

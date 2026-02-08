@@ -4,7 +4,7 @@ import json
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 
 def _safe_unlink(path: Path) -> None:
@@ -52,7 +52,7 @@ class FFmpegWrapper:
 
         raise RuntimeError("FFprobe not found. Please install FFmpeg.")
 
-    def probe_file(self, file_path: Path) -> Dict[str, Any]:
+    def probe_file(self, file_path: Path) -> dict[str, Any]:
         """Get detailed information about an audio file."""
         cmd = [
             self.ffprobe_path,
@@ -73,10 +73,12 @@ class FFmpegWrapper:
             raise RuntimeError(f"FFprobe failed: {result.stderr}")
 
         try:
-            probe_data: Dict[str, Any] = json.loads(result.stdout)
+            probe_data: dict[str, Any] = json.loads(result.stdout)
             return probe_data
         except json.JSONDecodeError as e:
-            raise RuntimeError(f"Failed to parse FFprobe output for {file_path}: {e}") from e
+            raise RuntimeError(
+                f"Failed to parse FFprobe output for {file_path}: {e}"
+            ) from e
 
     def get_duration(self, file_path: Path) -> float:
         """Get duration of an audio file in seconds."""
@@ -92,7 +94,7 @@ class FFmpegWrapper:
 
         raise RuntimeError(f"Could not determine duration for {file_path}")
 
-    def analyze_loudness(self, file_path: Path) -> Dict[str, float]:
+    def analyze_loudness(self, file_path: Path) -> dict[str, float]:
         """Analyze loudness using EBU R128."""
         cmd = [
             self.ffmpeg_path,
@@ -107,7 +109,9 @@ class FFmpegWrapper:
         try:
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
         except subprocess.TimeoutExpired as e:
-            raise RuntimeError(f"FFmpeg loudness analysis timed out for {file_path}") from e
+            raise RuntimeError(
+                f"FFmpeg loudness analysis timed out for {file_path}"
+            ) from e
 
         # FFmpeg outputs the JSON to stderr for this filter
         stderr_lines = result.stderr.strip().split("\n")
@@ -201,9 +205,9 @@ class FFmpegWrapper:
 
     def concatenate_files(
         self,
-        input_files: List[Path],
+        input_files: list[Path],
         output_path: Path,
-        chapters: Optional[List[Dict]] = None,
+        chapters: list[dict] | None = None,
     ) -> bool:
         """Concatenate multiple audio files into one."""
         # Create a temporary file list for FFmpeg concat
@@ -247,7 +251,7 @@ class FFmpegWrapper:
         finally:
             _safe_unlink(concat_file)
 
-    def add_chapters(self, file_path: Path, chapters: List[Dict]) -> bool:
+    def add_chapters(self, file_path: Path, chapters: list[dict]) -> bool:
         """Add chapter markers to an audio file."""
         # Create chapters metadata file
         with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
@@ -353,7 +357,7 @@ class FFmpegWrapper:
         except Exception:
             return False
 
-    def set_metadata(self, file_path: Path, metadata: Dict[str, str]) -> bool:
+    def set_metadata(self, file_path: Path, metadata: dict[str, str]) -> bool:
         """Set metadata tags on an audio file."""
         temp_output = file_path.with_suffix(".tmp.m4b")
 

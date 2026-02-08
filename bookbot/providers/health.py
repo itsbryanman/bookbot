@@ -3,7 +3,6 @@
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import Dict, Optional
 
 from ..core.logging import get_logger
 
@@ -18,8 +17,8 @@ class HealthStats:
     successful_requests: int = 0
     failed_requests: int = 0
     avg_response_time: float = 0.0
-    last_success: Optional[datetime] = None
-    last_failure: Optional[datetime] = None
+    last_success: datetime | None = None
+    last_failure: datetime | None = None
     recent_errors: deque = field(default_factory=lambda: deque(maxlen=10))
 
     @property
@@ -41,7 +40,7 @@ class ProviderHealthMonitor:
 
     def __init__(self, window_minutes: int = 5):
         self.window = timedelta(minutes=window_minutes)
-        self.stats: Dict[str, HealthStats] = {}
+        self.stats: dict[str, HealthStats] = {}
 
     def record_success(self, provider: str, response_time: float) -> None:
         """Record successful request."""
@@ -96,6 +95,6 @@ class ProviderHealthMonitor:
             return True
         return self.stats[provider].is_healthy
 
-    def get_stats(self, provider: str) -> Optional[HealthStats]:
+    def get_stats(self, provider: str) -> HealthStats | None:
         """Get provider statistics."""
         return self.stats.get(provider)
