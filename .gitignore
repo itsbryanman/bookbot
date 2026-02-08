@@ -116,3 +116,7 @@ dmypy.json
 .ruff_cache/
 .venv/
 TESTAUDIOBOOKS/
+
+# Secrets / tokens
+token.md
+pypiToken.txt
