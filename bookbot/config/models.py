@@ -119,11 +119,40 @@ class AudibleConfig(BaseModel):
     marketplace: str = "US"  # US, UK, CA, AU, FR, DE, IT, ES, JP, IN
 
 
+class AudnexusConfig(BaseModel):
+    """Audnexus API configuration."""
+
+    enabled: bool = True
+    marketplace: str = "us"  # us, uk, ca, au, fr, de, it, es, jp, in
+
+
+class HardcoverConfig(BaseModel):
+    """Hardcover API configuration."""
+
+    enabled: bool = False
+    api_key: str | None = None
+
+
+class ABSConfig(BaseModel):
+    """Audiobookshelf server configuration."""
+
+    server_url: str | None = None
+    api_token: str | None = None
+    username: str | None = None
+
+
 class ProviderConfig(BaseModel):
     """Metadata provider configuration."""
 
     priority_order: list[str] = Field(
-        default_factory=lambda: ["openlibrary", "googlebooks", "librivox", "audible"]
+        default_factory=lambda: [
+            "openlibrary",
+            "audnexus",
+            "googlebooks",
+            "librivox",
+            "audible",
+            "hardcover",
+        ]
     )
     cache_enabled: bool = True
     cache_size_mb: int = 100
@@ -135,6 +164,8 @@ class ProviderConfig(BaseModel):
     google_books: GoogleBooksConfig = Field(default_factory=GoogleBooksConfig)
     librivox: LibriVoxConfig = Field(default_factory=LibriVoxConfig)
     audible: AudibleConfig = Field(default_factory=AudibleConfig)
+    audnexus: AudnexusConfig = Field(default_factory=AudnexusConfig)
+    hardcover: HardcoverConfig = Field(default_factory=HardcoverConfig)
 
 
 class Config(BaseModel):
@@ -160,6 +191,9 @@ class Config(BaseModel):
 
     # Providers
     providers: ProviderConfig = Field(default_factory=ProviderConfig)
+
+    # Audiobookshelf
+    abs: ABSConfig = Field(default_factory=ABSConfig)
 
     # Cache and logging
     cache_directory: Path = Path.home() / ".cache" / "bookbot"

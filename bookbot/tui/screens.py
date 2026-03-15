@@ -128,7 +128,7 @@ class SourceSelectionScreen(Static):
 
         if self.source_folders:
             for folder in self.source_folders:
-                yield Label(f"📁 {folder}")
+                yield Label(f"[DIR] {folder}")
         else:
             yield Label("No folders selected")
 
@@ -236,14 +236,14 @@ class MatchReviewScreen(Static):
                         f"{', '.join(best_match.identity.authors)}"
                     ),
                     f"{best_match.confidence:.2f}",
-                    "✓ Accept" if best_match.confidence > 0.85 else "⚠ Review",
+                    "Accept" if best_match.confidence > 0.85 else "Review",
                 )
             else:
                 table.add_row(
                     audiobook_set.raw_title_guess or "Unknown",
                     "No matches found",
                     "0.00",
-                    "❌ Manual",
+                    "Manual",
                 )
 
 
@@ -282,7 +282,7 @@ class PreviewScreen(Static):
                 else:
                     proposed_name = current_name
 
-                status = "✓ Ready" if proposed_name != current_name else "→ No change"
+                status = "Ready" if proposed_name != current_name else "No change"
                 table.add_row(current_name, proposed_name, status)
 
     async def apply_changes(self) -> bool:
@@ -332,7 +332,7 @@ class PreviewScreen(Static):
             table.add_columns("Operation", "Result", "Transaction ID")
             table.add_row(
                 f"Renamed {len(rename_operations)} files",
-                "✓ Success",
+                "Success",
                 transaction_id[:8] + "...",
             )
 
@@ -343,7 +343,7 @@ class PreviewScreen(Static):
             table = self.query_one("#preview_table", DataTable)
             table.clear()
             table.add_columns("Operation", "Result", "Error")
-            table.add_row("Apply Changes", "❌ Failed", str(e))
+            table.add_row("Apply Changes", "Failed", str(e))
             return False
 
 
@@ -427,7 +427,7 @@ class ConversionScreen(Static):
                 audiobook_set.raw_title_guess or "Unknown",
                 str(audiobook_set.total_tracks),
                 output_name,
-                "⏳ Pending",
+                "Pending",
             )
             self._result_row_keys.append(row_key)
 
@@ -514,7 +514,7 @@ class ConversionScreen(Static):
                 # Update table row status
                 if i < len(self._result_row_keys):
                     table.update_cell(
-                        self._result_row_keys[i], "Status", "🔄 Converting"
+                        self._result_row_keys[i], "Status", "Converting"
                     )
 
                 try:
@@ -526,12 +526,12 @@ class ConversionScreen(Static):
                     if success:
                         if i < len(self._result_row_keys):
                             table.update_cell(
-                                self._result_row_keys[i], "Status", "✅ Complete"
+                                self._result_row_keys[i], "Status", "Complete"
                             )
                     else:
                         if i < len(self._result_row_keys):
                             table.update_cell(
-                                self._result_row_keys[i], "Status", "❌ Failed"
+                                self._result_row_keys[i], "Status", "Failed"
                             )
 
                 except Exception as e:
@@ -539,7 +539,7 @@ class ConversionScreen(Static):
                         table.update_cell(
                             self._result_row_keys[i],
                             "Status",
-                            f"❌ Error: {str(e)[:20]}...",
+                            f"Error: {str(e)[:20]}...",
                         )
 
                 # Update progress

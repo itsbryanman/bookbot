@@ -47,8 +47,8 @@ def _ensure_playwright_browsers() -> bool:
         return False
 
     # Browsers not found - install them
-    print("\n📦 Installing Chromium browser for authentication...")
-    print("⏳ This is a one-time setup and may take a minute...")
+    print("\nInstalling Chromium browser for authentication...")
+    print("This is a one-time setup and may take a minute...")
 
     try:
         result = subprocess.run(
@@ -59,17 +59,17 @@ def _ensure_playwright_browsers() -> bool:
         )
 
         if result.returncode == 0:
-            print("✅ Browser installation complete!")
+            print("[OK] Browser installation complete!")
             return True
 
-        print(f"❌ Browser installation failed with code {result.returncode}")
+        print(f"Error:Browser installation failed with code {result.returncode}")
         return False
 
     except subprocess.TimeoutExpired:
-        print("❌ Browser installation timed out")
+        print("Error:Browser installation timed out")
         return False
     except (OSError, subprocess.SubprocessError) as e:
-        print(f"❌ Browser installation error: {e}")
+        print(f"Error:Browser installation error: {e}")
         return False
 
 
@@ -123,19 +123,19 @@ class AudibleBrowserAuth:
         if self._load_cookies():
             print("Found existing authentication, checking if valid...")
             if self._verify_cookies():
-                print("✅ Existing authentication is valid!")
+                print("[OK]Existing authentication is valid!")
                 return True
             else:
-                print("⚠️ Existing authentication expired, re-authenticating...")
+                print("Warning:Existing authentication expired, re-authenticating...")
 
         # Ensure browsers are installed before attempting authentication
         if not _ensure_playwright_browsers():
-            print("❌ Failed to install browser dependencies")
+            print("Error:Failed to install browser dependencies")
             return False
 
-        print("\n🌐 Opening browser for Audible authentication...")
-        print("📝 Please log in to your Audible account in the browser window")
-        print("⏳ Waiting for you to complete login...")
+        print("\nOpening browser for Audible authentication...")
+        print("Please log in to your Audible account in the browser window")
+        print("Waiting for you to complete login...")
 
         try:
             with sync_playwright() as p:
@@ -157,14 +157,14 @@ class AudibleBrowserAuth:
                     login_successful = self._wait_for_login(page)
 
                     if not login_successful:
-                        print("❌ Login failed or timed out")
+                        print("Error:Login failed or timed out")
                         return False
 
                     self.cookies = context.cookies()
                     self._save_cookies()
 
-                    print("✅ Authentication successful!")
-                    print(f"✅ Saved {len(self.cookies)} cookies")
+                    print("[OK]Authentication successful!")
+                    print(f"[OK]Saved {len(self.cookies)} cookies")
 
                     return True
                 finally:
@@ -172,7 +172,7 @@ class AudibleBrowserAuth:
                     browser.close()
 
         except (RuntimeError, ValueError, OSError) as e:
-            print(f"❌ Authentication error: {e}")
+            print(f"Error:Authentication error: {e}")
             return False
 
     def _wait_for_login(self, page: "Page", timeout: int = 300) -> bool:
@@ -205,7 +205,7 @@ class AudibleBrowserAuth:
                 for selector in selectors:
                     elements = page.locator(selector).all()
                     if len(elements) > 0:
-                        print(f"✅ Login detected (found {selector})!")
+                        print(f"[OK]Login detected (found {selector})!")
                         time.sleep(2)  # Wait for cookies to settle
                         return True
 
@@ -218,7 +218,7 @@ class AudibleBrowserAuth:
                         'a[href*="account"], span:has-text("Hi,"), div:has-text("Hello,")'
                     ).all()
                     if len(account_indicators) > 0:
-                        print("✅ Login detected (no sign-in form, account found)!")
+                        print("[OK]Login detected (no sign-in form, account found)!")
                         time.sleep(2)
                         return True
 
@@ -226,10 +226,10 @@ class AudibleBrowserAuth:
                 time.sleep(check_interval)
 
             except Exception as e:
-                print(f"⚠️ Error checking login status: {e}")
+                print(f"Warning:Error checking login status: {e}")
                 time.sleep(check_interval)
 
-        print("⏰ Login timeout - no login detected within timeout period")
+        print("Login timeout - no login detected within timeout period")
         return False
 
     def _verify_cookies(self) -> bool:
@@ -281,7 +281,7 @@ class AudibleBrowserAuth:
             return False
 
         except Exception as e:
-            print(f"⚠️ Cookie verification failed: {e}")
+            print(f"Warning:Cookie verification failed: {e}")
             return False
 
     def _save_cookies(self) -> None:
@@ -304,10 +304,10 @@ class AudibleBrowserAuth:
                     f"audible_cookies_{self.country_code}",
                     json.dumps(cookie_data)
                 )
-                print("✅ Cookies saved securely to system keyring")
+                print("[OK]Cookies saved securely to system keyring")
                 return
             except Exception as e:
-                print(f"⚠️ Keyring not available ({e}), using file storage")
+                print(f"Warning:Keyring not available ({e}), using file storage")
 
         # Fallback: save to config directory
         try:
@@ -316,9 +316,9 @@ class AudibleBrowserAuth:
             cookie_file = config_dir / f"audible_cookies_{self.country_code}.json"
             cookie_file.write_text(json.dumps(cookie_data, indent=2))
             cookie_file.chmod(0o600)  # Read/write for owner only
-            print(f"✅ Cookies saved to {cookie_file}")
+            print(f"[OK]Cookies saved to {cookie_file}")
         except Exception as e:
-            print(f"⚠️ Failed to save cookies: {e}")
+            print(f"Warning:Failed to save cookies: {e}")
 
     def _load_cookies(self) -> bool:
         """
@@ -360,12 +360,12 @@ class AudibleBrowserAuth:
             saved_timestamp = cookie_data.get("timestamp", 0)
             age_days = (time.time() - saved_timestamp) / 86400
             if age_days > 30:
-                print(f"⚠️ Cookies are {age_days:.0f} days old, may need refresh")
+                print(f"Warning:Cookies are {age_days:.0f} days old, may need refresh")
 
             return len(self.cookies) > 0
 
         except Exception as e:
-            print(f"⚠️ Failed to load cookies: {e}")
+            print(f"Warning:Failed to load cookies: {e}")
             return False
 
     def get_cookies_dict(self) -> dict[str, str]:
@@ -414,7 +414,7 @@ class AudibleBrowserAuth:
             pass
 
         self.cookies = []
-        print("✅ Logged out and cleared cookies")
+        print("[OK]Logged out and cleared cookies")
 
     def is_authenticated(self) -> bool:
         """

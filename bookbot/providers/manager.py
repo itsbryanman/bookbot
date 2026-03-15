@@ -4,8 +4,10 @@ from ..config.manager import ConfigManager
 from ..core.logging import get_logger
 from ..io.cache import CacheManager
 from .audible import AudibleProvider
+from .audnexus import AudnexusProvider
 from .base import MetadataProvider
 from .googlebooks import GoogleBooksProvider
+from .hardcover import HardcoverProvider
 from .librivox import LibriVoxProvider
 from .openlibrary import OpenLibraryProvider
 
@@ -32,6 +34,15 @@ class ProviderManager:
         )
         logger.info("Initialized Open Library provider (default, always enabled)")
 
+        # Audnexus - no API key needed, enabled by default
+        if provider_config.audnexus.enabled:
+            marketplace = provider_config.audnexus.marketplace
+            self.providers["audnexus"] = AudnexusProvider(
+                marketplace=marketplace,
+                cache_manager=self.cache_manager,
+            )
+            logger.info(f"Initialized Audnexus provider (marketplace: {marketplace})")
+
         # Optional providers only if configured
         google_books_config = provider_config.google_books
         if google_books_config.enabled and google_books_config.api_key:
@@ -54,6 +65,15 @@ class ProviderManager:
                 cache_manager=self.cache_manager,
             )
             logger.info(f"Initialized Audible provider (marketplace: {marketplace})")
+
+        # Hardcover - requires API key
+        hardcover_config = provider_config.hardcover
+        if hardcover_config.enabled and hardcover_config.api_key:
+            self.providers["hardcover"] = HardcoverProvider(
+                api_key=hardcover_config.api_key,
+                cache_manager=self.cache_manager,
+            )
+            logger.info("Initialized Hardcover provider")
 
     def get_enabled_providers(self) -> list[MetadataProvider]:
         """Get providers with Open Library ALWAYS first."""
@@ -98,6 +118,13 @@ class ProviderManager:
                 "description": "Free, comprehensive book database",
                 "requires_api_key": "no",
             },
+            "audnexus": {
+                "name": "Audnexus",
+                "status": "enabled" if "audnexus" in self.providers else "disabled",
+                "description": "Audiobook metadata with chapter data (ASIN-based)",
+                "requires_api_key": "no",
+                "marketplace": provider_config.audnexus.marketplace,
+            },
             "googlebooks": {
                 "name": "Google Books",
                 "status": "enabled" if "googlebooks" in self.providers else "disabled",
@@ -117,6 +144,13 @@ class ProviderManager:
                 "description": "Audible audiobook metadata",
                 "requires_api_key": "no",
                 "marketplace": provider_config.audible.marketplace,
+            },
+            "hardcover": {
+                "name": "Hardcover",
+                "status": "enabled" if "hardcover" in self.providers else "disabled",
+                "description": "Hardcover book database (GraphQL API)",
+                "requires_api_key": "yes",
+                "api_key_provided": bool(provider_config.hardcover.api_key),
             },
         }
 

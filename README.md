@@ -38,10 +38,16 @@ BookBot is a Textual powered terminal app and command line toolkit for taming la
 ## Highlights
 
 - Safety first workflow with dry-runs, atomic file operations, transaction history, and undo support.
-- Fast metadata discovery that combines local heuristics with Open Library plus optional Google Books, LibriVox, and Audible lookups.
+- Fast metadata discovery that combines local heuristics with Open Library, Audnexus, and optional Google Books, LibriVox, Audible, and Hardcover lookups.
 - Modern TUI for interactive review plus full CLI coverage for scripting and automation.
 - Configurable templates and profiles so folders, file names, covers, and tags match the way your players expect them.
 - Optional M4B conversion pipeline with FFmpeg stream copy, loudness normalization, and chapter generation.
+- M4B tooling for merging, splitting, tagging, and chapter injection.
+- Chapter detection pipeline with silence analysis, cue file parsing, track boundaries, and Audnexus chapter data.
+- Audiobookshelf integration for searching, matching, progress tracking, and bidirectional sync.
+- Library health auditing to catch missing covers, inconsistent tags, orphaned files, duplicates, and series gaps.
+- Smart organizer for restructuring messy libraries into Plex, Audiobookshelf, or custom directory layouts.
+- Sidecar metadata support for OPF (Calibre), BookLore JSON, and NFO formats.
 - Audible authentication, DRM detection, and removal helpers for supported formats (AAX, AAXC, M4B, and more).
 
 ## Installation
@@ -127,9 +133,10 @@ Prefer a desktop entry point? `bookbot gui` launches the same Textual applicatio
 - Customize naming templates in `~/.config/bookbot/templates` or swap templates at runtime with `--template` flags.
 
 **Bring your own providers**
-- Open Library is always on. Add Google Books, LibriVox, or Audible enrichment with:
+- Open Library and Audnexus are always on. Add Google Books, LibriVox, Audible, or Hardcover enrichment with:
   ```bash
   bookbot provider set-key googlebooks YOUR_API_KEY
+  bookbot provider set-key hardcover YOUR_TOKEN
   bookbot provider enable librivox
   bookbot provider enable audible
   bookbot provider list
@@ -157,6 +164,26 @@ Prefer a desktop entry point? `bookbot gui` launches the same Textual applicatio
 | `bookbot undo ID` | Roll back an operation safely using its transaction identifier. |
 | `bookbot provider ...` | Enable, disable, and configure metadata providers and API keys. |
 | `bookbot config ...` | Manage global config, reset defaults, and inspect profile settings stored under `~/.config/bookbot`. |
+| `bookbot health DIR` | Audit a library for missing covers, inconsistent tags, orphaned files, duplicates, and series gaps. Use `--json-output` for machine-readable output. |
+| `bookbot organize SOURCE` | Reorganize a library into a clean structure. Use `--template abs\|plex\|default` and `--confirm` to execute. |
+| `bookbot chapters detect DIR` | Detect chapters via silence analysis, cue files, track boundaries, or Audnexus data. |
+| `bookbot chapters apply DIR` | Write detected chapters as FFMETADATA1 or cue sidecar files. |
+| `bookbot m4b merge DIR -o OUT` | Merge audio files into a single M4B with optional chapter markers and cover art. |
+| `bookbot m4b split FILE -o DIR` | Split an M4B into individual files by chapter. |
+| `bookbot m4b chapters FILE` | Display embedded chapter markers. |
+| `bookbot m4b tag FILE` | Update metadata tags and cover art on an M4B file. |
+| `bookbot sidecar read DIR` | Display detected sidecar metadata (OPF, JSON, NFO). |
+| `bookbot sidecar write DIR` | Generate sidecar metadata from tags or matched identity. |
+| `bookbot abs login` | Authenticate with an Audiobookshelf server. |
+| `bookbot abs libraries` | List all libraries on the ABS server. |
+| `bookbot abs search LIB QUERY` | Search a library for audiobooks. |
+| `bookbot abs list LIB` | List items in a library. |
+| `bookbot abs show ITEM` | Show full item details with chapters and progress. |
+| `bookbot abs match ITEM` | Trigger metadata match for an item. |
+| `bookbot abs match-all LIB` | Batch match all items in a library. |
+| `bookbot abs progress ITEM` | Get or set playback progress. |
+| `bookbot abs stats` | Show listening statistics. |
+| `bookbot abs sync` | Synchronize playback progress with the server. Use `--watch` for continuous sync. |
 | `bookbot audible ...` | Authenticate, list your library, and download titles directly from Audible. |
 | `bookbot drm ...` | Detect DRM, save activation bytes, and convert protected files. |
 | `bookbot completions SHELL` | Generate shell completions (bash, zsh, fish, or all). |
@@ -179,9 +206,11 @@ Config files use TOML; edit by hand or via `bookbot config` commands.
 | Provider | Notes |
 | --- | --- |
 | Open Library | Default, always enabled, free. Core search source for titles and authors. |
+| Audnexus | Enabled by default, free, no API key. Audiobook-specific metadata and chapter data via ASIN lookup. Supports regional marketplaces. |
 | Google Books | Requires an API key; adds richer descriptions and ISBN data. |
 | LibriVox | Public domain library; great for narrator and language hints. |
 | Audible | Requires authentication; unlocks commercial metadata and download tooling. |
+| Hardcover | Requires a Bearer token from your Hardcover account. GraphQL API for book metadata with audiobook duration matching. |
 
 Provider priorities and fallback logic are configurable through the `ConfigManager`. Combine multiple providers for higher confidence matches.
 
@@ -227,6 +256,70 @@ bookbot audible get-activation-bytes
 This will securely save your activation bytes for future use. After this one-time setup, you can remove DRM from your books without needing to provide the activation bytes every time.
 
 These features depend on optional packages (`audible`, `cryptography`, `keyring`, `selenium`) that are already declared in `pyproject.toml`. Ensure FFmpeg is compiled with the modules required for Audible AAX/AAXC processing.
+
+## Audiobookshelf integration
+
+BookBot can connect to an Audiobookshelf server for metadata matching, progress tracking, and library management.
+
+1. Authenticate with `bookbot abs login --server https://abs.example.com --username admin`.
+2. Browse your server with `bookbot abs libraries`, `bookbot abs list LIB_ID`, and `bookbot abs search LIB_ID QUERY`.
+3. Trigger metadata matching with `bookbot abs match ITEM_ID` or batch match an entire library.
+4. Sync playback progress bidirectionally with `bookbot abs sync`. Use `--watch --interval 60` for continuous background sync.
+
+## Library health checks
+
+Run `bookbot health /path/to/library` to audit for common issues:
+
+- Missing cover art (no embedded cover and no cover.jpg sidecar)
+- Inconsistent tags across tracks in the same book
+- Orphaned non-audio files
+- Duplicate editions (fuzzy title and author matching)
+- Series gaps (missing volumes in a numbered series)
+- Mixed audio formats within a single book
+- Bitrate anomalies (tracks with significantly different bitrates)
+
+Use `--json-output` for machine-readable output or `--verbose` for file-level detail.
+
+## Smart organizer
+
+The `bookbot organize` command restructures messy libraries into clean, player-compatible directory layouts:
+
+```bash
+# Preview proposed moves (default is dry-run)
+bookbot organize /messy/library --template abs
+
+# Execute the reorganization
+bookbot organize /messy/library --template abs --target /clean/library --confirm
+```
+
+Built-in templates: `default`, `abs` (Audiobookshelf-compatible), `plex` (Plex Media Server).
+
+## Chapter detection
+
+BookBot can detect and generate chapter markers using multiple strategies:
+
+1. **Audnexus** - fetch chapter data by ASIN from the Audnexus API
+2. **Cue files** - parse existing .cue sidecar files
+3. **Track boundaries** - treat each audio file as a chapter
+4. **Silence detection** - use FFmpeg to find silence gaps between chapters
+
+```bash
+bookbot chapters detect /path/to/book --method auto
+bookbot chapters apply /path/to/book --format ffmetadata
+```
+
+## Sidecar metadata
+
+BookBot reads and writes sidecar metadata files for interoperability with other audiobook tools:
+
+- **OPF** (Dublin Core XML) - compatible with Calibre and Audiobookshelf
+- **BookLore JSON** - `.metadata.json` format
+- **NFO** - audiobook info files (XML or key-value)
+
+```bash
+bookbot sidecar read /path/to/book
+bookbot sidecar write /path/to/book --format opf
+```
 
 ## Development
 

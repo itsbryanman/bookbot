@@ -100,18 +100,18 @@ def scan(
                     click.echo(f"     - {warning}")
 
         if dry_run:
-            click.echo("\n" + "─" * 60)
-            click.echo("✓ Scan completed. Next steps:")
+            click.echo("\n" + "-" * 60)
+            click.echo("Scan completed. Next steps:")
             click.echo("")
-            click.echo("  📱 Interactive mode:")
+            click.echo("  Interactive mode:")
             click.echo(f"     bookbot tui {folder}")
             click.echo("")
-            click.echo("  🎵 Convert to M4B:")
+            click.echo("  Convert to M4B:")
             if audiobook_sets:
                 example = audiobook_sets[0].source_path
                 click.echo(f'     bookbot convert "{example}" -o ./output --dry-run')
             click.echo("")
-            click.echo("  ⚙️  View config:")
+            click.echo("  View config:")
             click.echo("     bookbot config show")
             click.echo("")
             click.echo("For more help, run: bookbot --help")
@@ -210,7 +210,7 @@ def convert(
 
     # Pre-flight check: Ensure FFmpeg is installed
     if not shutil.which("ffmpeg"):
-        click.echo("❌ Error: FFmpeg not found in PATH.", err=True)
+        click.echo("Error:Error: FFmpeg not found in PATH.", err=True)
         click.echo("\nConversion requires FFmpeg. Please install it first:", err=True)
         click.echo("  • Debian/Ubuntu: sudo apt install ffmpeg", err=True)
         click.echo("  • macOS: brew install ffmpeg", err=True)
@@ -223,7 +223,7 @@ def convert(
     if profile:
         if not config_manager.apply_profile(profile):
             profiles = config_manager.list_profiles()
-            click.echo(f"❌ Error: Profile '{profile}' not found", err=True)
+            click.echo(f"Error:Error: Profile '{profile}' not found", err=True)
             if profiles:
                 click.echo("\nAvailable profiles:", err=True)
                 for name, prof in profiles.items():
@@ -240,13 +240,13 @@ def convert(
     # Check if conversion is enabled in config
     if not config.conversion.enabled:
         click.echo(
-            "⚠️  M4B conversion is currently disabled in your configuration.", err=True
+            "Warning:M4B conversion is currently disabled in your configuration.", err=True
         )
         click.echo("")
         if click.confirm("Would you like to enable it now?", default=True):
             config.conversion.enabled = True
             config_manager.save_config(config)
-            click.echo("✓ Conversion enabled and saved to config.")
+            click.echo("Done:Conversion enabled and saved to config.")
         else:
             click.echo("\nTo enable conversion manually, edit:", err=True)
             click.echo(f"  {config_manager.config_file}", err=True)
@@ -276,7 +276,7 @@ def convert(
         if dry_run:
             # Show conversion plan
             plan = pipeline.create_conversion_plan(folder, conv_config)
-            click.echo(f"\n📋 Conversion Plan ({len(plan.operations)} operation(s)):")
+            click.echo(f"\nConversion Plan ({len(plan.operations)} operation(s)):")
             click.echo("─" * 60)
             for i, op in enumerate(plan.operations, 1):
                 click.echo(f"\n{i}. {op.audiobook_set.source_path.name}")
@@ -288,7 +288,7 @@ def convert(
                     if identity.authors:
                         click.echo(f"   Author: {', '.join(identity.authors)}")
             click.echo("\n" + "─" * 60)
-            click.echo("✓ Dry run complete. No files were modified.")
+            click.echo("Done:Dry run complete. No files were modified.")
             click.echo("\nTo execute, run the same command without --dry-run")
         else:
             # Execute conversion
@@ -408,7 +408,7 @@ def config_set(ctx: click.Context, key: str, value: str) -> None:
     # Parse the key to get section and field
     parts = key.split(".")
     if len(parts) != 2:
-        click.echo("❌ Error: Key must be in format 'section.field'", err=True)
+        click.echo("Error:Error: Key must be in format 'section.field'", err=True)
         click.echo("\nExamples:", err=True)
         click.echo("  bookbot config set conversion.enabled true", err=True)
         click.echo("  bookbot config set conversion.bitrate 256k", err=True)
@@ -418,7 +418,7 @@ def config_set(ctx: click.Context, key: str, value: str) -> None:
 
     # Get the section object
     if not hasattr(config, section):
-        click.echo(f"❌ Error: Unknown section '{section}'", err=True)
+        click.echo(f"Error:Error: Unknown section '{section}'", err=True)
         click.echo("\nAvailable sections: conversion, tagging, providers", err=True)
         sys.exit(1)
 
@@ -427,7 +427,7 @@ def config_set(ctx: click.Context, key: str, value: str) -> None:
     # Check if field exists
     if not hasattr(section_obj, field):
         click.echo(
-            f"❌ Error: Unknown field '{field}' in section '{section}'", err=True
+            f"Error:Error: Unknown field '{field}' in section '{section}'", err=True
         )
         sys.exit(1)
 
@@ -440,19 +440,19 @@ def config_set(ctx: click.Context, key: str, value: str) -> None:
         try:
             converted_value = int(value)
         except ValueError:
-            click.echo(f"❌ Error: '{value}' is not a valid integer", err=True)
+            click.echo(f"Error:Error: '{value}' is not a valid integer", err=True)
             sys.exit(1)
     elif isinstance(original_value, float):
         try:
             converted_value = float(value)
         except ValueError:
-            click.echo(f"❌ Error: '{value}' is not a valid number", err=True)
+            click.echo(f"Error:Error: '{value}' is not a valid number", err=True)
             sys.exit(1)
 
     # Set the value
     setattr(section_obj, field, converted_value)
     config_manager.save_config(config)
-    click.echo(f"✓ Set {key} = {value}")
+    click.echo(f"Done:Set {key} = {value}")
 
 
 @config.command("get")
@@ -470,21 +470,21 @@ def config_get(ctx: click.Context, key: str) -> None:
     # Parse the key
     parts = key.split(".")
     if len(parts) != 2:
-        click.echo("❌ Error: Key must be in format 'section.field'", err=True)
+        click.echo("Error:Error: Key must be in format 'section.field'", err=True)
         sys.exit(1)
 
     section, field = parts
 
     # Get the value
     if not hasattr(config, section):
-        click.echo(f"❌ Error: Unknown section '{section}'", err=True)
+        click.echo(f"Error:Error: Unknown section '{section}'", err=True)
         sys.exit(1)
 
     section_obj = getattr(config, section)
 
     if not hasattr(section_obj, field):
         click.echo(
-            f"❌ Error: Unknown field '{field}' in section '{section}'", err=True
+            f"Error:Error: Unknown field '{field}' in section '{section}'", err=True
         )
         sys.exit(1)
 
@@ -516,12 +516,12 @@ def config_edit(ctx: click.Context) -> None:
 
     try:
         subprocess.run([editor, str(config_file)], check=True)
-        click.echo("✓ Configuration file closed")
+        click.echo("Done:Configuration file closed")
     except subprocess.CalledProcessError:
-        click.echo(f"❌ Error opening editor. Edit manually: {config_file}", err=True)
+        click.echo(f"Error:Error opening editor. Edit manually: {config_file}", err=True)
         sys.exit(1)
     except FileNotFoundError:
-        click.echo(f"❌ Editor '{editor}' not found.", err=True)
+        click.echo(f"Error:Editor '{editor}' not found.", err=True)
         click.echo(f"\nEdit manually: {config_file}", err=True)
         sys.exit(1)
 
@@ -548,13 +548,13 @@ def provider_list(ctx: click.Context) -> None:
         click.echo("")
 
         for provider_id, info in providers_info.items():
-            status_icon = "✅" if info["status"] == "enabled" else "❌"
+            status_icon = "[OK]" if info["status"] == "enabled" else "[X]"
             click.echo(f"{status_icon} {info['name']} ({provider_id})")
             click.echo(f"   Description: {info['description']}")
             click.echo(f"   Requires API Key: {info['requires_api_key']}")
 
             if provider_id == "googlebooks" and info.get("api_key_provided") is False:
-                click.echo("   ⚠️  API key not configured - provider disabled")
+                click.echo("   Warning:API key not configured - provider disabled")
             elif provider_id == "audible" and "marketplace" in info:
                 click.echo(f"   Marketplace: {info['marketplace']}")
 
@@ -585,12 +585,22 @@ def provider_enable(ctx: click.Context, provider_name: str) -> None:
         config.providers.librivox.enabled = True
     elif provider_name == "audible":
         config.providers.audible.enabled = True
+    elif provider_name == "audnexus":
+        config.providers.audnexus.enabled = True
+    elif provider_name == "hardcover":
+        if not config.providers.hardcover.api_key:
+            click.echo("Error: Hardcover requires an API key. Set it first with:")
+            click.echo("  bookbot provider set-key hardcover YOUR_TOKEN")
+            sys.exit(1)
+        config.providers.hardcover.enabled = True
     elif provider_name == "openlibrary":
         click.echo("OpenLibrary is always enabled as the default provider")
         return
     else:
         click.echo(f"Error: Unknown provider '{provider_name}'")
-        click.echo("Available providers: googlebooks, librivox, audible")
+        click.echo(
+            "Available providers: googlebooks, librivox, audible, audnexus, hardcover"
+        )
         sys.exit(1)
 
     config_manager.save_config(config)
@@ -616,6 +626,10 @@ def provider_disable(ctx: click.Context, provider_name: str) -> None:
         config.providers.librivox.enabled = False
     elif provider_name == "audible":
         config.providers.audible.enabled = False
+    elif provider_name == "audnexus":
+        config.providers.audnexus.enabled = False
+    elif provider_name == "hardcover":
+        config.providers.hardcover.enabled = False
     else:
         click.echo(f"Error: Unknown provider '{provider_name}'")
         sys.exit(1)
@@ -640,8 +654,14 @@ def provider_set_key(ctx: click.Context, provider_name: str, api_key: str) -> No
         config.providers.google_books.enabled = True
         config_manager.save_config(config)
         click.echo("Google Books API key set and provider enabled")
+    elif provider_name == "hardcover":
+        config.providers.hardcover.api_key = api_key
+        config.providers.hardcover.enabled = True
+        config_manager.save_config(config)
+        click.echo("Hardcover API key set and provider enabled")
     else:
-        click.echo(f"Error: Provider '{provider_name}' does not require an API key")
+        click.echo(f"Error: Provider '{provider_name}' does not use an API key")
+        click.echo("Providers with API keys: googlebooks, hardcover")
         sys.exit(1)
 
 
@@ -751,21 +771,21 @@ def audible_auth(ctx: click.Context, country: str) -> None:
 
         if client.authenticate():
             click.echo(
-                "✅ Authentication successful! You can now import Audible books."
+                "[OK]Authentication successful! You can now import Audible books."
             )
         else:
             click.echo(
-                "❌ Authentication failed. Please try again.",
+                "Error:Authentication failed. Please try again.",
                 err=True,
             )
             sys.exit(1)
 
     except ImportError as e:
-        click.echo(f"❌ Missing dependency: {e}", err=True)
+        click.echo(f"Error:Missing dependency: {e}", err=True)
         click.echo("Install the audible package with: pip install audible", err=True)
         sys.exit(1)
     except Exception as e:
-        click.echo(f"❌ Authentication failed: {e}", err=True)
+        click.echo(f"Error:Authentication failed: {e}", err=True)
         sys.exit(1)
 
 
@@ -798,7 +818,7 @@ def audible_import(
         cache_file = Path.home() / ".config" / "bookbot" / ".audible_library_cache.json"
         if not cache_file.exists():
             click.echo(
-                "❌ No library cache found. Run 'bookbot audible list' first.", err=True
+                "Error:No library cache found. Run 'bookbot audible list' first.", err=True
             )
             sys.exit(1)
 
@@ -809,14 +829,14 @@ def audible_import(
         try:
             book_indices = [int(n.strip()) - 1 for n in numbers.split(",") if n.strip()]
         except ValueError:
-            click.echo("❌ Invalid book numbers. Use format: 1,2,3", err=True)
+            click.echo("Error:Invalid book numbers. Use format: 1,2,3", err=True)
             sys.exit(1)
 
         # Validate indices
         invalid = [i + 1 for i in book_indices if i < 0 or i >= len(library)]
         if invalid:
             click.echo(
-                f"❌ Invalid book numbers: {invalid}. "
+                f"Error:Invalid book numbers: {invalid}. "
                 f"Library has {len(library)} books.",
                 err=True,
             )
@@ -832,12 +852,12 @@ def audible_import(
         # Check if authenticated
         if not client._load_stored_auth():
             click.echo(
-                "❌ Not authenticated. Run 'bookbot audible auth' first.", err=True
+                "Error:Not authenticated. Run 'bookbot audible auth' first.", err=True
             )
             sys.exit(1)
 
         # Import each book
-        click.echo(f"📚 Importing {len(book_indices)} book(s)...\n")
+        click.echo(f"Importing {len(book_indices)} book(s)...\n")
 
         for idx in book_indices:
             book = library[idx]
@@ -853,10 +873,10 @@ def audible_import(
             success = client.download_book(asin, str(book_path))
 
             if success:
-                click.echo(f"  ✅ Downloaded to: {book_path}")
+                click.echo(f"  [OK]Downloaded to: {book_path}")
 
                 if remove_drm:
-                    click.echo("  🔓 Removing DRM...")
+                    click.echo("  [DRM]Removing DRM...")
 
                     # Try to get activation bytes from client if not provided
                     if not activation_bytes:
@@ -864,25 +884,25 @@ def audible_import(
 
                     if not activation_bytes:
                         click.echo(
-                            "  ⚠️  No activation bytes available. Skipping DRM removal."
+                            "  Warning:No activation bytes available. Skipping DRM removal."
                         )
                     else:
                         remover = DRMRemover(activation_bytes=activation_bytes)
                         result = remover.remove_drm(book_path)
 
                         if result.success:
-                            click.echo(f"  ✅ DRM removed: {result.output_file}")
+                            click.echo(f"  [OK]DRM removed: {result.output_file}")
                         else:
                             click.echo(
-                                f"  ❌ DRM removal failed: {result.error_message}",
+                                f"  Error:DRM removal failed: {result.error_message}",
                                 err=True,
                             )
             else:
-                click.echo("  ❌ Download failed")
+                click.echo("  Error:Download failed")
 
             click.echo("")
 
-        click.echo("✨ Import complete!")
+        click.echo("Import complete!")
 
     except Exception as e:
         click.echo(f"Import failed: {e}", err=True)
@@ -1081,7 +1101,7 @@ def audible_list(ctx: click.Context, limit: int | None) -> None:
         # Check if authenticated
         if not client._load_stored_auth():
             click.echo(
-                "❌ Not authenticated. Run 'bookbot audible auth' first.",
+                "Error:Not authenticated. Run 'bookbot audible auth' first.",
                 err=True,
             )
             sys.exit(1)
@@ -1101,7 +1121,7 @@ def audible_list(ctx: click.Context, limit: int | None) -> None:
 
         display_count = len(library) if limit is None else min(limit, len(library))
 
-        click.echo(f"📚 Found {len(library)} books in your library\n")
+        click.echo(f"Found {len(library)} books in your library\n")
 
         for i, book in enumerate(library[:display_count], 1):
             title = book.get("title", "Unknown")
@@ -1117,7 +1137,7 @@ def audible_list(ctx: click.Context, limit: int | None) -> None:
                 f"\n... and {len(library) - limit} more (use --limit to show all)"
             )
 
-        click.echo("\n💡 To import books, use: bookbot audible import 1,2,3")
+        click.echo("\nTip:To import books, use: bookbot audible import 1,2,3")
 
     except Exception as e:
         click.echo(f"Failed to list library: {e}", err=True)
@@ -1180,7 +1200,7 @@ def drm_detect(ctx: click.Context, files: tuple[Path, ...], recursive: bool) -> 
         for file_path in files_to_scan:
             drm_info = detector.detect_drm(file_path)
 
-            status_icon = "🔒" if drm_info.is_protected else "✅"
+            status_icon = "[LOCKED]" if drm_info.is_protected else "[OK]"
             click.echo(f"{status_icon} {file_path.name}: {drm_info.drm_type.value}")
 
             if drm_info.is_protected:
@@ -1255,9 +1275,9 @@ def drm_remove(
                 click.echo("Attempting to automatically fetch activation bytes...")
                 activation_bytes = client.get_activation_bytes()
                 if activation_bytes:
-                    click.echo("✅ Activation bytes fetched successfully!")
+                    click.echo("[OK]Activation bytes fetched successfully!")
                 else:
-                    click.echo("⚠️  Could not automatically fetch activation bytes.")
+                    click.echo("Warning:Could not automatically fetch activation bytes.")
         except ImportError:
             pass
 
@@ -1316,13 +1336,13 @@ def drm_remove(
             drm_info = detector.detect_drm(file_path)
 
             if not drm_info.is_protected:
-                click.echo(f"✅ {file_path.name}: No DRM protection")
+                click.echo(f"[OK]{file_path.name}: No DRM protection")
                 success_count += 1
                 continue
 
             if dry_run:
                 click.echo(
-                    f"🔒 {file_path.name}: Would remove {drm_info.drm_type.value} DRM"
+                    f"[LOCKED] {file_path.name}: Would remove {drm_info.drm_type.value} DRM"
                 )
                 continue
 
@@ -1334,12 +1354,12 @@ def drm_remove(
             result = remover.remove_drm(file_path, output_path, activation_bytes)
 
             if result.success:
-                click.echo(f"✅ {file_path.name}: DRM removed successfully")
+                click.echo(f"[OK]{file_path.name}: DRM removed successfully")
                 if result.output_file:
                     click.echo(f"    Output: {result.output_file}")
                 success_count += 1
             else:
-                click.echo(f"❌ {file_path.name}: Failed - {result.error_message}")
+                click.echo(f"Error:{file_path.name}: Failed - {result.error_message}")
                 error_count += 1
 
         if dry_run:
@@ -1355,6 +1375,922 @@ def drm_remove(
     except Exception as e:
         click.echo(f"Error during DRM removal: {e}", err=True)
         sys.exit(1)
+
+
+# --- Health Check Commands (Feature 1D) ---
+
+
+@cli.command()
+@click.argument("folder", type=click.Path(exists=True, file_okay=False, path_type=Path))
+@click.option("--json-output", "json_out", is_flag=True, help="Output machine-readable JSON")
+@click.option("--verbose", is_flag=True, help="Show file paths for each issue")
+@click.pass_context
+def health(
+    ctx: click.Context, folder: Path, json_out: bool, verbose: bool
+) -> None:
+    """Audit an audiobook library for common issues."""
+    from .core.discovery import AudioFileScanner
+    from .core.health import LibraryHealthChecker
+
+    scanner = AudioFileScanner(recursive=True)
+    click.echo(f"Scanning {folder}...")
+    audiobook_sets = scanner.scan_directory(folder)
+
+    if not audiobook_sets:
+        click.echo("No audiobooks found.")
+        return
+
+    checker = LibraryHealthChecker()
+    report = checker.run_all_checks(folder, audiobook_sets)
+
+    if json_out:
+        import json
+
+        click.echo(json.dumps(report.model_dump(), indent=2, default=str))
+        return
+
+    summary = report.to_summary()
+    click.echo(f"\nHealth Report: {summary['total']} issue(s) found")
+    click.echo("-" * 50)
+
+    if report.missing_covers:
+        click.echo(f"\nMissing Covers ({len(report.missing_covers)}):")
+        for item in report.missing_covers:
+            click.echo(f"  - {item['title']}")
+            if verbose:
+                click.echo(f"    Path: {item['path']}")
+
+    if report.inconsistent_tags:
+        click.echo(f"\nInconsistent Tags ({len(report.inconsistent_tags)}):")
+        for item in report.inconsistent_tags:
+            click.echo(f"  - {item['title']}: {', '.join(item['mismatches'])}")
+
+    if report.orphaned_files:
+        click.echo(f"\nOrphaned Files ({len(report.orphaned_files)}):")
+        for filepath in report.orphaned_files[:20]:
+            click.echo(f"  - {filepath}")
+        if len(report.orphaned_files) > 20:
+            click.echo(f"  ... and {len(report.orphaned_files) - 20} more")
+
+    if report.duplicate_editions:
+        click.echo(f"\nPossible Duplicates ({len(report.duplicate_editions)} groups):")
+        for group in report.duplicate_editions:
+            titles = [item["title"] for item in group]
+            click.echo(f"  - {' / '.join(titles)}")
+
+    if report.series_gaps:
+        click.echo(f"\nSeries Gaps ({len(report.series_gaps)}):")
+        for item in report.series_gaps:
+            click.echo(
+                f"  - {item['series']}: missing volumes {item['missing_volumes']}"
+            )
+
+    if report.format_inconsistencies:
+        click.echo(f"\nMixed Formats ({len(report.format_inconsistencies)}):")
+        for item in report.format_inconsistencies:
+            click.echo(f"  - {item['title']}: {item['formats']}")
+
+    if report.bitrate_anomalies:
+        click.echo(f"\nBitrate Anomalies ({len(report.bitrate_anomalies)}):")
+        for item in report.bitrate_anomalies:
+            click.echo(
+                f"  - {item['title']} (avg {item['average_bitrate']}kbps): "
+                f"{len(item['anomalies'])} outlier(s)"
+            )
+
+
+# --- Organize Commands (Feature 1E) ---
+
+
+@cli.command()
+@click.argument("source", type=click.Path(exists=True, file_okay=False, path_type=Path))
+@click.option(
+    "--target",
+    type=click.Path(path_type=Path),
+    help="Target directory for reorganized files",
+)
+@click.option(
+    "--template",
+    type=click.Choice(["default", "abs", "plex"]),
+    default="default",
+    help="Naming template preset",
+)
+@click.option("--dry-run", is_flag=True, default=True, help="Show proposed moves only")
+@click.option("--confirm", is_flag=True, help="Execute the reorganization")
+@click.pass_context
+def organize(
+    ctx: click.Context,
+    source: Path,
+    target: Path | None,
+    template: str,
+    dry_run: bool,
+    confirm: bool,
+) -> None:
+    """Reorganize an audiobook library into a clean directory structure."""
+    from .core.discovery import AudioFileScanner
+    from .core.organizer import SmartOrganizer
+
+    scanner = AudioFileScanner(recursive=True)
+    click.echo(f"Scanning {source}...")
+    audiobook_sets = scanner.scan_directory(source)
+
+    if not audiobook_sets:
+        click.echo("No audiobooks found.")
+        return
+
+    organizer = SmartOrganizer()
+    plan = organizer.propose_reorganization(source, target, template, audiobook_sets)
+
+    click.echo(f"\nReorganization Plan ({plan.total_moves} file moves):")
+    click.echo("-" * 50)
+
+    if plan.conflicts:
+        click.echo("\nConflicts (must be resolved before executing):")
+        for conflict in plan.conflicts:
+            click.echo(f"  [!] {conflict}")
+
+    if plan.warnings:
+        click.echo("\nWarnings:")
+        for warning in plan.warnings:
+            click.echo(f"  [?] {warning}")
+
+    # Show sample of moves
+    shown = 0
+    for op in plan.operations[:20]:
+        click.echo(f"  {op.source} -> {op.destination}")
+        shown += 1
+    if plan.total_moves > 20:
+        click.echo(f"  ... and {plan.total_moves - 20} more moves")
+
+    if confirm and plan.is_valid:
+        click.echo("\nExecuting reorganization...")
+        success = organizer.execute_plan(plan, dry_run=False)
+        if success:
+            click.echo("Reorganization completed successfully.")
+        else:
+            click.echo("Reorganization failed. Changes have been rolled back.", err=True)
+            sys.exit(1)
+    elif not plan.is_valid:
+        click.echo("\nPlan has conflicts. Resolve them before using --confirm.")
+    else:
+        click.echo("\nDry run complete. Use --confirm to execute.")
+
+
+# --- Chapter Commands (Feature 2A) ---
+
+
+@cli.group()
+def chapters() -> None:
+    """Chapter detection and management commands."""
+    pass
+
+
+@chapters.command("detect")
+@click.argument("folder", type=click.Path(exists=True, file_okay=False, path_type=Path))
+@click.option(
+    "--method",
+    type=click.Choice(["auto", "silence", "tracks", "audnexus"]),
+    default="auto",
+    help="Detection method",
+)
+@click.option("--noise-db", type=float, default=-50.0, help="Noise threshold in dB")
+@click.option("--min-silence", type=float, default=2.0, help="Minimum silence duration")
+@click.pass_context
+def chapters_detect(
+    ctx: click.Context,
+    folder: Path,
+    method: str,
+    noise_db: float,
+    min_silence: float,
+) -> None:
+    """Detect chapters in audiobook files."""
+    import asyncio
+
+    from .chapters.detector import ChapterDetector
+    from .core.discovery import AudioFileScanner
+
+    scanner = AudioFileScanner(recursive=True)
+    audiobook_sets = scanner.scan_directory(folder)
+
+    if not audiobook_sets:
+        click.echo("No audiobooks found.")
+        return
+
+    detector = ChapterDetector()
+
+    for ab_set in audiobook_sets:
+        click.echo(f"\n{ab_set.raw_title_guess or ab_set.source_path.name}:")
+
+        if method == "silence":
+            audio_files = sorted(
+                [t.src_path for t in ab_set.tracks], key=lambda p: p.name
+            )
+            detected = detector.detect_from_silence(
+                audio_files, noise_db=noise_db, min_silence_sec=min_silence
+            )
+        elif method == "tracks":
+            detected = detector.detect_from_tracks(ab_set)
+        elif method == "audnexus":
+            detected = asyncio.run(_detect_audnexus(ab_set, ctx))
+        else:
+            detected = asyncio.run(detector.auto_detect(ab_set))
+
+        if not detected:
+            click.echo("  No chapters detected.")
+            continue
+
+        click.echo(f"  Found {len(detected)} chapter(s) (source: {detected[0].source}):")
+        for ch in detected:
+            start = _format_ms(ch.start_ms)
+            end = _format_ms(ch.end_ms) if ch.end_ms else "?"
+            click.echo(f"    {start} - {end}  {ch.title}")
+
+
+async def _detect_audnexus(
+    ab_set: "AudiobookSet", ctx: click.Context
+) -> list:
+    """Helper to detect chapters via Audnexus."""
+    from .chapters.detector import ChapterDetector
+    from .providers.audnexus import AudnexusProvider
+
+    provider = AudnexusProvider()
+    detector = ChapterDetector()
+    try:
+        return await detector.auto_detect(ab_set, audnexus=provider)
+    finally:
+        await provider.close()
+
+
+@chapters.command("apply")
+@click.argument("folder", type=click.Path(exists=True, file_okay=False, path_type=Path))
+@click.option(
+    "--format",
+    "out_format",
+    type=click.Choice(["ffmetadata", "cue"]),
+    default="ffmetadata",
+    help="Output format",
+)
+@click.option("--dry-run", is_flag=True, help="Show what would be done")
+@click.pass_context
+def chapters_apply(
+    ctx: click.Context, folder: Path, out_format: str, dry_run: bool
+) -> None:
+    """Write detected chapters to files."""
+    import asyncio
+
+    from .chapters.detector import ChapterDetector
+    from .chapters.writer import ChapterWriter
+    from .core.discovery import AudioFileScanner
+
+    scanner = AudioFileScanner(recursive=True)
+    audiobook_sets = scanner.scan_directory(folder)
+
+    if not audiobook_sets:
+        click.echo("No audiobooks found.")
+        return
+
+    detector = ChapterDetector()
+    writer = ChapterWriter()
+
+    for ab_set in audiobook_sets:
+        detected = asyncio.run(detector.auto_detect(ab_set))
+        if not detected:
+            click.echo(
+                f"No chapters detected for "
+                f"{ab_set.raw_title_guess or ab_set.source_path.name}"
+            )
+            continue
+
+        if dry_run:
+            click.echo(
+                f"Would write {len(detected)} chapters for "
+                f"{ab_set.raw_title_guess or ab_set.source_path.name}"
+            )
+            continue
+
+        if out_format == "ffmetadata":
+            out_path = ab_set.source_path / "chapters.txt"
+            success = writer.write_to_ffmetadata(out_path, detected)
+        else:
+            out_path = ab_set.source_path / "chapters.cue"
+            success = writer.write_to_cue(out_path, detected)
+
+        if success:
+            click.echo(f"Wrote {len(detected)} chapters to {out_path}")
+        else:
+            click.echo(f"Failed to write chapters for {ab_set.source_path.name}", err=True)
+
+
+def _format_ms(ms: int) -> str:
+    """Format milliseconds as HH:MM:SS."""
+    total_seconds = ms // 1000
+    hours = total_seconds // 3600
+    minutes = (total_seconds % 3600) // 60
+    seconds = total_seconds % 60
+    if hours > 0:
+        return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+    return f"{minutes:02d}:{seconds:02d}"
+
+
+# --- M4B Commands (Feature 2B) ---
+
+
+@cli.group()
+def m4b() -> None:
+    """M4B audiobook file operations."""
+    pass
+
+
+@m4b.command("merge")
+@click.argument("folder", type=click.Path(exists=True, file_okay=False, path_type=Path))
+@click.option("-o", "--output", type=click.Path(path_type=Path), required=True)
+@click.option("--chapters-mode", type=click.Choice(["auto", "none"]), default="auto")
+@click.option("--cover", type=click.Path(exists=True, path_type=Path))
+@click.option("--normalize", is_flag=True)
+def m4b_merge(
+    folder: Path,
+    output: Path,
+    chapters_mode: str,
+    cover: Path | None,
+    normalize: bool,
+) -> None:
+    """Merge audio files in a directory into a single M4B."""
+    import asyncio
+
+    from .convert.ffmpeg import FFmpegWrapper
+    from .core.discovery import AudioFileScanner
+
+    scanner = AudioFileScanner(recursive=False)
+    audiobook_sets = scanner.scan_directory(folder)
+
+    if not audiobook_sets:
+        click.echo("No audio files found.")
+        return
+
+    ab_set = audiobook_sets[0]
+    input_files = sorted(
+        [t.src_path for t in ab_set.tracks], key=lambda p: p.name
+    )
+
+    click.echo(f"Merging {len(input_files)} files into {output}...")
+
+    ffmpeg = FFmpegWrapper()
+
+    chapter_list = None
+    if chapters_mode == "auto":
+        from .chapters.detector import ChapterDetector
+
+        detector = ChapterDetector()
+        chapter_list = asyncio.run(detector.auto_detect(ab_set))
+
+    try:
+        result = ffmpeg.merge_to_m4b(
+            input_files, output, chapters=chapter_list, cover=cover
+        )
+        click.echo(f"Merge complete: {result}")
+    except RuntimeError as e:
+        click.echo(f"Merge failed: {e}", err=True)
+        sys.exit(1)
+
+
+@m4b.command("split")
+@click.argument("input_file", type=click.Path(exists=True, dir_okay=False, path_type=Path))
+@click.option("-o", "--output-dir", type=click.Path(path_type=Path), required=True)
+@click.option("--format", "out_format", type=click.Choice(["m4a", "mp3"]), default="m4a")
+def m4b_split(input_file: Path, output_dir: Path, out_format: str) -> None:
+    """Split an M4B file by chapters."""
+    from .convert.ffmpeg import FFmpegWrapper
+
+    ffmpeg = FFmpegWrapper()
+    click.echo(f"Splitting {input_file.name} by chapters...")
+
+    output_files = ffmpeg.split_m4b(input_file, output_dir, output_format=out_format)
+
+    if output_files:
+        click.echo(f"Created {len(output_files)} file(s) in {output_dir}")
+    else:
+        click.echo("No chapters found or split failed.", err=True)
+        sys.exit(1)
+
+
+@m4b.command("chapters")
+@click.argument("input_file", type=click.Path(exists=True, dir_okay=False, path_type=Path))
+def m4b_chapters(input_file: Path) -> None:
+    """Display embedded chapters in an M4B file."""
+    from .convert.ffmpeg import FFmpegWrapper
+
+    ffmpeg = FFmpegWrapper()
+    extracted = ffmpeg.extract_chapters(input_file)
+
+    if not extracted:
+        click.echo("No chapters found.")
+        return
+
+    click.echo(f"Chapters in {input_file.name}:")
+    for i, ch in enumerate(extracted, 1):
+        start = _format_ms(ch.start_ms)
+        end = _format_ms(ch.end_ms) if ch.end_ms else "?"
+        click.echo(f"  {i:3d}. {start} - {end}  {ch.title}")
+
+
+@m4b.command("tag")
+@click.argument("input_file", type=click.Path(exists=True, dir_okay=False, path_type=Path))
+@click.option("--title", type=str)
+@click.option("--author", type=str)
+@click.option("--cover", type=click.Path(exists=True, path_type=Path))
+def m4b_tag(
+    input_file: Path,
+    title: str | None,
+    author: str | None,
+    cover: Path | None,
+) -> None:
+    """Update metadata tags on an M4B file."""
+    from .convert.ffmpeg import FFmpegWrapper
+
+    ffmpeg = FFmpegWrapper()
+    metadata: dict[str, str] = {}
+    if title:
+        metadata["title"] = title
+        metadata["album"] = title
+    if author:
+        metadata["artist"] = author
+        metadata["albumartist"] = author
+
+    if not metadata and not cover:
+        click.echo("No metadata specified. Use --title, --author, or --cover.")
+        return
+
+    try:
+        ffmpeg.embed_metadata(input_file, metadata, cover=cover)
+        click.echo(f"Updated metadata on {input_file.name}")
+    except RuntimeError as e:
+        click.echo(f"Failed to update metadata: {e}", err=True)
+        sys.exit(1)
+
+
+# --- Sidecar Commands (Feature 2C) ---
+
+
+@cli.group()
+def sidecar() -> None:
+    """Sidecar metadata file operations."""
+    pass
+
+
+@sidecar.command("read")
+@click.argument("folder", type=click.Path(exists=True, file_okay=False, path_type=Path))
+def sidecar_read(folder: Path) -> None:
+    """Display detected sidecar metadata."""
+    from .io.sidecar import SidecarManager
+
+    manager = SidecarManager()
+    identity = manager.auto_detect_sidecar(folder)
+
+    if not identity:
+        click.echo("No sidecar metadata files found.")
+        return
+
+    click.echo(f"Source: {identity.provider}")
+    click.echo(f"Title: {identity.title}")
+    if identity.authors:
+        click.echo(f"Authors: {', '.join(identity.authors)}")
+    if identity.series_name:
+        series_str = identity.series_name
+        if identity.series_index:
+            series_str += f" #{identity.series_index}"
+        click.echo(f"Series: {series_str}")
+    if identity.narrator:
+        click.echo(f"Narrator: {identity.narrator}")
+    if identity.year:
+        click.echo(f"Year: {identity.year}")
+    if identity.isbn_13 or identity.isbn_10:
+        click.echo(f"ISBN: {identity.isbn_13 or identity.isbn_10}")
+    if identity.asin:
+        click.echo(f"ASIN: {identity.asin}")
+    if identity.publisher:
+        click.echo(f"Publisher: {identity.publisher}")
+    if identity.language:
+        click.echo(f"Language: {identity.language}")
+
+
+@sidecar.command("write")
+@click.argument("folder", type=click.Path(exists=True, file_okay=False, path_type=Path))
+@click.option(
+    "--format",
+    "out_format",
+    type=click.Choice(["opf", "json"]),
+    default="opf",
+    help="Output format",
+)
+@click.option(
+    "--from-tags",
+    is_flag=True,
+    help="Generate from embedded audio tags",
+)
+@click.pass_context
+def sidecar_write(
+    ctx: click.Context, folder: Path, out_format: str, from_tags: bool
+) -> None:
+    """Generate sidecar metadata from tags or matched identity."""
+    from .core.discovery import AudioFileScanner
+    from .core.models import ProviderIdentity
+    from .io.sidecar import SidecarManager
+
+    scanner = AudioFileScanner(recursive=False)
+    audiobook_sets = scanner.scan_directory(folder)
+
+    if not audiobook_sets:
+        click.echo("No audiobooks found in directory.")
+        return
+
+    ab_set = audiobook_sets[0]
+    manager = SidecarManager()
+
+    if ab_set.chosen_identity and not from_tags:
+        identity = ab_set.chosen_identity
+    else:
+        # Build identity from tags
+        identity = ProviderIdentity(
+            provider="local_tags",
+            external_id=str(folder),
+            title=ab_set.raw_title_guess or folder.name,
+            authors=[ab_set.author_guess] if ab_set.author_guess else [],
+            series_name=ab_set.series_guess,
+            year=ab_set.year_guess,
+            narrator=ab_set.narrator_guess,
+            language=ab_set.language_guess,
+        )
+
+    if out_format == "opf":
+        out_path = folder / "metadata.opf"
+        manager.write_opf(out_path, identity)
+    else:
+        out_path = folder / "metadata.json"
+        manager.write_metadata_json(out_path, identity)
+
+    click.echo(f"Wrote sidecar metadata to {out_path}")
+
+
+@sidecar.command("sync")
+@click.argument("folder", type=click.Path(exists=True, file_okay=False, path_type=Path))
+def sidecar_sync(folder: Path) -> None:
+    """Read sidecar metadata and display it for review."""
+    from .io.sidecar import SidecarManager
+
+    manager = SidecarManager()
+    identity = manager.auto_detect_sidecar(folder)
+
+    if identity:
+        click.echo(f"Found sidecar metadata: {identity.title}")
+        click.echo("Use 'bookbot sidecar read' for full details.")
+    else:
+        click.echo("No sidecar metadata found. Use 'bookbot sidecar write' to create one.")
+
+
+# --- ABS (Audiobookshelf) Commands (Feature 1C) ---
+
+
+@cli.group()
+def abs() -> None:
+    """Audiobookshelf server commands."""
+    pass
+
+
+@abs.command("login")
+@click.option("--server", required=True, help="Audiobookshelf server URL")
+@click.option("--username", required=True, help="Username")
+@click.pass_context
+def abs_login(ctx: click.Context, server: str, username: str) -> None:
+    """Authenticate with an Audiobookshelf server."""
+    import asyncio
+
+    from .abs.client import AudiobookshelfClient
+
+    password = click.prompt("Password", hide_input=True)
+    config_manager = ctx.obj["config_manager"]
+
+    token = asyncio.run(AudiobookshelfClient.login(server, username, password))
+
+    if token:
+        config = config_manager.load_config()
+        config.abs.server_url = server
+        config.abs.api_token = token
+        config.abs.username = username
+        config_manager.save_config(config)
+        click.echo("Login successful. Token saved to config.")
+    else:
+        click.echo("Login failed. Check your server URL and credentials.", err=True)
+        sys.exit(1)
+
+
+def _get_abs_client(ctx: click.Context) -> "AudiobookshelfClient":
+    """Get an ABS client from config."""
+    from .abs.client import AudiobookshelfClient
+
+    config_manager = ctx.obj["config_manager"]
+    config = config_manager.load_config()
+
+    if not config.abs.server_url or not config.abs.api_token:
+        click.echo(
+            "Not configured. Run 'bookbot abs login --server URL --username USER' first.",
+            err=True,
+        )
+        sys.exit(1)
+
+    return AudiobookshelfClient(config.abs.server_url, config.abs.api_token)
+
+
+@abs.command("libraries")
+@click.pass_context
+def abs_libraries(ctx: click.Context) -> None:
+    """List all libraries on the server."""
+    import asyncio
+
+    client = _get_abs_client(ctx)
+    libraries = asyncio.run(client.get_libraries())
+
+    if not libraries:
+        click.echo("No libraries found.")
+        return
+
+    click.echo("Libraries:")
+    for lib in libraries:
+        media_type = lib.get("mediaType", "unknown")
+        click.echo(f"  {lib.get('id', '?')}  {lib.get('name', '?')}  ({media_type})")
+
+
+@abs.command("search")
+@click.argument("library_id", type=str)
+@click.argument("query", type=str)
+@click.pass_context
+def abs_search(ctx: click.Context, library_id: str, query: str) -> None:
+    """Search a library for audiobooks."""
+    import asyncio
+
+    client = _get_abs_client(ctx)
+    results = asyncio.run(client.search_library(library_id, query))
+
+    book_results = results.get("book", results.get("books", []))
+    if not book_results:
+        click.echo("No results found.")
+        return
+
+    click.echo(f"Search results for '{query}':")
+    for item in book_results:
+        if isinstance(item, dict):
+            lib_item = item.get("libraryItem", item)
+            media = lib_item.get("media", {})
+            metadata = media.get("metadata", {})
+            title = metadata.get("title", lib_item.get("title", "?"))
+            author = metadata.get("authorName", "")
+            item_id = lib_item.get("id", "?")
+            click.echo(f"  [{item_id}] {title} - {author}")
+
+
+@abs.command("list")
+@click.argument("library_id", type=str)
+@click.option("--limit", type=int, default=20)
+@click.option("--page", type=int, default=0)
+@click.pass_context
+def abs_list(ctx: click.Context, library_id: str, limit: int, page: int) -> None:
+    """List items in a library."""
+    import asyncio
+
+    client = _get_abs_client(ctx)
+    data = asyncio.run(client.get_library_items(library_id, limit=limit, page=page))
+
+    results = data.get("results", [])
+    total = data.get("total", len(results))
+
+    if not results:
+        click.echo("No items found.")
+        return
+
+    click.echo(f"Items (page {page}, {len(results)} of {total}):")
+    for item in results:
+        media = item.get("media", {})
+        metadata = media.get("metadata", {})
+        title = metadata.get("title", item.get("title", "?"))
+        author = metadata.get("authorName", "")
+        item_id = item.get("id", "?")
+        click.echo(f"  [{item_id}] {title} - {author}")
+
+
+@abs.command("show")
+@click.argument("item_id", type=str)
+@click.pass_context
+def abs_show(ctx: click.Context, item_id: str) -> None:
+    """Show full item details."""
+    import asyncio
+
+    client = _get_abs_client(ctx)
+    item = asyncio.run(client.get_item(item_id))
+
+    if not item:
+        click.echo("Item not found.")
+        return
+
+    media = item.get("media", {})
+    metadata = media.get("metadata", {})
+
+    click.echo(f"Title: {metadata.get('title', '?')}")
+    click.echo(f"Author: {metadata.get('authorName', '?')}")
+    click.echo(f"Narrator: {metadata.get('narratorName', '?')}")
+
+    if metadata.get("series"):
+        click.echo(f"Series: {metadata['series']}")
+
+    duration = media.get("duration", 0)
+    if duration:
+        hours = int(duration // 3600)
+        minutes = int((duration % 3600) // 60)
+        click.echo(f"Duration: {hours}h {minutes}m")
+
+    audio_files = media.get("audioFiles", [])
+    if audio_files:
+        click.echo(f"Audio Files: {len(audio_files)}")
+
+    chapters = media.get("chapters", [])
+    if chapters:
+        click.echo(f"Chapters: {len(chapters)}")
+        for ch in chapters[:10]:
+            click.echo(f"  - {ch.get('title', '?')}")
+        if len(chapters) > 10:
+            click.echo(f"  ... and {len(chapters) - 10} more")
+
+    # Progress
+    progress = asyncio.run(client.get_progress(item_id))
+    if progress:
+        pct = progress.get("progress", 0) * 100
+        finished = progress.get("isFinished", False)
+        status = "Finished" if finished else f"{pct:.1f}%"
+        click.echo(f"Progress: {status}")
+
+
+@abs.command("match")
+@click.argument("item_id", type=str)
+@click.option("--provider", default="audnexus", help="Metadata provider to use")
+@click.pass_context
+def abs_match(ctx: click.Context, item_id: str, provider: str) -> None:
+    """Trigger metadata match for an item."""
+    import asyncio
+
+    client = _get_abs_client(ctx)
+    result = asyncio.run(client.match_item(item_id, provider=provider))
+
+    if result:
+        click.echo(f"Match triggered for item {item_id} using {provider}")
+    else:
+        click.echo("Match request failed.", err=True)
+        sys.exit(1)
+
+
+@abs.command("match-all")
+@click.argument("library_id", type=str)
+@click.pass_context
+def abs_match_all(ctx: click.Context, library_id: str) -> None:
+    """Batch match all items in a library."""
+    import asyncio
+
+    client = _get_abs_client(ctx)
+    result = asyncio.run(client.batch_match(library_id))
+
+    if result:
+        click.echo(f"Batch match started for library {library_id}")
+    else:
+        click.echo("Batch match request failed.", err=True)
+        sys.exit(1)
+
+
+@abs.command("progress")
+@click.argument("item_id", type=str)
+@click.option("--set", "set_val", type=float, help="Set progress (0.0 - 1.0)")
+@click.pass_context
+def abs_progress(ctx: click.Context, item_id: str, set_val: float | None) -> None:
+    """Get or set playback progress for an item."""
+    import asyncio
+
+    client = _get_abs_client(ctx)
+
+    if set_val is not None:
+        result = asyncio.run(
+            client.update_progress(item_id, set_val, set_val * 3600)
+        )
+        if result is not None:
+            click.echo(f"Progress set to {set_val:.1%}")
+        else:
+            click.echo("Failed to update progress.", err=True)
+            sys.exit(1)
+    else:
+        progress = asyncio.run(client.get_progress(item_id))
+        if progress:
+            pct = progress.get("progress", 0)
+            current = progress.get("currentTime", 0)
+            finished = progress.get("isFinished", False)
+            click.echo(f"Progress: {pct:.1%}")
+            click.echo(f"Current Time: {current:.0f}s")
+            click.echo(f"Finished: {finished}")
+        else:
+            click.echo("No progress data found.")
+
+
+@abs.command("stats")
+@click.pass_context
+def abs_stats(ctx: click.Context) -> None:
+    """Show listening statistics."""
+    import asyncio
+
+    client = _get_abs_client(ctx)
+    stats = asyncio.run(client.get_stats())
+
+    if not stats:
+        click.echo("No statistics available.")
+        return
+
+    total_time = stats.get("totalTime", 0)
+    hours = int(total_time // 3600)
+    days_listened = stats.get("days", {})
+    recent_sessions = stats.get("recentSessions", [])
+
+    click.echo("Listening Statistics:")
+    click.echo(f"  Total listening time: {hours} hours")
+    click.echo(f"  Days with listening: {len(days_listened)}")
+    click.echo(f"  Recent sessions: {len(recent_sessions)}")
+
+
+@abs.command("collections")
+@click.argument("library_id", type=str)
+@click.pass_context
+def abs_collections(ctx: click.Context, library_id: str) -> None:
+    """List collections in a library."""
+    import asyncio
+
+    client = _get_abs_client(ctx)
+    collections = asyncio.run(client.get_collections(library_id))
+
+    if not collections:
+        click.echo("No collections found.")
+        return
+
+    click.echo("Collections:")
+    for col in collections:
+        name = col.get("name", "?")
+        book_count = len(col.get("books", []))
+        click.echo(f"  {col.get('id', '?')}  {name} ({book_count} books)")
+
+
+@abs.command("sync")
+@click.option(
+    "--direction",
+    type=click.Choice(["pull", "push", "both"]),
+    default="both",
+    help="Sync direction",
+)
+@click.option("--watch", is_flag=True, help="Continuous sync mode")
+@click.option("--interval", type=int, default=60, help="Sync interval in seconds")
+@click.pass_context
+def abs_sync(
+    ctx: click.Context, direction: str, watch: bool, interval: int
+) -> None:
+    """Synchronize playback progress with ABS server."""
+    import asyncio
+
+    from .abs.sync import ProgressSyncDaemon
+
+    client = _get_abs_client(ctx)
+    daemon = ProgressSyncDaemon(client)
+
+    async def do_sync() -> None:
+        if direction == "pull":
+            pulled = await daemon.sync_from_server()
+            click.echo(f"Pulled {len(pulled)} progress entries from server")
+        elif direction == "push":
+            report = await daemon.sync_all()
+            click.echo(f"Pushed {report.pushed} entries to server")
+        else:
+            report = await daemon.sync_all()
+            click.echo(
+                f"Sync complete: pulled {report.pulled}, pushed {report.pushed}"
+            )
+            if report.errors:
+                for err in report.errors:
+                    click.echo(f"  Error: {err}", err=True)
+
+    if watch:
+        click.echo(f"Starting continuous sync (every {interval}s)...")
+        click.echo("Press Ctrl+C to stop.")
+
+        async def watch_loop() -> None:
+            while True:
+                await do_sync()
+                await asyncio.sleep(interval)
+
+        try:
+            asyncio.run(watch_loop())
+        except KeyboardInterrupt:
+            click.echo("\nSync stopped.")
+    else:
+        asyncio.run(do_sync())
 
 
 def main() -> None:

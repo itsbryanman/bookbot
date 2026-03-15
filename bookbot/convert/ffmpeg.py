@@ -1,10 +1,15 @@
 """FFmpeg wrapper for audio conversion operations."""
 
+from __future__ import annotations
+
 import json
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from ..chapters.models import Chapter
 
 
 def _safe_unlink(path: Path) -> None:
@@ -384,3 +389,222 @@ class FFmpegWrapper:
         except subprocess.TimeoutExpired:
             _safe_unlink(temp_output)
             return False
+
+    # --- M4B Tooling Enhancements (Feature 2B) ---
+
+    def merge_to_m4b(
+        self,
+        input_files: list[Path],
+        output: Path,
+        chapters: list[Chapter] | None = None,
+        metadata: dict[str, str] | None = None,
+        cover: Path | None = None,
+    ) -> Path:
+        """Merge multiple audio files into a single M4B.
+
+        Detects if all inputs are AAC for stream copy, else transcodes.
+        Optionally embeds chapters, metadata, and cover art.
+        """
+        # Determine if we can stream copy
+        all_aac = all(self.can_stream_copy(f) for f in input_files)
+
+        # Create concat demuxer file
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".txt", delete=False
+        ) as f:
+            concat_file = Path(f.name)
+            for file_path in input_files:
+                escaped = str(file_path).replace("'", "'\\''")
+                f.write(f"file '{escaped}'\n")
+
+        try:
+            cmd = [
+                self.ffmpeg_path,
+                "-f", "concat",
+                "-safe", "0",
+                "-i", str(concat_file),
+            ]
+
+            # Add chapter metadata if provided
+            metadata_file: Path | None = None
+            if chapters:
+                metadata_file = self._write_chapter_metadata(chapters)
+                cmd.extend(["-i", str(metadata_file), "-map_metadata", "1"])
+
+            if all_aac:
+                cmd.extend(["-c", "copy"])
+            else:
+                cmd.extend(["-c:a", "aac", "-b:a", "128k"])
+
+            # Add metadata flags
+            if metadata:
+                for key, value in metadata.items():
+                    if value:
+                        cmd.extend(["-metadata", f"{key}={value}"])
+
+            cmd.extend(["-y", str(output)])
+
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+
+            if result.returncode != 0:
+                _safe_unlink(output)
+                raise RuntimeError(f"FFmpeg merge failed: {result.stderr[:500]}")
+
+            # Embed cover art if provided
+            if cover and cover.exists():
+                self.embed_cover_art(output, cover)
+
+            return output
+
+        finally:
+            _safe_unlink(concat_file)
+            if metadata_file:
+                _safe_unlink(metadata_file)
+
+    def split_m4b(
+        self,
+        input_path: Path,
+        output_dir: Path,
+        chapters: list[Chapter] | None = None,
+        output_format: str = "m4a",
+    ) -> list[Path]:
+        """Split an M4B by chapter markers into individual files."""
+        if chapters is None:
+            chapters = self.extract_chapters(input_path)
+
+        if not chapters:
+            return []
+
+        output_dir.mkdir(parents=True, exist_ok=True)
+        output_files = []
+
+        for i, chapter in enumerate(chapters):
+            start_sec = chapter.start_ms / 1000.0
+            safe_title = "".join(
+                c if c.isalnum() or c in " _-" else "_" for c in chapter.title
+            )
+            output_file = output_dir / f"{i + 1:03d} - {safe_title}.{output_format}"
+
+            cmd = [
+                self.ffmpeg_path,
+                "-i", str(input_path),
+                "-ss", str(start_sec),
+            ]
+
+            if chapter.end_ms is not None:
+                duration_sec = (chapter.end_ms - chapter.start_ms) / 1000.0
+                cmd.extend(["-t", str(duration_sec)])
+
+            cmd.extend([
+                "-c", "copy",
+                "-metadata", f"title={chapter.title}",
+                "-metadata", f"track={i + 1}",
+                "-y", str(output_file),
+            ])
+
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+            if result.returncode == 0:
+                output_files.append(output_file)
+            else:
+                _safe_unlink(output_file)
+
+        return output_files
+
+    def embed_metadata(
+        self,
+        file_path: Path,
+        metadata: dict[str, str],
+        cover: Path | None = None,
+    ) -> Path:
+        """Write tags using ffmpeg -metadata flags without re-encoding."""
+        temp_output = file_path.with_suffix(".tmp" + file_path.suffix)
+
+        cmd = [self.ffmpeg_path, "-i", str(file_path)]
+
+        if cover and cover.exists():
+            cmd.extend(["-i", str(cover)])
+            cmd.extend(["-map", "0:a", "-map", "1:v"])
+            cmd.extend(["-c:v", "mjpeg", "-disposition:v:0", "attached_pic"])
+        else:
+            cmd.extend(["-map", "0"])
+
+        for key, value in metadata.items():
+            if value:
+                cmd.extend(["-metadata", f"{key}={value}"])
+
+        cmd.extend(["-c:a", "copy", "-y", str(temp_output)])
+
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+
+            if result.returncode == 0:
+                file_path.unlink()
+                temp_output.rename(file_path)
+                return file_path
+
+            _safe_unlink(temp_output)
+            raise RuntimeError(f"Failed to embed metadata: {result.stderr[:500]}")
+
+        except subprocess.TimeoutExpired:
+            _safe_unlink(temp_output)
+            raise RuntimeError("FFmpeg timed out while embedding metadata")
+
+    def extract_chapters(self, file_path: Path) -> list[Chapter]:
+        """Extract embedded chapters using ffprobe."""
+        from ..chapters.models import Chapter as ChapterModel
+
+        cmd = [
+            self.ffprobe_path,
+            "-v", "quiet",
+            "-print_format", "json",
+            "-show_chapters",
+            str(file_path),
+        ]
+
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            return []
+
+        if result.returncode != 0:
+            return []
+
+        try:
+            data = json.loads(result.stdout)
+        except json.JSONDecodeError:
+            return []
+
+        chapters = []
+        for ch in data.get("chapters", []):
+            start_time = float(ch.get("start_time", 0))
+            end_time = float(ch.get("end_time", 0))
+            tags = ch.get("tags", {})
+            title = tags.get("title", f"Chapter {len(chapters) + 1}")
+
+            chapters.append(
+                ChapterModel(
+                    title=title,
+                    start_ms=int(start_time * 1000),
+                    end_ms=int(end_time * 1000),
+                    source="embedded",
+                )
+            )
+
+        return chapters
+
+    def _write_chapter_metadata(self, chapters: list[Chapter]) -> Path:
+        """Write FFMETADATA1 file for chapters and return its path."""
+        f = tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False)
+        metadata_file = Path(f.name)
+
+        f.write(";FFMETADATA1\n")
+        for chapter in chapters:
+            f.write("\n[CHAPTER]\n")
+            f.write("TIMEBASE=1/1000\n")
+            f.write(f"START={chapter.start_ms}\n")
+            if chapter.end_ms is not None:
+                f.write(f"END={chapter.end_ms}\n")
+            f.write(f"title={chapter.title}\n")
+
+        f.close()
+        return metadata_file
