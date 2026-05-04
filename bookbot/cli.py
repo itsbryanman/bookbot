@@ -6,13 +6,14 @@ from pathlib import Path
 
 import click
 
+from . import __version__
 from .config.manager import ConfigManager
 from .core.discovery import AudioFileScanner
 from .core.operations import TransactionManager
 
 
 @click.group()
-@click.version_option()
+@click.version_option(version=__version__)
 @click.option(
     "--config-dir", type=click.Path(path_type=Path), help="Configuration directory path"
 )
