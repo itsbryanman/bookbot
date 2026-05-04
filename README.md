@@ -13,11 +13,11 @@
   <a href="https://ghcr.io/itsbryanman/bookbot">
     <img alt="Docker" src="https://img.shields.io/badge/docker-ghcr.io%2Fitsbryanman%2Fbookbot-2496ED?style=for-the-badge&logo=docker&logoColor=white" />
   </a>
-  <a href="https://pypi.org/project/bookbot/">
-    <img alt="PyPI" src="https://img.shields.io/pypi/v/bookbot?style=for-the-badge&logo=pypi&logoColor=white" />
+  <a href="https://pypi.org/project/bookbot-cli/">
+    <img alt="PyPI" src="https://img.shields.io/pypi/v/bookbot-cli?style=for-the-badge&logo=pypi&logoColor=white" />
   </a>
-  <a href="https://pypi.org/project/bookbot/">
-    <img alt="Python versions" src="https://img.shields.io/pypi/pyversions/bookbot?style=for-the-badge&logo=python&logoColor=white" />
+  <a href="https://pypi.org/project/bookbot-cli/">
+    <img alt="Python versions" src="https://img.shields.io/pypi/pyversions/bookbot-cli?style=for-the-badge&logo=python&logoColor=white" />
   </a>
   <a href="LICENSE">
     <img alt="License" src="https://img.shields.io/github/license/itsbryanman/BookBot?style=for-the-badge&color=brightgreen" />
@@ -70,7 +70,7 @@ Then run `bookbot-docker tui /data` from any library directory.
 ### pipx (alternative)
 
 ```bash
-pipx install bookbot
+pipx install bookbot-cli
 ```
 
 pipx keeps BookBot isolated and ensures the `bookbot` command lands on your PATH. If the executable is not found after install, add `$HOME/.local/bin` to your shell profile.
@@ -78,8 +78,8 @@ pipx keeps BookBot isolated and ensures the `bookbot` command lands on your PATH
 ### pip / virtualenv (alternative)
 
 ```bash
-python -m pip install bookbot
-python -m pip install "bookbot[conversion]"
+python -m pip install bookbot-cli
+python -m pip install "bookbot-cli[conversion]"
 ```
 
 You still need a system FFmpeg binary for audio conversion and DRM extraction.
