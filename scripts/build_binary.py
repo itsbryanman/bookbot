@@ -127,17 +127,20 @@ exe = EXE(
 
     # Write spec file
     spec_file = project_root / f"bookbot-{platform_name}.spec"
-    with open(spec_file, 'w') as f:
+    with open(spec_file, "w") as f:
         f.write(spec_content)
 
     try:
         # Run PyInstaller
         cmd = [
-            sys.executable, "-m", "PyInstaller",
+            sys.executable,
+            "-m",
+            "PyInstaller",
             "--clean",
             "--noconfirm",
-            "--distpath", str(dist_dir),
-            str(spec_file)
+            "--distpath",
+            str(dist_dir),
+            str(spec_file),
         ]
 
         subprocess.run(cmd, check=True, capture_output=True, text=True)
@@ -151,8 +154,12 @@ exe = EXE(
 
             # Test the binary
             print("Testing binary...")
-            test_result = subprocess.run([str(binary_path), "--version"],
-                                       capture_output=True, text=True, timeout=10)
+            test_result = subprocess.run(
+                [str(binary_path), "--version"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
             if test_result.returncode == 0:
                 print("✓ Binary test successful")
                 print(f"Version output: {test_result.stdout.strip()}")
@@ -219,12 +226,17 @@ def create_linux_package(output_dir: Path | None = None) -> bool:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Build BookBot binary distributions")
-    parser.add_argument("--target", choices=["linux", "windows", "macos"],
-                       help="Target platform (auto-detected if not specified)")
-    parser.add_argument("--output-dir", type=Path,
-                       help="Output directory for built files")
-    parser.add_argument("--installer", action="store_true",
-                       help="Create platform-specific installer")
+    parser.add_argument(
+        "--target",
+        choices=["linux", "windows", "macos"],
+        help="Target platform (auto-detected if not specified)",
+    )
+    parser.add_argument(
+        "--output-dir", type=Path, help="Output directory for built files"
+    )
+    parser.add_argument(
+        "--installer", action="store_true", help="Create platform-specific installer"
+    )
     parser.add_argument(
         "--all",
         action="store_true",

@@ -25,7 +25,8 @@ def main():
             if library:
                 print("\nFirst few items:")
                 for book in library[:3]:
-                    print(f"  - {book.get('title')} by {book.get('authors', [{}])[0].get('name', 'Unknown')}")
+                    author = book.get("authors", [{}])[0].get("name", "Unknown")
+                    print(f"  - {book.get('title')} by {author}")
         except Exception as e:
             print(f"❌ Failed to get library: {e}")
     else:
@@ -51,7 +52,8 @@ def main():
                 if library:
                     print("\nFirst few items:")
                     for book in library[:5]:
-                        print(f"  - {book.get('title')} by {book.get('authors', [{}])[0].get('name', 'Unknown')}")
+                        author = book.get("authors", [{}])[0].get("name", "Unknown")
+                        print(f"  - {book.get('title')} by {author}")
             except Exception as e:
                 print(f"❌ Failed to get library: {e}")
         else:

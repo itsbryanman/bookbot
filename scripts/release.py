@@ -25,7 +25,7 @@ def get_current_version() -> str:
 
 def bump_version(current_version: str, bump_type: str) -> str:
     """Bump version according to semantic versioning."""
-    major, minor, patch = map(int, current_version.split('.'))
+    major, minor, patch = map(int, current_version.split("."))
 
     if bump_type == "major":
         major += 1
@@ -49,20 +49,14 @@ def update_version_in_file(file_path: Path, old_version: str, new_version: str) 
 
     # Replace version in pyproject.toml
     if file_path.name == "pyproject.toml":
-        content = re.sub(
-            r'version = "[^"]+"',
-            f'version = "{new_version}"',
-            content
-        )
+        content = re.sub(r'version = "[^"]+"', f'version = "{new_version}"', content)
     # Replace version in __init__.py
     elif file_path.name == "__init__.py":
         content = re.sub(
-            r'__version__ = "[^"]+"',
-            f'__version__ = "{new_version}"',
-            content
+            r'__version__ = "[^"]+"', f'__version__ = "{new_version}"', content
         )
 
-    with open(file_path, 'w') as f:
+    with open(file_path, "w") as f:
         f.write(content)
 
     print(f"Updated {file_path}: {old_version} -> {new_version}")
@@ -76,7 +70,7 @@ def run_tests() -> bool:
             [sys.executable, "-m", "pytest", "tests/", "-v"],
             check=True,
             capture_output=True,
-            text=True
+            text=True,
         )
         print("✓ Tests passed")
         return True
@@ -105,7 +99,7 @@ def run_linting() -> bool:
 
 def create_changelog_entry(version: str) -> str:
     """Create a changelog entry for the new version."""
-    date = subprocess.check_output(['date', '+%Y-%m-%d']).decode().strip()
+    date = subprocess.check_output(["date", "+%Y-%m-%d"]).decode().strip()
     return f"""## [{version}] - {date}
 
 ### Added
@@ -143,24 +137,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
             content = f.read()
 
         # Insert new entry after the header
-        lines = content.split('\n')
+        lines = content.split("\n")
         header_end = 0
         for i, line in enumerate(lines):
-            if line.startswith('## ['):
+            if line.startswith("## ["):
                 header_end = i
                 break
         else:
             # No existing entries, find end of header
             for i, line in enumerate(lines):
-                if line.strip() == '':
+                if line.strip() == "":
                     header_end = i + 1
                     break
 
         new_entry = create_changelog_entry(version)
         lines.insert(header_end, new_entry)
-        content = '\n'.join(lines)
+        content = "\n".join(lines)
 
-    with open(changelog_path, 'w') as f:
+    with open(changelog_path, "w") as f:
         f.write(content)
 
     print(f"Updated CHANGELOG.md with version {version}")
@@ -207,11 +201,19 @@ def create_github_release(version: str) -> None:
 
         # Create release
         release_notes = f"Release BookBot v{version}\n\nSee CHANGELOG.md for details."
-        subprocess.run([
-            "gh", "release", "create", f"v{version}",
-            "--title", f"BookBot v{version}",
-            "--notes", release_notes
-        ], check=True)
+        subprocess.run(
+            [
+                "gh",
+                "release",
+                "create",
+                f"v{version}",
+                "--title",
+                f"BookBot v{version}",
+                "--notes",
+                release_notes,
+            ],
+            check=True,
+        )
 
         print(f"✓ Created GitHub release v{version}")
 
@@ -222,14 +224,18 @@ def create_github_release(version: str) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Release BookBot")
-    parser.add_argument("bump_type", choices=["major", "minor", "patch"],
-                       help="Type of version bump")
-    parser.add_argument("--dry-run", action="store_true",
-                       help="Show what would be done without executing")
-    parser.add_argument("--skip-tests", action="store_true",
-                       help="Skip running tests")
-    parser.add_argument("--skip-push", action="store_true",
-                       help="Skip pushing to remote repository")
+    parser.add_argument(
+        "bump_type", choices=["major", "minor", "patch"], help="Type of version bump"
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Show what would be done without executing",
+    )
+    parser.add_argument("--skip-tests", action="store_true", help="Skip running tests")
+    parser.add_argument(
+        "--skip-push", action="store_true", help="Skip pushing to remote repository"
+    )
 
     args = parser.parse_args()
 

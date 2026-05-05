@@ -161,10 +161,6 @@ class ScanResultsScreen(Static):
         self.audiobook_sets: list[AudiobookSet] = []
         self.last_transaction_id: str | None = None
         self.source_roots: list[Path] = []
-        self.last_transaction_id: str | None = None
-        self.source_roots: list[Path] = []
-        self.last_transaction_id: str | None = None
-        self.source_roots: list[Path] = []
 
     def compose(self) -> ComposeResult:
         yield Label("Scan Results", classes="section-title")
