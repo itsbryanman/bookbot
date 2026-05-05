@@ -374,7 +374,7 @@ class BookBotApp(App):
 
         # If folders were provided, start scanning automatically
         if self.source_folders:
-            self.post_message(self.StartScan())
+            self.set_timer(0.1, lambda: self.post_message(self.StartScan()))
 
     async def on_drm_login_screen_login_success(self, message: LoginSuccess) -> None:
         """Handle successful DRM login."""
@@ -435,7 +435,7 @@ class BookBotApp(App):
         elif event.button.id == "convert_m4b":
             self.show_conversion()
 
-    async def on_start_scan(self, event: StartScan) -> None:
+    async def on_book_bot_app_start_scan(self, event: StartScan) -> None:
         """Handle start scan message."""
         if not self.source_folders:
             self.update_status("Error: No folders selected")
@@ -685,9 +685,10 @@ class BookBotApp(App):
     async def action_save_config(self) -> None:
         """Save current configuration without blocking the UI."""
         try:
+            self.config_manager.load_config()
             await asyncio.to_thread(self.config_manager.save_config)
             self.update_status("Configuration saved")
-        except OSError as e:
+        except Exception as e:
             self.update_status(f"Failed to save config: {e}")
 
     def action_refresh(self) -> None:
