@@ -41,31 +41,13 @@ class BookBotApp(App):
     """Main BookBot TUI application."""
 
     CSS = """
-    /* DOPE AF Styling - Textual Compatible */
-    .title {
-        text-align: center;
-        text-style: bold;
-        color: $text;
-        background: $primary;
-        padding: 1;
-        margin: 1;
-        border: heavy $accent;
-    }
-
-    .status {
-        dock: bottom;
-        height: 4;
-        background: $primary;
-        border: heavy $accent;
-    }
-
     .main-container {
-        height: 100%;
+        height: 1fr;
         background: $surface;
     }
 
     #mission_control {
-        height: 100%;
+        height: 1fr;
     }
 
     .mission-top {
@@ -77,190 +59,202 @@ class BookBotApp(App):
         height: 100%;
     }
 
+    .title {
+        text-align: center;
+        text-style: bold;
+        color: $accent;
+        background: $surface;
+        padding: 0 1;
+    }
+
+    .status {
+        height: auto;
+        max-height: 10;
+        background: $surface;
+        border-top: solid $surface-lighten-1;
+    }
+
+    #status_label {
+        color: $accent;
+        text-style: bold;
+        margin: 0 1;
+        height: 1;
+    }
+
+    .action-strip {
+        height: 3;
+        align: center middle;
+        padding: 0 1;
+    }
+
     #warnings_panel {
         height: 8;
-        border: heavy $accent;
-        margin: 1;
-        padding: 1;
-        background: $background;
+        border: solid $surface-lighten-1;
+        margin: 0 1 1 1;
+        padding: 0 1;
+        background: $surface;
         color: $text;
     }
 
-    /* Enhanced Buttons */
     Button {
-        border: heavy $accent;
-        background: $warning;
+        background: $surface;
         color: $text;
+        border: solid $accent;
         text-style: bold;
         margin: 0 1;
+        min-width: 0;
+        padding: 0 1;
     }
 
     Button:hover {
-        background: $error;
-        border: heavy $success;
+        background: $accent 30%;
+        border: solid $accent;
     }
 
     Button:focus {
-        border: heavy $success;
-        background: $success;
-        color: $background;
+        background: $accent;
+        color: $text;
+        border: heavy $accent;
     }
 
     Button.-primary {
-        background: $accent;
-        border: heavy $accent;
-        color: $background;
+        background: $accent 20%;
+        color: $accent;
+        border: solid $accent;
     }
 
     Button.-primary:hover {
-        background: $success;
-        border: heavy $success;
+        background: $accent 40%;
+    }
+
+    Button.-primary:focus {
+        background: $accent;
+        color: $background;
+        border: heavy $accent;
     }
 
     Button:disabled {
         background: $surface;
-        color: #666;
-        border: solid #666;
+        color: $text 40%;
+        border: solid $surface-lighten-1;
     }
 
-    /* Enhanced Tables */
-    DataTable {
-        border: heavy $accent;
+    TabbedContent {
         background: $surface;
+        border: solid $surface-lighten-1;
+    }
+
+    Tab {
+        background: $surface;
+        color: $text 70%;
+        text-style: bold;
+        padding: 0 2;
+    }
+
+    Tab.-active {
+        background: $surface-lighten-1;
+        color: $text;
+        text-style: bold;
+    }
+
+    Tab:hover {
+        background: $surface-lighten-1;
+        color: $text;
+    }
+
+    Underline > .underline--bar {
+        color: $accent;
+        background: $surface-lighten-1;
+    }
+
+    DataTable {
+        background: $surface;
+        border: solid $surface-lighten-1;
     }
 
     DataTable > .datatable--header {
-        background: $primary;
+        background: $surface-lighten-1;
         color: $text;
         text-style: bold;
     }
 
     DataTable > .datatable--cursor {
-        background: $accent 50%;
+        background: $accent 20%;
         color: $text;
     }
 
     DataTable:focus > .datatable--cursor {
-        background: $accent;
-        color: $background;
-    }
-
-    /* Enhanced Tabs */
-    TabbedContent {
-        border: heavy $accent;
-        background: $surface;
-    }
-
-    Tab {
-        background: $primary;
+        background: $accent 40%;
         color: $text;
-        text-style: bold;
-        border: solid $accent;
     }
 
-    Tab.-active {
-        background: $accent;
-        border: heavy $success;
-        color: $background;
-        text-style: bold;
-    }
-
-    Tab:hover {
-        background: $success;
-        color: $background;
-    }
-
-    /* Section Styling */
-    .section-title {
-        text-align: center;
-        text-style: bold;
-        color: $accent;
-        background: $primary;
-        padding: 1;
-        border: solid $accent;
-        margin: 1;
-    }
-
-    .subsection-title {
-        text-style: bold;
-        color: $warning;
-        margin: 1 0;
-    }
-
-    /* Enhanced Input Fields */
     Input {
-        border: solid $accent;
-        background: $surface;
+        border: solid $surface-lighten-1;
+        background: $background;
         color: $text;
     }
 
     Input:focus {
-        border: heavy $success;
+        border: solid $accent;
         background: $background;
     }
 
-    /* Progress Bar Enhancement */
-    ProgressBar {
+    Select {
+        border: solid $surface-lighten-1;
+        background: $background;
+        color: $text;
+    }
+
+    Select:focus {
         border: solid $accent;
-        background: $surface;
+        background: $background;
     }
 
-    ProgressBar > .bar--bar {
-        background: $accent;
-    }
-
-    ProgressBar > .bar--complete {
-        background: $success;
-    }
-
-    /* Status Label */
-    #status_label {
-        color: $warning;
-        text-style: bold;
-        margin: 1;
-    }
-
-    /* Checkbox Styling */
     Checkbox {
-        color: $accent;
+        color: $text;
     }
 
     Checkbox:focus {
         background: $accent 20%;
     }
 
-    /* Select Styling */
-    Select {
-        border: solid $accent;
+    ProgressBar {
+        border: solid $surface-lighten-1;
         background: $surface;
-        color: $text;
     }
 
-    Select:focus {
-        border: heavy $success;
-        background: $background;
+    ProgressBar > .bar--bar {
+        background: $accent 40%;
     }
 
-    /* Container Enhancements */
+    ProgressBar > .bar--complete {
+        background: $success;
+    }
+
+    .section-title {
+        text-align: center;
+        text-style: bold;
+        color: $accent;
+        background: $surface;
+        padding: 0 1;
+        margin: 1 0;
+    }
+
     Container {
         border: none;
         background: transparent;
     }
 
-    /* Footer Enhancement */
-    Footer {
-        background: $background;
-        color: $accent;
-    }
-
-    /* Header Enhancement */
     Header {
-        background: $primary;
+        background: $surface;
         color: $text;
-        text-style: bold;
     }
 
-    /* Enhanced Labels */
+    Footer {
+        background: $surface;
+        color: $text 70%;
+    }
+
     Label {
         color: $text;
     }
@@ -269,7 +263,6 @@ class BookBotApp(App):
         color: $text;
     }
 
-    /* Special Effect Classes */
     .success-text {
         color: $success;
         text-style: bold;
@@ -283,17 +276,6 @@ class BookBotApp(App):
     .error-text {
         color: $error;
         text-style: bold;
-    }
-
-    .highlight {
-        background: $accent;
-        color: $background;
-        padding: 0 1;
-    }
-
-    .glow {
-        border: heavy $accent;
-        background: $accent 20%;
     }
     """
 
@@ -373,7 +355,7 @@ class BookBotApp(App):
 
         with Container(classes="status"):
             yield Label("Ready", id="status_label")
-            with Horizontal():
+            with Horizontal(classes="action-strip"):
                 yield Button("Start Scan", id="start_scan", variant="primary")
                 yield Button("Find Matches", id="find_matches", disabled=True)
                 yield Button("Preview Changes", id="preview_changes", disabled=True)
