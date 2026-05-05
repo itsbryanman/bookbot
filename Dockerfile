@@ -28,26 +28,34 @@ LABEL org.opencontainers.image.title="BookBot" \
       org.opencontainers.image.description="A cross-platform TUI audiobook renamer and organizer" \
       org.opencontainers.image.version="0.3.0" \
       org.opencontainers.image.authors="itsbryanman" \
-      org.opencontainers.image.url="https://github.com/itsbryanman/BookBot" \
-      org.opencontainers.image.source="https://github.com/itsbryanman/BookBot" \
+      org.opencontainers.image.url="https://github.com/itsbryanman/bookbot" \
+      org.opencontainers.image.source="https://github.com/itsbryanman/bookbot" \
       org.opencontainers.image.licenses="MIT"
 
 ENV PIP_NO_CACHE_DIR=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    BOOKBOT_CONFIG_DIR=/config \
+    HOME=/home/bookbot
 
-WORKDIR /app
+WORKDIR /data
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ffmpeg \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd --create-home --home-dir /home/bookbot --shell /usr/sbin/nologin bookbot \
+    && mkdir -p /config /data /opt/bookbot/scripts \
+    && chown -R bookbot:bookbot /config /data /home/bookbot /opt/bookbot
 
 # Copy installed Python packages from builder
 COPY --from=builder /install /usr/local
 
-# Copy source for reference (scripts, configs, etc.)
-COPY . /app
+COPY scripts /opt/bookbot/scripts
+
+VOLUME ["/data", "/config"]
+
+USER bookbot
 
 ENTRYPOINT ["bookbot"]
 CMD ["--help"]

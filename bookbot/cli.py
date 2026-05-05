@@ -8,8 +8,17 @@ import click
 
 from . import __version__
 from .config.manager import ConfigManager
+from .config.models import Config, Profile
 from .core.discovery import AudioFileScanner
+from .core.doctor import LibraryDoctor
 from .core.operations import TransactionManager
+from .core.planning import (
+    PlanBuilder,
+    format_plan_diff,
+    format_plan_summary,
+    load_plan,
+    save_plan,
+)
 
 
 @click.group()
@@ -27,6 +36,55 @@ def cli(ctx: click.Context, config_dir: Path | None) -> None:
     ctx.obj["config_manager"] = ConfigManager(config_dir)
 
 
+def _require_profile(config_manager: ConfigManager, profile_name: str) -> Profile:
+    """Load a profile or exit with a helpful error."""
+    profile = config_manager.load_profile(profile_name)
+    if profile is None:
+        click.echo(f"Error: Profile '{profile_name}' not found", err=True)
+        sys.exit(1)
+    return profile
+
+
+def _resolve_config(
+    config_manager: ConfigManager, profile_name: str | None
+) -> tuple[Config, Profile | None]:
+    """Return effective config without mutating the user's saved default config."""
+    if profile_name:
+        profile = _require_profile(config_manager, profile_name)
+        return profile.config.model_copy(deep=True), profile
+    return config_manager.load_config().model_copy(deep=True), None
+
+
+def _create_and_save_plan(
+    config: Config,
+    folder: Path,
+    audiobook_sets: list,
+    output_path: Path,
+    profile_name: str | None,
+) -> None:
+    """Create a plan JSON file and print the next-step workflow."""
+    plan = PlanBuilder(config).create_plan(
+        library_root=folder,
+        audiobook_sets=audiobook_sets,
+        profile_name=profile_name,
+        source_roots=[folder],
+    )
+    save_plan(plan, output_path)
+    click.echo("")
+    click.echo(f"Plan saved to {output_path}")
+    click.echo(f"Review: bookbot review {output_path}")
+    click.echo(f"Apply:  bookbot apply {output_path}")
+    if plan.conflicts:
+        click.echo("")
+        click.echo("Plan has conflicts and must be fixed before apply.", err=True)
+
+
+def _show_plan(path: Path, include_operations: bool = True) -> None:
+    """Print a stored plan in review format."""
+    plan = load_plan(path)
+    click.echo(format_plan_summary(plan, include_operations=include_operations))
+
+
 @cli.command()
 @click.argument("folder", type=click.Path(exists=True, file_okay=False, path_type=Path))
 @click.option(
@@ -39,6 +97,12 @@ def cli(ctx: click.Context, config_dir: Path | None) -> None:
 @click.option("--recurse", type=int, default=5, help="Maximum recursion depth")
 @click.option("--no-tag", is_flag=True, help="Skip tagging operations")
 @click.option("--template", type=str, help="Naming template to use")
+@click.option(
+    "--plan",
+    "plan_path",
+    type=click.Path(path_type=Path),
+    help="Write a reviewable rename plan to JSON",
+)
 @click.option("--lang", type=str, default="en", help="Preferred language")
 @click.option("--cache", type=click.Path(path_type=Path), help="Cache directory")
 @click.option("--log", type=click.Path(path_type=Path), help="Log file path")
@@ -51,26 +115,29 @@ def scan(
     recurse: int,
     no_tag: bool,
     template: str | None,
+    plan_path: Path | None,
     lang: str,
     cache: Path | None,
     log: Path | None,
 ) -> None:
     """Scan a folder for audiobooks and propose renames."""
     config_manager = ctx.obj["config_manager"]
-
-    # Apply profile if specified
-    if profile:
-        if not config_manager.apply_profile(profile):
-            click.echo(f"Error: Profile '{profile}' not found", err=True)
-            sys.exit(1)
-
-    config = config_manager.load_config()
+    config, loaded_profile = _resolve_config(config_manager, profile)
 
     # Override config with command line options
     if no_tag:
         config.tagging.enabled = False
     if template:
-        config.active_template = template
+        named_template = config.templates.get(template)
+        if named_template is not None:
+            config.output.folder_template = named_template.folder_template
+            config.output.file_template = named_template.file_template
+        else:
+            config.output.folder_template = template
+    if cache:
+        config.cache_directory = cache
+    if log:
+        config.log_directory = log
 
     # Initialize scanner
     scanner = AudioFileScanner(recursive=True, max_depth=recurse)
@@ -100,9 +167,26 @@ def scan(
                 for warning in audiobook_set.warnings:
                     click.echo(f"     - {warning}")
 
+        if plan_path:
+            _create_and_save_plan(
+                config=config,
+                folder=folder,
+                audiobook_sets=audiobook_sets,
+                output_path=plan_path,
+                profile_name=loaded_profile.name if loaded_profile else None,
+            )
+
         if dry_run:
             click.echo("\n" + "─" * 60)
             click.echo("✓ Scan completed. Next steps:")
+            click.echo("")
+            click.echo("  📋 Safe plan:")
+            if plan_path:
+                click.echo(f"     bookbot review {plan_path}")
+                click.echo(f"     bookbot apply {plan_path}")
+            else:
+                click.echo(f"     bookbot scan {folder} --plan ./bookbot-plan.json")
+                click.echo(f"     bookbot plan create {folder}")
             click.echo("")
             click.echo("  📱 Interactive mode:")
             click.echo(f"     bookbot tui {folder}")
@@ -112,8 +196,8 @@ def scan(
                 example = audiobook_sets[0].source_path
                 click.echo(f'     bookbot convert "{example}" -o ./output --dry-run')
             click.echo("")
-            click.echo("  ⚙️  View config:")
-            click.echo("     bookbot config show")
+            click.echo("  🩺 Diagnose library:")
+            click.echo(f"     bookbot doctor {folder}")
             click.echo("")
             click.echo("For more help, run: bookbot --help")
 
@@ -188,7 +272,7 @@ def tui(
 @click.option("--normalize", is_flag=True, help="Normalize audio levels")
 @click.option(
     "--chapters",
-    type=click.Choice(["auto", "from-tags"]),
+    type=click.Choice(["auto", "from-tags", "track"]),
     default="auto",
     help="Chapter creation method",
 )
@@ -269,7 +353,9 @@ def convert(
         else:
             conv_config.bitrate = bitrate
         conv_config.normalize_audio = normalize
-        conv_config.chapter_naming = chapters
+        conv_config.chapter_naming = (
+            "track_number" if chapters == "track" else chapters.replace("-", "_")
+        )
         conv_config.write_cover_art = not no_art
 
         click.echo(f"Converting audiobooks from {folder} to {output}...")
@@ -377,8 +463,14 @@ def config_show(ctx: click.Context, profile_name: str | None) -> None:
     # Display key configuration settings
     click.echo(f"Safe mode: {config_data.safe_mode}")
     click.echo(f"Active template: {config_data.active_template}")
+    click.echo(f"Folder template: {config_data.output.folder_template}")
+    click.echo(f"File template: {config_data.output.file_template}")
     click.echo(f"Tagging enabled: {config_data.tagging.enabled}")
     click.echo(f"Conversion enabled: {config_data.conversion.enabled}")
+    click.echo(f"Prefer M4B: {config_data.output.prefer_m4b}")
+    click.echo(f"Write metadata.json: {config_data.output.write_metadata_json}")
+    click.echo(f"Write metadata.opf: {config_data.output.write_metadata_opf}")
+    click.echo(f"Write NFO: {config_data.output.write_nfo}")
 
 
 @config.command("reset")
@@ -528,6 +620,61 @@ def config_edit(ctx: click.Context) -> None:
 
 
 @cli.group()
+def profile() -> None:
+    """Built-in collector profiles."""
+    pass
+
+
+@profile.command("list")
+@click.pass_context
+def profile_list(ctx: click.Context) -> None:
+    """List built-in and saved profiles."""
+    config_manager = ctx.obj["config_manager"]
+    profiles = config_manager.list_profiles()
+
+    if not profiles:
+        click.echo("No profiles found")
+        return
+
+    click.echo("Available profiles:")
+    for name, description in profiles.items():
+        click.echo(f"  {name}: {description}")
+
+
+@profile.command("show")
+@click.argument("profile_name", type=str)
+@click.pass_context
+def profile_show(ctx: click.Context, profile_name: str) -> None:
+    """Show a profile's layout and output preferences."""
+    config_manager = ctx.obj["config_manager"]
+    loaded_profile = _require_profile(config_manager, profile_name)
+    config = loaded_profile.config
+
+    click.echo(f"Profile: {loaded_profile.name}")
+    click.echo(f"Description: {loaded_profile.description}")
+    click.echo(f"Folder template: {config.output.folder_template}")
+    click.echo(f"File template: {config.output.file_template}")
+    click.echo(f"Prefer M4B: {config.output.prefer_m4b}")
+    click.echo(f"Write cover: {config.output.write_cover}")
+    click.echo(f"Write metadata.json: {config.output.write_metadata_json}")
+    click.echo(f"Write metadata.opf: {config.output.write_metadata_opf}")
+    click.echo(f"Write NFO: {config.output.write_nfo}")
+    click.echo(f"Chapter style: {config.output.chapter_style}")
+
+
+@profile.command("use")
+@click.argument("profile_name", type=str)
+@click.pass_context
+def profile_use(ctx: click.Context, profile_name: str) -> None:
+    """Apply a profile as the saved default."""
+    config_manager = ctx.obj["config_manager"]
+    if not config_manager.apply_profile(profile_name):
+        click.echo(f"Error: Profile '{profile_name}' not found", err=True)
+        sys.exit(1)
+    click.echo(f"Profile '{profile_name}' applied")
+
+
+@cli.group()
 def provider() -> None:
     """Metadata provider management commands."""
     pass
@@ -662,6 +809,163 @@ def provider_set_marketplace(ctx: click.Context, marketplace: str) -> None:
     click.echo(f"Audible marketplace set to {marketplace}")
 
 
+@cli.command("review")
+@click.argument(
+    "plan_file", type=click.Path(exists=True, dir_okay=False, path_type=Path)
+)
+def review(plan_file: Path) -> None:
+    """Review a saved rename plan."""
+    _show_plan(plan_file, include_operations=True)
+
+
+@cli.command("apply")
+@click.argument(
+    "plan_file", type=click.Path(exists=True, dir_okay=False, path_type=Path)
+)
+@click.option("--yes", is_flag=True, help="Apply without confirmation")
+@click.pass_context
+def apply_plan_file(ctx: click.Context, plan_file: Path, yes: bool) -> None:
+    """Apply a saved rename plan."""
+    config_manager = ctx.obj["config_manager"]
+    plan = load_plan(plan_file)
+
+    if plan.conflicts:
+        click.echo("Plan has conflicts and cannot be applied:", err=True)
+        for conflict in plan.conflicts:
+            click.echo(f"  - {conflict}", err=True)
+        sys.exit(1)
+
+    if not yes and not click.confirm(
+        f"Apply {len(plan.operations)} operation(s) from {plan_file}?", default=False
+    ):
+        click.echo("Cancelled")
+        return
+
+    transaction_manager = TransactionManager(config_manager)
+    try:
+        transaction_manager.execute_plan(plan, dry_run=False)
+    except Exception as exc:
+        click.echo(f"Error applying plan: {exc}", err=True)
+        sys.exit(1)
+
+    save_plan(plan, plan_file)
+    transaction_id = plan.applied_transaction_id or "unknown"
+    click.echo(f"Plan applied successfully. Transaction ID: {transaction_id}")
+
+
+@cli.group()
+def plan() -> None:
+    """Create, inspect, validate, and apply rename plans."""
+    pass
+
+
+@plan.command("create")
+@click.argument("folder", type=click.Path(exists=True, file_okay=False, path_type=Path))
+@click.option(
+    "-o",
+    "--output",
+    type=click.Path(path_type=Path),
+    default=Path("bookbot-plan.json"),
+    show_default=True,
+    help="Output JSON file for the generated plan",
+)
+@click.option("--profile", type=str, help="Profile to use for plan generation")
+@click.option("--recurse", type=int, default=5, help="Maximum recursion depth")
+@click.pass_context
+def plan_create(
+    ctx: click.Context, folder: Path, output: Path, profile: str | None, recurse: int
+) -> None:
+    """Create a reviewable plan JSON from a library directory."""
+    config_manager = ctx.obj["config_manager"]
+    config, loaded_profile = _resolve_config(config_manager, profile)
+    scanner = AudioFileScanner(recursive=True, max_depth=recurse)
+    audiobook_sets = scanner.scan_directory(folder)
+
+    if not audiobook_sets:
+        click.echo("No audiobooks found in the specified directory.")
+        return
+
+    _create_and_save_plan(
+        config=config,
+        folder=folder,
+        audiobook_sets=audiobook_sets,
+        output_path=output,
+        profile_name=loaded_profile.name if loaded_profile else None,
+    )
+
+
+@plan.command("show")
+@click.argument(
+    "plan_file", type=click.Path(exists=True, dir_okay=False, path_type=Path)
+)
+def plan_show(plan_file: Path) -> None:
+    """Show the saved plan with operations and warnings."""
+    _show_plan(plan_file, include_operations=True)
+
+
+@plan.command("apply")
+@click.argument(
+    "plan_file", type=click.Path(exists=True, dir_okay=False, path_type=Path)
+)
+@click.option("--yes", is_flag=True, help="Apply without confirmation")
+@click.pass_context
+def plan_apply(ctx: click.Context, plan_file: Path, yes: bool) -> None:
+    """Apply a plan file."""
+    ctx.invoke(apply_plan_file, plan_file=plan_file, yes=yes)
+
+
+@plan.command("diff")
+@click.argument(
+    "plan_file", type=click.Path(exists=True, dir_okay=False, path_type=Path)
+)
+def plan_diff(plan_file: Path) -> None:
+    """Show a compact old->new diff for a plan."""
+    click.echo(format_plan_diff(load_plan(plan_file)))
+
+
+@plan.command("validate")
+@click.argument(
+    "plan_file", type=click.Path(exists=True, dir_okay=False, path_type=Path)
+)
+def plan_validate(plan_file: Path) -> None:
+    """Validate a plan file for conflicts and filesystem safety."""
+    loaded_plan = load_plan(plan_file)
+    if loaded_plan.conflicts:
+        click.echo(f"Validation failed for {plan_file}:", err=True)
+        for conflict in loaded_plan.conflicts:
+            click.echo(f"  - {conflict}", err=True)
+        sys.exit(1)
+
+    click.echo(f"Plan {plan_file} is valid")
+    if loaded_plan.warnings:
+        for warning in loaded_plan.warnings:
+            click.echo(f"  - {warning}")
+
+
+@cli.command()
+@click.argument(
+    "library_path",
+    required=False,
+    type=click.Path(exists=True, file_okay=False, path_type=Path),
+)
+@click.option("--profile", type=str, help="Profile to evaluate against")
+@click.pass_context
+def doctor(ctx: click.Context, library_path: Path | None, profile: str | None) -> None:
+    """Inspect the environment and an optional library path."""
+    config_manager = ctx.obj["config_manager"]
+    config, loaded_profile = _resolve_config(config_manager, profile)
+    report = LibraryDoctor(config, config_manager.config_dir).run(
+        library_path=library_path,
+        profile_name=loaded_profile.name if loaded_profile else None,
+    )
+
+    for check in report.checks:
+        click.echo(f"{check.icon} {check.message}")
+
+    if report.has_failures:
+        sys.exit(1)
+
+
 @cli.command()
 @click.argument("shell", type=click.Choice(["bash", "zsh", "fish", "all"]))
 @click.option(
@@ -679,6 +983,8 @@ def completions(ctx: click.Context, shell: str, output_dir: Path | None) -> None
 
         # Get the script path
         script_path = PathlibPath(__file__).parent.parent / "scripts" / "completions.py"
+        if not script_path.exists():
+            script_path = PathlibPath("/opt/bookbot/scripts/completions.py")
 
         if not script_path.exists():
             click.echo("Error: Completion generator script not found", err=True)

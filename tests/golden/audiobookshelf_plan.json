@@ -1,0 +1,26 @@
+{
+  "profile_name": "audiobookshelf",
+  "source_path": "__FIXTURE_LIBRARY__",
+  "warnings": [
+    "Profile prefers single-file outputs; the rename plan kept unique per-track names until conversion happens."
+  ],
+  "conflicts": [],
+  "operations": [
+    {
+      "old": "Brandon Sanderson - The Way of Kings/CD1/01 - Prelude.mp3",
+      "new": "Brandon Sanderson/The Way Of Kings/11 - Prelude.mp3"
+    },
+    {
+      "old": "Brandon Sanderson - The Way of Kings/CD1/02 - Chapter 1.mp3",
+      "new": "Brandon Sanderson/The Way Of Kings/12 - Chapter 1.mp3"
+    },
+    {
+      "old": "Brandon Sanderson - The Way of Kings/CD2/01 - Chapter 2.mp3",
+      "new": "Brandon Sanderson/The Way Of Kings/21 - Chapter 2.mp3"
+    },
+    {
+      "old": "Stephen King - Cujo/Cujo.m4b",
+      "new": "Stephen King/Cujo/1 - Cujo.m4b"
+    }
+  ]
+}

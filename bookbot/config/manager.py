@@ -7,7 +7,7 @@ from pydantic import ValidationError
 
 import toml
 
-from .models import Config, Profile
+from .models import Config, OverwritePolicy, Profile
 
 
 class ConfigManager:
@@ -30,6 +30,9 @@ class ConfigManager:
     @staticmethod
     def _get_default_config_dir() -> Path:
         """Get the default configuration directory for the current platform."""
+        if os.environ.get("BOOKBOT_CONFIG_DIR"):
+            return Path(os.environ["BOOKBOT_CONFIG_DIR"]).expanduser()
+
         if os.name == "nt":  # Windows
             base = Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming"))
         elif os.environ.get("XDG_CONFIG_HOME"):  # Linux/Unix with XDG
@@ -38,6 +41,15 @@ class ConfigManager:
             base = Path.home() / ".config"
 
         return base / "bookbot"
+
+    def _build_default_config(self) -> Config:
+        """Build a default config, preferring config-local cache/log dirs in Docker."""
+        if os.environ.get("BOOKBOT_CONFIG_DIR"):
+            return Config(
+                cache_directory=self.config_dir / "cache",
+                log_directory=self.config_dir / "logs",
+            )
+        return Config()
 
     def load_config(self) -> Config:
         """Load configuration from file or create default."""
@@ -52,10 +64,10 @@ class ConfigManager:
             except (OSError, ValidationError, toml.TomlDecodeError) as e:
                 # Fall back to default config on error
                 print(f"Warning: Error loading config file: {e}")
-                self._config = Config()
+                self._config = self._build_default_config()
                 self.save_config()  # Save default config
         else:
-            self._config = Config()
+            self._config = self._build_default_config()
             self.save_config()  # Create default config file
 
         return self._config
@@ -108,7 +120,7 @@ class ConfigManager:
     def save_profile(self, profile: Profile) -> None:
         """Save a profile."""
         profile_file = self.profiles_dir / f"{profile.name}.toml"
-        profile_dict = profile.model_dump(exclude_none=True)
+        profile_dict = profile.model_dump(exclude_none=True, mode="json")
 
         try:
             with open(profile_file, "w", encoding="utf-8") as f:
@@ -150,60 +162,200 @@ class ConfigManager:
 
     def create_default_profiles(self) -> None:
         """Create default configuration profiles."""
+        base_config = self._build_default_config()
         default_profiles = [
             Profile(
                 name="safe",
-                description="Safe mode - rename only, no tagging",
-                config=Config(
-                    safe_mode=True,
-                    tagging=Config().tagging.model_copy(update={"enabled": False}),
-                    conversion=Config().conversion.model_copy(
-                        update={"enabled": False}
-                    ),
+                description="Reviewable rename plans with conservative file handling",
+                config=base_config.model_copy(
+                    deep=True,
+                    update={
+                        "active_template": "safe",
+                        "safe_mode": True,
+                        "output": base_config.output.model_copy(
+                            update={
+                                "folder_template": "{author_sort}/{title} ({year})",
+                                "file_template": "{DiscPad}{TrackPad} - {TrackTitle}",
+                                "write_cover": True,
+                                "write_metadata_json": True,
+                                "write_metadata_opf": False,
+                                "write_nfo": False,
+                                "prefer_m4b": False,
+                                "chapter_style": "auto",
+                            }
+                        ),
+                        "tagging": base_config.tagging.model_copy(
+                            update={"enabled": False}
+                        ),
+                        "conversion": base_config.conversion.model_copy(
+                            update={"enabled": False}
+                        ),
+                    },
+                ),
+            ),
+            Profile(
+                name="audiobookshelf",
+                description=(
+                    "Audiobookshelf layout with rich sidecars and M4B preference"
+                ),
+                config=base_config.model_copy(
+                    deep=True,
+                    update={
+                        "active_template": "audiobookshelf",
+                        "safe_mode": False,
+                        "output": base_config.output.model_copy(
+                            update={
+                                "folder_template": (
+                                    "{authors}/{series}/{series_index:02} - {title}"
+                                ),
+                                "file_template": "{title}",
+                                "write_cover": True,
+                                "write_metadata_json": True,
+                                "write_metadata_opf": True,
+                                "write_nfo": True,
+                                "prefer_m4b": True,
+                                "chapter_style": "track",
+                            }
+                        ),
+                        "tagging": base_config.tagging.model_copy(
+                            update={"enabled": True, "write_cover_art": True}
+                        ),
+                        "conversion": base_config.conversion.model_copy(
+                            update={"enabled": True, "chapter_naming": "track_number"}
+                        ),
+                    },
+                ),
+            ),
+            Profile(
+                name="plex",
+                description="Plex-friendly folder layout with cover and sidecar output",
+                config=base_config.model_copy(
+                    deep=True,
+                    update={
+                        "active_template": "plex",
+                        "safe_mode": False,
+                        "output": base_config.output.model_copy(
+                            update={
+                                "folder_template": (
+                                    "{authors}/{series}/{series_index:02} - {title}"
+                                ),
+                                "file_template": "{title}",
+                                "write_cover": True,
+                                "write_metadata_json": True,
+                                "write_metadata_opf": True,
+                                "write_nfo": True,
+                                "prefer_m4b": True,
+                                "chapter_style": "track",
+                            }
+                        ),
+                        "tagging": base_config.tagging.model_copy(
+                            update={
+                                "enabled": True,
+                                "write_cover_art": True,
+                                "write_series": True,
+                            }
+                        ),
+                        "conversion": base_config.conversion.model_copy(
+                            update={"enabled": True, "chapter_naming": "track_number"}
+                        ),
+                    },
+                ),
+            ),
+            Profile(
+                name="prologue",
+                description=(
+                    "Prologue-ready library layout with chapter-oriented packaging"
+                ),
+                config=base_config.model_copy(
+                    deep=True,
+                    update={
+                        "active_template": "prologue",
+                        "safe_mode": False,
+                        "output": base_config.output.model_copy(
+                            update={
+                                "folder_template": (
+                                    "{authors}/{series}/{series_index:02} - {title}"
+                                ),
+                                "file_template": "{title}",
+                                "write_cover": True,
+                                "write_metadata_json": True,
+                                "write_metadata_opf": True,
+                                "write_nfo": True,
+                                "prefer_m4b": True,
+                                "chapter_style": "track",
+                            }
+                        ),
+                        "tagging": base_config.tagging.model_copy(
+                            update={"enabled": True, "write_cover_art": True}
+                        ),
+                        "conversion": base_config.conversion.model_copy(
+                            update={"enabled": True, "chapter_naming": "track_number"}
+                        ),
+                    },
+                ),
+            ),
+            Profile(
+                name="apple-books",
+                description="Apple Books profile for clean author/title presentation",
+                config=base_config.model_copy(
+                    deep=True,
+                    update={
+                        "active_template": "apple-books",
+                        "safe_mode": False,
+                        "output": base_config.output.model_copy(
+                            update={
+                                "folder_template": "{authors}/{title}",
+                                "file_template": "{title}",
+                                "write_cover": True,
+                                "write_metadata_json": True,
+                                "write_metadata_opf": True,
+                                "write_nfo": False,
+                                "prefer_m4b": True,
+                                "chapter_style": "track",
+                            }
+                        ),
+                        "tagging": base_config.tagging.model_copy(
+                            update={"enabled": True, "write_cover_art": True}
+                        ),
+                        "conversion": base_config.conversion.model_copy(
+                            update={"enabled": True, "chapter_naming": "track_number"}
+                        ),
+                    },
                 ),
             ),
             Profile(
                 name="full",
                 description="Full processing - rename, retag, and artwork",
-                config=Config(
-                    safe_mode=False,
-                    tagging=Config().tagging.model_copy(
-                        update={
-                            "enabled": True,
-                            "write_cover_art": True,
-                            "overwrite_policy": "fill_missing",
-                        }
-                    ),
-                ),
-            ),
-            Profile(
-                name="plex",
-                description="Plex Media Server optimized",
-                config=Config(
-                    active_template="plex",
-                    safe_mode=False,
-                    tagging=Config().tagging.model_copy(
-                        update={
-                            "enabled": True,
-                            "write_cover_art": True,
-                            "write_series": True,
-                        }
-                    ),
+                config=base_config.model_copy(
+                    deep=True,
+                    update={
+                        "safe_mode": False,
+                        "tagging": base_config.tagging.model_copy(
+                            update={
+                                "enabled": True,
+                                "write_cover_art": True,
+                                "overwrite_policy": OverwritePolicy.FILL_MISSING,
+                            }
+                        ),
+                    },
                 ),
             ),
             Profile(
                 name="conversion",
                 description="Enable M4B conversion",
-                config=Config(
-                    safe_mode=False,
-                    conversion=Config().conversion.model_copy(
-                        update={
-                            "enabled": True,
-                            "bitrate": "128k",
-                            "create_chapters": True,
-                            "normalize_audio": False,
-                        }
-                    ),
+                config=base_config.model_copy(
+                    deep=True,
+                    update={
+                        "safe_mode": False,
+                        "conversion": base_config.conversion.model_copy(
+                            update={
+                                "enabled": True,
+                                "bitrate": "128k",
+                                "create_chapters": True,
+                                "normalize_audio": False,
+                            }
+                        ),
+                    },
                 ),
             ),
         ]
@@ -214,7 +366,7 @@ class ConfigManager:
 
     def reset_to_defaults(self) -> None:
         """Reset configuration to defaults."""
-        self._config = Config()
+        self._config = self._build_default_config()
         self.save_config()
 
     def get_cache_dir(self) -> Path:

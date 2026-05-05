@@ -137,6 +137,19 @@ class ProviderConfig(BaseModel):
     audible: AudibleConfig = Field(default_factory=AudibleConfig)
 
 
+class LibraryOutputConfig(BaseModel):
+    """Collector-facing layout and sidecar output preferences."""
+
+    folder_template: str = "{author_sort}/{title} ({year})"
+    file_template: str = "{DiscPad}{TrackPad} - {TrackTitle}"
+    write_cover: bool = True
+    write_metadata_json: bool = True
+    write_metadata_opf: bool = False
+    write_nfo: bool = False
+    prefer_m4b: bool = False
+    chapter_style: str = "auto"  # "auto", "from_tags", "track"
+
+
 class Config(BaseModel):
     """Main configuration model."""
 
@@ -149,7 +162,7 @@ class Config(BaseModel):
     max_path_length: int = 255
 
     # Naming templates
-    active_template: str = "default"
+    active_template: str = "safe"
     templates: dict[str, NamingTemplate] = Field(default_factory=dict)
 
     # Tagging
@@ -160,6 +173,9 @@ class Config(BaseModel):
 
     # Providers
     providers: ProviderConfig = Field(default_factory=ProviderConfig)
+
+    # Library layout and sidecar outputs
+    output: LibraryOutputConfig = Field(default_factory=LibraryOutputConfig)
 
     # Cache and logging
     cache_directory: Path = Path.home() / ".cache" / "bookbot"
@@ -194,13 +210,35 @@ class Config(BaseModel):
                 folder_template="{AuthorLastFirst}/{Title} ({Year})",
                 file_template="{DiscPad}{TrackPad} - {Title}",
             ),
+            "safe": NamingTemplate(
+                name="Safe Plan",
+                description="Review-friendly naming with unique per-track filenames",
+                folder_template="{author_sort}/{title} ({year})",
+                file_template="{DiscPad}{TrackPad} - {TrackTitle}",
+            ),
+            "audiobookshelf": NamingTemplate(
+                name="Audiobookshelf",
+                description="Audiobookshelf-oriented layout with stable track names",
+                folder_template="{authors}/{series}/{series_index:02} - {title}",
+                file_template="{DiscPad}{TrackPad} - {TrackTitle}",
+            ),
             "plex": NamingTemplate(
                 name="Plex Media Server",
                 description="Plex-friendly naming convention",
-                folder_template=(
-                    "{AuthorLastFirst}/{SeriesName}/{SeriesIndex} - {Title}"
-                ),
-                file_template="{DiscPad}{TrackPad} - {Title}",
+                folder_template="{authors}/{series}/{series_index:02} - {title}",
+                file_template="{DiscPad}{TrackPad} - {TrackTitle}",
+            ),
+            "prologue": NamingTemplate(
+                name="Prologue",
+                description="Prologue-compatible author/series layout",
+                folder_template="{authors}/{series}/{series_index:02} - {title}",
+                file_template="{DiscPad}{TrackPad} - {TrackTitle}",
+            ),
+            "apple-books": NamingTemplate(
+                name="Apple Books",
+                description="Apple Books-friendly single-library naming",
+                folder_template="{authors}/{title}",
+                file_template="{DiscPad}{TrackPad} - {TrackTitle}",
             ),
             "audible": NamingTemplate(
                 name="Audible Style",
