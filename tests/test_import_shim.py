@@ -9,7 +9,9 @@ from pathlib import Path
 
 def test_cli_imports_from_repository_parent() -> None:
     """`bookbot.cli` should resolve to the inner package from the repo parent."""
+    repo_root = Path(__file__).resolve().parents[1]
     repo_parent = Path(__file__).resolve().parents[2]
+    expected_cli = repo_root / "bookbot" / "cli.py"
 
     result = subprocess.run(
         [
@@ -28,4 +30,4 @@ def test_cli_imports_from_repository_parent() -> None:
     )
 
     assert result.returncode == 0, result.stderr
-    assert result.stdout.strip().endswith("/bookbot/bookbot/cli.py")
+    assert Path(result.stdout.strip()).resolve() == expected_cli
