@@ -100,7 +100,7 @@ class TestAudioFileScanner:
             folder_path, tracks
         )
 
-        assert title == "Brandon Sanderson - The Way of Kings"
+        assert title == "The Way of Kings"
         assert author == "Brandon Sanderson"
 
     def test_metadata_guesses_series_pattern(self):
@@ -167,3 +167,15 @@ class TestAudioFileScanner:
         # Group should contain all 3 files
         group_files = list(groups.values())[0]
         assert len(group_files) == 3
+
+    def test_disc_directories_collapse_into_one_audiobook(
+        self, sample_audiobook_directory
+    ):
+        """CD1/CD2 folder structures should be grouped under one book."""
+        scanner = AudioFileScanner(recursive=True, max_depth=4)
+
+        files = scanner._find_audio_files(sample_audiobook_directory)
+        groups = scanner._group_files_by_audiobook(files)
+
+        roots = {group.name for group in groups}
+        assert "Brandon Sanderson - The Way of Kings" in roots

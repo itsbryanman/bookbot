@@ -14,6 +14,7 @@ class TemplateEngine:
 
     # Characters that are forbidden in filenames on various filesystems
     FORBIDDEN_CHARS = {"windows": r'<>:"/\\|?*', "unix": r"/", "common": r'<>:"/\\|?*'}
+    PLACEHOLDER_PATTERN = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)(?::([^}]+))?\}")
 
     def __init__(
         self,
@@ -142,7 +143,7 @@ class TemplateEngine:
             if track.existing_tags.title:
                 tokens["TrackTitle"] = track.existing_tags.title
             else:
-                tokens["TrackTitle"] = f"Track {track.track_index}"
+                tokens["TrackTitle"] = self._derive_track_title(track.stem)
         else:
             tokens["TrackPad"] = ""
             tokens["Track"] = ""
@@ -155,19 +156,53 @@ class TemplateEngine:
             if value:
                 tokens[key] = self._apply_case_policy(value)
 
+        # Lowercase and snake_case aliases for declarative profile templates
+        alias_tokens = {
+            "author": tokens["Author"],
+            "authors": tokens["Author"],
+            "author_sort": tokens["AuthorLastFirst"],
+            "title": tokens["Title"],
+            "short_title": tokens["ShortTitle"],
+            "series": tokens["SeriesName"],
+            "series_index": tokens["SeriesIndex"],
+            "year": tokens["Year"],
+            "narrator": tokens["Narrator"],
+            "disc_pad": tokens["DiscPad"],
+            "track_pad": tokens["TrackPad"],
+            "disc": tokens["Disc"],
+            "track": tokens["Track"],
+            "track_title": tokens["TrackTitle"],
+            "language": tokens["Language"],
+            "isbn": tokens["ISBN"],
+        }
+        tokens.update(alias_tokens)
+
         return tokens
 
     def _apply_template(self, template: str, tokens: dict[str, str]) -> str:
         """Apply tokens to template string."""
-        result = template
 
-        for token, value in tokens.items():
-            placeholder = f"{{{token}}}"
-            result = result.replace(placeholder, value or "")
+        def replace(match: re.Match[str]) -> str:
+            token_name = match.group(1)
+            format_spec = match.group(2)
+            value = tokens.get(token_name, "")
+            if not format_spec or not value:
+                return value
+            if format_spec.isdigit():
+                return value.zfill(int(format_spec))
+            return value
+
+        result = self.PLACEHOLDER_PATTERN.sub(replace, template)
+
+        # Remove punctuation left behind by empty tokens
+        result = re.sub(r"\(\s*\)", "", result)
+        result = re.sub(r"(?<=/)\s*-\s+", "", result)
+        result = re.sub(r"\s+-\s+(?=/|$)", "", result)
+        result = re.sub(r"/{2,}", "/", result)
 
         # Clean up repeated whitespace without touching punctuation
         result = re.sub(r"\s+", " ", result)
-        result = result.strip()
+        result = result.strip(" /-")
 
         return result
 
@@ -219,6 +254,11 @@ class TemplateEngine:
             result += word
 
         return result if result else title[:max_length]
+
+    def _derive_track_title(self, stem: str) -> str:
+        """Build a readable track title from the source filename."""
+        cleaned = re.sub(r"^[\d\s._-]+", "", stem).replace("_", " ").strip()
+        return cleaned or stem or "Track"
 
     def _normalize_path(self, path: str) -> str:
         """Normalize a path string for filesystem safety."""
@@ -307,7 +347,7 @@ class TemplateEngine:
             errors.append("Template has unmatched braces")
 
         # Extract and validate token names
-        tokens = re.findall(r"\{([^}]+)\}", template)
+        tokens = self.PLACEHOLDER_PATTERN.findall(template)
         valid_tokens = {
             "Author",
             "AuthorLastFirst",
@@ -324,10 +364,28 @@ class TemplateEngine:
             "TrackTitle",
             "Language",
             "ISBN",
+            "author",
+            "authors",
+            "author_sort",
+            "title",
+            "short_title",
+            "series",
+            "series_index",
+            "year",
+            "narrator",
+            "disc_pad",
+            "track_pad",
+            "disc",
+            "track",
+            "track_title",
+            "language",
+            "isbn",
         }
 
-        for token in tokens:
+        for token, format_spec in tokens:
             if token not in valid_tokens:
                 errors.append(f"Unknown token: {{{token}}}")
+            if format_spec and not format_spec.isdigit():
+                errors.append(f"Unsupported format specifier: {format_spec}")
 
         return len(errors) == 0, errors

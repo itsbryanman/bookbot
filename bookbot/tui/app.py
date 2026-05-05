@@ -1,17 +1,28 @@
 """Main TUI application for BookBot."""
 
 import asyncio
+import os
 from pathlib import Path
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Container, Horizontal
 from textual.message import Message
-from textual.widgets import Button, Footer, Header, Label, TabbedContent, TabPane
+from textual.widgets import (
+    Button,
+    Footer,
+    Header,
+    Label,
+    Static,
+    TabbedContent,
+    TabPane,
+)
 
 from ..config.manager import ConfigManager
 from ..core.discovery import AudioFileScanner
 from ..core.models import AudiobookSet
+from ..core.operations import TransactionManager
+from ..core.planning import PlanBuilder, format_plan_diff
 from ..providers.base import MetadataProvider
 from ..providers.openlibrary import OpenLibraryProvider
 from .screens import (
@@ -53,8 +64,26 @@ class BookBotApp(App):
         background: $surface;
     }
 
-    .scan-container {
+    #mission_control {
         height: 100%;
+    }
+
+    .mission-top {
+        height: 1fr;
+    }
+
+    #scan_screen, #match_screen, #preview_screen {
+        width: 1fr;
+        height: 100%;
+    }
+
+    #warnings_panel {
+        height: 8;
+        border: heavy $accent;
+        margin: 1;
+        padding: 1;
+        background: $background;
+        color: $text;
     }
 
     /* Enhanced Buttons */
@@ -270,8 +299,16 @@ class BookBotApp(App):
 
     BINDINGS = [
         Binding("ctrl+c", "quit", "Quit", show=True, priority=True),
-        Binding("ctrl+h", "help", "Help", show=True),
+        Binding("ctrl+h", "help", "Help", show=False),
         Binding("f1", "help", "Help", show=False),
+        Binding("s", "scan", "Scan", show=True),
+        Binding("m", "match", "Match", show=True),
+        Binding("p", "preview_plan", "Preview", show=True),
+        Binding("a", "apply_selected", "Apply", show=True),
+        Binding("u", "undo", "Undo", show=True),
+        Binding("d", "diff", "Diff", show=True),
+        Binding("f", "filter_warnings", "Warnings", show=True),
+        Binding("?", "help", "Help", show=True),
         ("ctrl+s", "save_config", "Save Config"),
         ("ctrl+r", "refresh", "Refresh"),
     ]
@@ -291,6 +328,8 @@ class BookBotApp(App):
         # Application state
         self.current_step = "source_selection"
         self.scanning_complete = False
+        self.last_transaction_id: str | None = None
+        self.warning_filter_enabled = False
 
     def compose(self) -> ComposeResult:
         """Create child widgets for the app."""
@@ -299,22 +338,32 @@ class BookBotApp(App):
         with Container(classes="main-container"):
             yield Label("BookBot - Ultimate Audiobook Organizer", classes="title")
 
-            with TabbedContent(initial="source"):
+            with TabbedContent(initial="mission" if self.source_folders else "source"):
+                with TabPane("Mission Control", id="mission"):
+                    with Container(id="mission_control"):
+                        with Horizontal(classes="mission-top"):
+                            yield ScanResultsScreen(
+                                self.config_manager, id="scan_screen"
+                            )
+                            yield MatchReviewScreen(
+                                self.config_manager, self.provider, id="match_screen"
+                            )
+                            yield PreviewScreen(
+                                self.config_manager, id="preview_screen"
+                            )
+                        yield Static(
+                            (
+                                "Warnings, conflicts, and actions will appear here.\n"
+                                "Shortcuts: s scan, m match, p preview, a apply, "
+                                "u undo, d diff, f warnings, ? help"
+                            ),
+                            id="warnings_panel",
+                        )
+
                 with TabPane("Source Selection", id="source"):
                     yield SourceSelectionScreen(
                         self.config_manager, self.source_folders, id="source_screen"
                     )
-
-                with TabPane("Scan Results", id="scan"):
-                    yield ScanResultsScreen(self.config_manager, id="scan_screen")
-
-                with TabPane("Match Review", id="match"):
-                    yield MatchReviewScreen(
-                        self.config_manager, self.provider, id="match_screen"
-                    )
-
-                with TabPane("Preview", id="preview"):
-                    yield PreviewScreen(self.config_manager, id="preview_screen")
 
                 with TabPane("Convert", id="convert"):
                     yield ConversionScreen(self.config_manager, id="convert_screen")
@@ -361,6 +410,18 @@ class BookBotApp(App):
         """Update the status label."""
         status_label = self.query_one("#status_label", Label)
         status_label.update(message)
+
+    def update_warning_panel(self, message: str) -> None:
+        """Update the bottom warning and action panel."""
+        self.query_one("#warnings_panel", Static).update(message)
+
+    def _library_root(self) -> Path | None:
+        """Find the common root for scanned audiobook sets."""
+        if not self.audiobook_sets:
+            return None
+        return Path(
+            os.path.commonpath([str(book.source_path) for book in self.audiobook_sets])
+        )
 
     class StartScan(Message):
         """Message to start scanning."""
@@ -435,16 +496,22 @@ class BookBotApp(App):
             find_button = self.query_one("#find_matches", Button)
             find_button.disabled = False
 
-            # Switch to scan results tab
+            # Switch to mission control tab
             tabbed_content = self.query_one(TabbedContent)
-            tabbed_content.active = "scan"
+            tabbed_content.active = "mission"
 
             self.update_status(
                 f"Scan complete: Found {len(self.audiobook_sets)} audiobook set(s)"
             )
+            warning_count = sum(len(book.warnings) for book in self.audiobook_sets)
+            self.update_warning_panel(
+                f"Queue loaded with {len(self.audiobook_sets)} books. "
+                f"Warnings detected: {warning_count}."
+            )
 
         except Exception as e:
             self.update_status(f"Scan failed: {e}")
+            self.update_warning_panel(f"Scan failed: {e}")
 
         finally:
             # Re-enable scan button
@@ -471,14 +538,18 @@ class BookBotApp(App):
             preview_button = self.query_one("#preview_changes", Button)
             preview_button.disabled = False
 
-            # Switch to match review tab
+            # Switch to mission control tab
             tabbed_content = self.query_one(TabbedContent)
-            tabbed_content.active = "match"
+            tabbed_content.active = "mission"
 
             self.update_status("Matches found - review and confirm")
+            self.update_warning_panel(
+                "Metadata candidates loaded. Press p to preview the rename plan."
+            )
 
         except Exception as e:
             self.update_status(f"Match finding failed: {e}")
+            self.update_warning_panel(f"Match finding failed: {e}")
 
         finally:
             find_button.disabled = False
@@ -487,17 +558,21 @@ class BookBotApp(App):
     def show_preview(self) -> None:
         """Show preview of changes."""
         preview_screen = self.query_one("#preview_screen", PreviewScreen)
+        preview_screen.source_roots = self.source_folders
         preview_screen.set_audiobook_sets(self.audiobook_sets)
 
         # Enable apply button
         apply_button = self.query_one("#apply_changes", Button)
         apply_button.disabled = False
 
-        # Switch to preview tab
+        # Switch to mission control tab
         tabbed_content = self.query_one(TabbedContent)
-        tabbed_content.active = "preview"
+        tabbed_content.active = "mission"
 
         self.update_status("Review changes and apply when ready")
+        self.update_warning_panel(
+            "Preview updated. Press d to inspect the diff or a to apply the plan."
+        )
 
     async def apply_changes(self) -> None:
         """Apply the changes."""
@@ -513,9 +588,14 @@ class BookBotApp(App):
 
             if success:
                 self.update_status("Changes applied successfully!")
+                self.last_transaction_id = preview_screen.last_transaction_id
                 # Enable conversion button after successful changes
                 convert_button = self.query_one("#convert_m4b", Button)
                 convert_button.disabled = False
+                self.update_warning_panel(
+                    "Plan applied. Press u to undo the latest transaction or switch "
+                    "to Convert for M4B packaging."
+                )
             else:
                 self.update_status("Failed to apply changes")
 
@@ -539,8 +619,86 @@ class BookBotApp(App):
 
     def action_help(self) -> None:
         """Show help dialog."""
-        # TODO: Implement help dialog
-        self.update_status("Help: Use tabs to navigate, buttons to process")
+        self.update_status("Mission control shortcuts loaded")
+        self.update_warning_panel(
+            "Shortcuts: s scan, m match, p preview plan, a apply selected, "
+            "u undo latest, d diff, f toggle warning summary, ? help"
+        )
+
+    def action_scan(self) -> None:
+        """Start or restart scanning."""
+        self.post_message(self.StartScan())
+
+    async def action_match(self) -> None:
+        """Trigger metadata matching."""
+        await self.find_matches()
+
+    def action_preview_plan(self) -> None:
+        """Show the rename preview."""
+        self.show_preview()
+
+    async def action_apply_selected(self) -> None:
+        """Apply the current plan."""
+        await self.apply_changes()
+
+    async def action_undo(self) -> None:
+        """Undo the most recent transaction."""
+        manager = TransactionManager(self.config_manager)
+        transaction_id = self.last_transaction_id
+        if transaction_id is None:
+            recent = manager.list_transactions(days=365)
+            transaction_id = next(
+                (item["id"] for item in recent if item.get("can_undo")), None
+            )
+
+        if not transaction_id:
+            self.update_status("No transaction available to undo")
+            return
+
+        success = await asyncio.to_thread(manager.undo_transaction, transaction_id)
+        if success:
+            self.update_status(f"Undid transaction {transaction_id[:8]}...")
+            self.update_warning_panel("Latest transaction rolled back successfully.")
+        else:
+            self.update_status("Undo failed")
+
+    def action_diff(self) -> None:
+        """Show the current plan diff in the warning panel."""
+        root = self._library_root()
+        if root is None:
+            self.update_status("No scanned library to diff")
+            return
+        plan = PlanBuilder(self.config_manager.load_config()).create_plan(
+            root,
+            self.audiobook_sets,
+            source_roots=self.source_folders or [root],
+        )
+        diff = format_plan_diff(plan)
+        self.update_warning_panel("\n".join(diff.splitlines()[:12]))
+        self.update_status("Showing plan diff")
+
+    def action_filter_warnings(self) -> None:
+        """Toggle warning-focused summary in the bottom pane."""
+        self.warning_filter_enabled = not self.warning_filter_enabled
+        if not self.audiobook_sets:
+            self.update_warning_panel("No scan results available yet.")
+            return
+
+        if self.warning_filter_enabled:
+            lines = []
+            for audiobook_set in self.audiobook_sets:
+                if audiobook_set.warnings:
+                    lines.append(f"{audiobook_set.source_path.name}:")
+                    lines.extend(f"  - {warning}" for warning in audiobook_set.warnings)
+            self.update_warning_panel(
+                "\n".join(lines) if lines else "No warnings in the current queue."
+            )
+            self.update_status("Warning filter enabled")
+        else:
+            self.update_warning_panel(
+                "Warnings filter cleared. Press d for diff or ? for shortcuts."
+            )
+            self.update_status("Warning filter disabled")
 
     async def action_save_config(self) -> None:
         """Save current configuration without blocking the UI."""

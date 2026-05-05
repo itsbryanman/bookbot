@@ -116,6 +116,23 @@ class TestTemplateEngine:
             == "Sanderson, Brandon/The Stormlight Archive/1 - The Way Of Kings (2010)"
         )
 
+    def test_generate_folder_name_with_snake_case_tokens(
+        self, sample_audiobook_set, sample_identity
+    ):
+        """Declarative profile templates should support snake_case tokens."""
+        engine = TemplateEngine()
+
+        folder_name = engine.generate_folder_name(
+            sample_audiobook_set,
+            sample_identity,
+            template="{authors}/{series}/{series_index:02} - {title}",
+        )
+
+        assert (
+            folder_name
+            == "Brandon Sanderson/The Stormlight Archive/01 - The Way Of Kings"
+        )
+
     def test_case_policies(self, sample_audiobook_set, sample_identity):
         """Test different case policies."""
         test_cases = [

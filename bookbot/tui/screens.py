@@ -1,6 +1,7 @@
 """TUI screens for BookBot."""
 
 import asyncio
+import os
 from asyncio import to_thread
 from pathlib import Path
 from typing import Any
@@ -20,8 +21,9 @@ from textual.widgets import (
 )
 
 from ..config.manager import ConfigManager
-from ..core.models import AudiobookSet, MatchCandidate, RenameOperation
+from ..core.models import AudiobookSet, MatchCandidate
 from ..core.operations import TransactionManager
+from ..core.planning import PlanBuilder
 from ..providers.base import MetadataProvider
 
 try:
@@ -53,7 +55,7 @@ class DRMLoginScreen(Static):
         if AudibleAuthClient is None:
             self.auth_client = None
             self._auth_error = (
-                "Audible DRM support is not available " "(missing dependencies)."
+                "Audible DRM support is not available (missing dependencies)."
             )
         else:
             try:
@@ -157,6 +159,12 @@ class ScanResultsScreen(Static):
         super().__init__(**kwargs)
         self.config_manager = config_manager
         self.audiobook_sets: list[AudiobookSet] = []
+        self.last_transaction_id: str | None = None
+        self.source_roots: list[Path] = []
+        self.last_transaction_id: str | None = None
+        self.source_roots: list[Path] = []
+        self.last_transaction_id: str | None = None
+        self.source_roots: list[Path] = []
 
     def compose(self) -> ComposeResult:
         yield Label("Scan Results", classes="section-title")
@@ -254,6 +262,8 @@ class PreviewScreen(Static):
         super().__init__(**kwargs)
         self.config_manager = config_manager
         self.audiobook_sets: list[AudiobookSet] = []
+        self.last_transaction_id: str | None = None
+        self.source_roots: list[Path] = []
 
     def compose(self) -> ComposeResult:
         yield Label("Preview Changes", classes="section-title")
@@ -265,24 +275,34 @@ class PreviewScreen(Static):
 
         table = self.query_one("#preview_table", DataTable)
         table.clear(columns=True)
-        table.add_columns("Current Name", "Proposed Name", "Status")
+        table.add_columns("Current Name", "Proposed Path", "Status")
 
-        from ..core.templates import TemplateEngine
+        if not audiobook_sets:
+            return
 
-        template_engine = TemplateEngine()
+        config = self.config_manager.load_config()
+        common_root = Path(
+            os.path.commonpath([str(book.source_path) for book in audiobook_sets])
+        )
+        plan = PlanBuilder(config).create_plan(
+            common_root,
+            audiobook_sets,
+            source_roots=self.source_roots or [common_root],
+        )
+        operations_by_source = {
+            operation.old_path: operation for operation in plan.operations
+        }
 
         for audiobook_set in audiobook_sets:
             for track in audiobook_set.tracks:
                 current_name = track.src_path.name
-
-                if audiobook_set.chosen_identity:
-                    proposed_name = template_engine.generate_filename(
-                        track, audiobook_set, audiobook_set.chosen_identity
-                    )
-                else:
-                    proposed_name = current_name
-
-                status = "✓ Ready" if proposed_name != current_name else "→ No change"
+                operation = operations_by_source.get(track.src_path)
+                proposed_name = (
+                    str(operation.new_path.relative_to(common_root))
+                    if operation is not None
+                    else str(track.src_path.relative_to(common_root))
+                )
+                status = "✓ Ready" if operation is not None else "→ No change"
                 table.add_row(current_name, proposed_name, status)
 
     async def apply_changes(self) -> bool:
@@ -291,47 +311,36 @@ class PreviewScreen(Static):
             # Initialize transaction manager
             transaction_manager = TransactionManager(self.config_manager)
 
-            from ..core.templates import TemplateEngine
-
-            template_engine = TemplateEngine()
-
-            # Create rename plan
-            rename_operations: list[RenameOperation] = []
-
-            for audiobook_set in self.audiobook_sets:
-                if not audiobook_set.chosen_identity:
-                    continue
-
-                for track in audiobook_set.tracks:
-                    new_filename = template_engine.generate_filename(
-                        track, audiobook_set, audiobook_set.chosen_identity
-                    )
-
-                    if new_filename != track.src_path.name:
-                        new_path = track.src_path.parent / new_filename
-                        rename_operations.append(
-                            RenameOperation(
-                                old_path=track.src_path,
-                                new_path=new_path,
-                                track=track,
-                            )
-                        )
-
-            if not rename_operations:
+            if not self.audiobook_sets:
                 return True  # No operations needed
 
-            plan = transaction_manager.create_rename_plan(rename_operations)
+            config = self.config_manager.load_config()
+            common_root = Path(
+                os.path.commonpath(
+                    [str(book.source_path) for book in self.audiobook_sets]
+                )
+            )
+            plan = PlanBuilder(config).create_plan(
+                common_root,
+                self.audiobook_sets,
+                source_roots=self.source_roots or [common_root],
+            )
+            if not plan.operations:
+                return True
+            if plan.conflicts:
+                raise ValueError("; ".join(plan.conflicts))
 
             await to_thread(transaction_manager.execute_plan, plan, dry_run=False)
 
-            transaction_id = plan.plan_id
+            transaction_id = plan.applied_transaction_id or "unknown"
+            self.last_transaction_id = transaction_id
 
             # Update table to show completion
             table = self.query_one("#preview_table", DataTable)
             table.clear()
             table.add_columns("Operation", "Result", "Transaction ID")
             table.add_row(
-                f"Renamed {len(rename_operations)} files",
+                f"Renamed {len(plan.operations)} files",
                 "✓ Success",
                 transaction_id[:8] + "...",
             )

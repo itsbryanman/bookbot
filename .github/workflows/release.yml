@@ -1,0 +1,110 @@
+name: Create Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: "Version bump type"
+        required: true
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+
+permissions:
+  contents: write
+
+jobs:
+  bump-and-tag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install tomli tomli-w
+
+      - name: Bump version
+        id: bump
+        env:
+          BUMP_TYPE: ${{ inputs.bump }}
+        run: |
+          python - <<'EOF'
+          import os, tomli, tomli_w
+          from pathlib import Path
+
+          bump_type = os.environ["BUMP_TYPE"]
+          pyproject = Path("pyproject.toml")
+          data = tomli.loads(pyproject.read_text())
+
+          current = data["project"]["version"]
+          major, minor, patch = (int(x) for x in current.split("."))
+
+          if bump_type == "major":
+              major += 1
+              minor = 0
+              patch = 0
+          elif bump_type == "minor":
+              minor += 1
+              patch = 0
+          else:
+              patch += 1
+
+          new_version = f"{major}.{minor}.{patch}"
+          data["project"]["version"] = new_version
+          pyproject.write_text(tomli_w.dumps(data))
+
+          # Also update Dockerfile label if present
+          dockerfile = Path("Dockerfile")
+          if dockerfile.exists():
+              content = dockerfile.read_text()
+              content = content.replace(
+                  f'org.opencontainers.image.version="{current}"',
+                  f'org.opencontainers.image.version="{new_version}"',
+              )
+              dockerfile.write_text(content)
+
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"old_version={current}\n")
+              f.write(f"new_version={new_version}\n")
+              f.write(f"tag=v{new_version}\n")
+
+          print(f"Bumped {current} -> {new_version}")
+          EOF
+
+      - name: Commit version bump
+        env:
+          NEW_VERSION: ${{ steps.bump.outputs.new_version }}
+          TAG: ${{ steps.bump.outputs.tag }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add pyproject.toml Dockerfile
+          git commit -m "Release ${TAG}"
+          git tag "$TAG"
+          git push origin main --tags
+
+      - name: Summary
+        env:
+          OLD_VERSION: ${{ steps.bump.outputs.old_version }}
+          NEW_VERSION: ${{ steps.bump.outputs.new_version }}
+          TAG: ${{ steps.bump.outputs.tag }}
+        run: |
+          echo "## Release Created" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Previous version:** ${OLD_VERSION}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **New version:** ${NEW_VERSION}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Tag:** ${TAG}" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "The tag push will trigger the Release workflow which handles:" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Full test matrix (Python 3.10-3.13)" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Package build and smoke test" >> "$GITHUB_STEP_SUMMARY"
+          echo "- PyPI publish" >> "$GITHUB_STEP_SUMMARY"
+          echo "- GitHub Release with artifacts" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Docker image build and push (amd64 + arm64)" >> "$GITHUB_STEP_SUMMARY"
