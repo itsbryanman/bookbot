@@ -51,6 +51,8 @@ demo_library/
 SampleFiles/
 audible_books/
 
+# local audiobook fixtures for manual testing
+testing/
 
 *.m4b
 *.mp3
