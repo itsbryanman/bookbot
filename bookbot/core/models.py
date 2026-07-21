@@ -128,6 +128,7 @@ class ProviderIdentity(BaseModel):
     isbn_10: str | None = None
     isbn_13: str | None = None
     asin: str | None = None
+    runtime_minutes: int | None = None
     description: str | None = None
     cover_urls: list[str] = Field(default_factory=list)
 
@@ -169,6 +170,8 @@ class AudiobookSet(BaseModel):
     narrator_guess: str | None = None
     language_guess: str | None = None
     year_guess: int | None = None
+    isbn_guess: str | None = None
+    asin_guess: str | None = None
 
     disc_count: int = 1
     total_tracks: int = 0

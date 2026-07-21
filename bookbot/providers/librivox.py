@@ -6,9 +6,8 @@ from typing import TYPE_CHECKING, Any
 
 import aiohttp
 from pydantic import ValidationError
-from rapidfuzz import fuzz
 
-from ..core.models import AudiobookSet, ProviderIdentity
+from ..core.models import ProviderIdentity
 from .base import MetadataProvider
 
 if TYPE_CHECKING:
@@ -235,52 +234,3 @@ class LibriVoxProvider(MetadataProvider):
             },
         )
 
-    def calculate_match_score(
-        self, audiobook_set: AudiobookSet, identity: ProviderIdentity
-    ) -> float:
-        """Calculate match score between audiobook set and LibriVox identity."""
-        score = 0.0
-        total_weight = 0.0
-
-        # Title matching (weight: 0.5 - higher for LibriVox since less metadata)
-        if audiobook_set.raw_title_guess and identity.title:
-            title_ratio = (
-                fuzz.ratio(
-                    audiobook_set.raw_title_guess.lower(), identity.title.lower()
-                )
-                / 100.0
-            )
-            score += title_ratio * 0.5
-            total_weight += 0.5
-
-        # Author matching (weight: 0.35)
-        if audiobook_set.author_guess and identity.authors:
-            author_scores = []
-            for author in identity.authors:
-                author_ratio = (
-                    fuzz.ratio(audiobook_set.author_guess.lower(), author.lower())
-                    / 100.0
-                )
-                author_scores.append(author_ratio)
-
-            if author_scores:
-                best_author_score = max(author_scores)
-                score += best_author_score * 0.35
-                total_weight += 0.35
-
-        # Language matching (weight: 0.1)
-        if audiobook_set.language_guess and identity.language:
-            if audiobook_set.language_guess.lower() == identity.language.lower():
-                score += 1.0 * 0.1
-            total_weight += 0.1
-
-        # Bonus for public domain content (weight: 0.05)
-        if identity.raw_data.get("public_domain"):
-            score += 1.0 * 0.05
-            total_weight += 0.05
-
-        # Normalize score
-        if total_weight > 0:
-            return score / total_weight
-        else:
-            return 0.0

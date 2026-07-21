@@ -6,9 +6,8 @@ from typing import TYPE_CHECKING, Any
 
 import aiohttp
 from pydantic import ValidationError
-from rapidfuzz import fuzz
 
-from ..core.models import AudiobookSet, ProviderIdentity
+from ..core.models import ProviderIdentity
 from .base import MetadataProvider
 
 if TYPE_CHECKING:
@@ -268,73 +267,3 @@ class GoogleBooksProvider(MetadataProvider):
             },
         )
 
-    def calculate_match_score(
-        self, audiobook_set: AudiobookSet, identity: ProviderIdentity
-    ) -> float:
-        """Calculate match score between audiobook set and Google Books identity."""
-        score = 0.0
-        total_weight = 0.0
-
-        # Title matching (weight: 0.4)
-        if audiobook_set.raw_title_guess and identity.title:
-            title_ratio = (
-                fuzz.ratio(
-                    audiobook_set.raw_title_guess.lower(), identity.title.lower()
-                )
-                / 100.0
-            )
-            score += title_ratio * 0.4
-            total_weight += 0.4
-
-        # Author matching (weight: 0.3)
-        if audiobook_set.author_guess and identity.authors:
-            author_scores = []
-            for author in identity.authors:
-                author_ratio = (
-                    fuzz.ratio(audiobook_set.author_guess.lower(), author.lower())
-                    / 100.0
-                )
-                author_scores.append(author_ratio)
-
-            if author_scores:
-                best_author_score = max(author_scores)
-                score += best_author_score * 0.3
-                total_weight += 0.3
-
-        # Series matching (weight: 0.15)
-        if audiobook_set.series_guess and identity.series_name:
-            series_ratio = (
-                fuzz.ratio(
-                    audiobook_set.series_guess.lower(), identity.series_name.lower()
-                )
-                / 100.0
-            )
-            score += series_ratio * 0.15
-            total_weight += 0.15
-
-        # Language matching (weight: 0.1)
-        if audiobook_set.language_guess and identity.language:
-            if audiobook_set.language_guess.lower() == identity.language.lower():
-                score += 1.0 * 0.1
-            total_weight += 0.1
-
-        # Year proximity (weight: 0.05)
-        if audiobook_set.year_guess and identity.year:
-            year_diff = abs(audiobook_set.year_guess - identity.year)
-            if year_diff == 0:
-                year_score = 1.0
-            elif year_diff <= 2:
-                year_score = 0.8
-            elif year_diff <= 5:
-                year_score = 0.5
-            else:
-                year_score = 0.0
-
-            score += year_score * 0.05
-            total_weight += 0.05
-
-        # Normalize score
-        if total_weight > 0:
-            return score / total_weight
-        else:
-            return 0.0

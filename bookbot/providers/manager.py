@@ -1,7 +1,16 @@
 """Provider manager for handling multiple metadata sources."""
 
+import asyncio
+
 from ..config.manager import ConfigManager
 from ..core.logging import get_logger
+from ..core.matching import AdvancedMatcher
+from ..core.models import (
+    AudiobookSet,
+    MatchCandidate,
+    MatchConfidence,
+    ProviderIdentity,
+)
 from ..io.cache import CacheManager
 from .audible import AudibleProvider
 from .audnexus import AudnexusProvider
@@ -99,6 +108,193 @@ class ProviderManager:
         """Get the primary (highest priority) provider."""
         enabled = self.get_enabled_providers()
         return enabled[0] if enabled else self.providers["openlibrary"]
+
+    async def find_matches_merged(
+        self, audiobook_set: AudiobookSet, limit: int = 10
+    ) -> list[MatchCandidate]:
+        """Fan out find_matches to all enabled providers, merge candidates.
+
+        Merge groups by isbn_13, then asin, then (normalized_author, normalized_title).
+        Applies corroboration boost and duration cross-check.
+        """
+        enabled = self.get_enabled_providers()
+        if not enabled:
+            return []
+
+        # Fan out concurrently
+        tasks = [p.find_matches(audiobook_set, limit) for p in enabled]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        # Collect all candidates, tagging each with its provider priority
+        all_candidates: list[tuple[int, MatchCandidate]] = []
+        for i, result in enumerate(results):
+            if isinstance(result, BaseException):
+                provider_name = enabled[i].name
+                logger.warning(
+                    f"Provider {provider_name} failed during find_matches",
+                    error=str(result),
+                )
+                continue
+            for candidate in result:
+                all_candidates.append((i, candidate))  # i = priority index
+
+        if not all_candidates:
+            return []
+
+        # Group candidates
+        matcher = AdvancedMatcher()
+        groups: dict[str, list[tuple[int, MatchCandidate]]] = {}
+
+        for priority, candidate in all_candidates:
+            key = self._group_key(candidate.identity, matcher)
+            if key not in groups:
+                groups[key] = []
+            groups[key].append((priority, candidate))
+
+        # Merge each group
+        merged: list[MatchCandidate] = []
+        for group_members in groups.values():
+            surviving = self._merge_group(group_members)
+            # Duration cross-check
+            surviving = self._apply_duration_check(
+                surviving, audiobook_set.total_duration
+            )
+            merged.append(surviving)
+
+        # Sort by confidence descending
+        merged.sort(key=lambda c: c.confidence, reverse=True)
+        return merged[:limit]
+
+    @staticmethod
+    def _group_key(identity: ProviderIdentity, matcher: AdvancedMatcher) -> str:
+        """Generate a grouping key for merging candidates."""
+        if identity.isbn_13:
+            return f"isbn13:{identity.isbn_13}"
+        if identity.asin:
+            return f"asin:{identity.asin}"
+        norm_author = (
+            matcher.normalize_author(identity.authors[0])
+            if identity.authors
+            else ""
+        )
+        norm_title = matcher.normalize_title(identity.title)
+        return f"fuzzy:{norm_author}|{norm_title}"
+
+    def _merge_group(
+        self, members: list[tuple[int, MatchCandidate]]
+    ) -> MatchCandidate:
+        """Merge a group of candidates into a single surviving candidate.
+
+        Keeps the identity from the highest-priority provider (lowest index),
+        backfills None fields from other members, and applies corroboration boost.
+        """
+        # Sort by priority (lowest index = highest priority)
+        members.sort(key=lambda m: m[0])
+        best_priority, best_candidate = members[0]
+        surviving_identity = best_candidate.identity.model_copy()
+
+        # Collect distinct provider names
+        provider_names: set[str] = set()
+        max_confidence = best_candidate.confidence
+        all_reasons: list[str] = list(best_candidate.match_reasons)
+
+        for _priority, candidate in members:
+            provider_names.add(candidate.identity.provider)
+            if candidate.confidence > max_confidence:
+                max_confidence = candidate.confidence
+
+            # Backfill None fields from lower-priority candidates
+            ident = candidate.identity
+            if not surviving_identity.narrator and ident.narrator:
+                surviving_identity.narrator = ident.narrator
+            if not surviving_identity.year and ident.year:
+                surviving_identity.year = ident.year
+            if not surviving_identity.series_name and ident.series_name:
+                surviving_identity.series_name = ident.series_name
+            if not surviving_identity.series_index and ident.series_index:
+                surviving_identity.series_index = ident.series_index
+            if not surviving_identity.cover_urls and ident.cover_urls:
+                surviving_identity.cover_urls = list(ident.cover_urls)
+            if not surviving_identity.isbn_10 and ident.isbn_10:
+                surviving_identity.isbn_10 = ident.isbn_10
+            if not surviving_identity.isbn_13 and ident.isbn_13:
+                surviving_identity.isbn_13 = ident.isbn_13
+            if not surviving_identity.asin and ident.asin:
+                surviving_identity.asin = ident.asin
+            if not surviving_identity.runtime_minutes and ident.runtime_minutes:
+                surviving_identity.runtime_minutes = ident.runtime_minutes
+
+        # Corroboration boost
+        n_providers = len(provider_names)
+        confidence = max_confidence
+        if n_providers >= 2:
+            confidence = min(1.0, confidence + 0.07 * (n_providers - 1))
+            all_reasons.append(f"Corroborated by {n_providers} providers")
+
+        # Deduplicate reasons while preserving order
+        seen: set[str] = set()
+        unique_reasons: list[str] = []
+        for r in all_reasons:
+            if r not in seen:
+                seen.add(r)
+                unique_reasons.append(r)
+
+        level = MatchConfidence.HIGH
+        if confidence <= 0.85:
+            level = MatchConfidence.MEDIUM
+        if confidence <= 0.65:
+            level = MatchConfidence.LOW
+
+        return MatchCandidate(
+            identity=surviving_identity,
+            confidence=confidence,
+            confidence_level=level,
+            match_reasons=unique_reasons,
+        )
+
+    @staticmethod
+    def _apply_duration_check(
+        candidate: MatchCandidate, total_duration: float | None
+    ) -> MatchCandidate:
+        """Apply duration cross-check to adjust confidence."""
+        if total_duration is None or total_duration <= 0:
+            return candidate
+
+        runtime_min = candidate.identity.runtime_minutes
+        if runtime_min is None or runtime_min <= 0:
+            return candidate
+
+        # Convert total_duration (seconds) to minutes for comparison
+        local_minutes = total_duration / 60.0
+        relative_error = abs(local_minutes - runtime_min) / runtime_min
+
+        reasons = list(candidate.match_reasons)
+        conf = candidate.confidence
+
+        if relative_error <= 0.02:
+            conf = min(1.0, conf + 0.10)
+            reasons.append("Runtime match")
+        elif relative_error > 0.10:
+            conf *= 0.6
+            reasons.append(
+                "Runtime mismatch (possible wrong edition/abridged)"
+            )
+
+        if conf != candidate.confidence:
+            level = MatchConfidence.HIGH
+            if conf <= 0.85:
+                level = MatchConfidence.MEDIUM
+            if conf <= 0.65:
+                level = MatchConfidence.LOW
+
+            return MatchCandidate(
+                identity=candidate.identity,
+                confidence=conf,
+                confidence_level=level,
+                match_reasons=reasons,
+            )
+
+        return candidate
 
     async def close_all(self) -> None:
         """Close all provider connections."""

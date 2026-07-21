@@ -2293,6 +2293,103 @@ def abs_sync(
         asyncio.run(do_sync())
 
 
+@cli.command()
+@click.argument("folder", type=click.Path(exists=True, file_okay=False, path_type=Path))
+@click.option("--apply", is_flag=True, default=False, help="Execute the plan (default is dry-run)")
+@click.option("--files-only", is_flag=True, default=False, help="Only deduplicate files, skip editions")
+@click.option("--editions-only", is_flag=True, default=False, help="Only deduplicate editions, skip files")
+@click.option(
+    "--audio-hash", is_flag=True, default=False,
+    help="Use ffmpeg decoded-stream hash to catch retagged copies",
+)
+@click.option("--json", "json_path", type=click.Path(path_type=Path), help="Write plan to JSON file")
+@click.pass_context
+def dedupe(
+    ctx: click.Context,
+    folder: Path,
+    apply: bool,
+    files_only: bool,
+    editions_only: bool,
+    audio_hash: bool,
+    json_path: Path | None,
+) -> None:
+    """Find and quarantine duplicate audiobooks and files."""
+    from .core.dedupe import DedupeEngine
+    from .core.discovery import AudioFileScanner
+
+    if audio_hash:
+        if shutil.which("ffmpeg") is None:
+            click.echo("Error: ffmpeg is required for --audio-hash but was not found on PATH.", err=True)
+            sys.exit(1)
+
+    scanner = AudioFileScanner(recursive=True, max_depth=5)
+    audiobook_sets = scanner.scan_directory(folder)
+
+    engine = DedupeEngine(folder)
+
+    edition_groups = None
+    file_groups = None
+
+    if not files_only:
+        edition_groups = engine.analyze_editions(audiobook_sets)
+
+    keeper_paths: set[Path] = set()
+    if edition_groups:
+        for g in edition_groups:
+            if g.keeper:
+                keeper_paths.add(g.keeper.audiobook_set.source_path)
+
+    if not editions_only:
+        file_groups = engine.analyze_files()
+
+    plan = engine.build_plan(edition_groups, file_groups, keeper_paths)
+
+    if not plan.operations:
+        click.echo("No duplicates found.")
+        return
+
+    # Dry-run output
+    if edition_groups:
+        click.echo(f"\n--- Edition duplicates: {len(edition_groups)} group(s) ---")
+        for i, g in enumerate(edition_groups, 1):
+            click.echo(f"\nGroup {i}:")
+            for c in g.members:
+                marker = "  [KEEP]" if c.is_keeper else "  [QUARANTINE]"
+                click.echo(f"  {marker} {c.audiobook_set.source_path}")
+                if not c.is_keeper:
+                    click.echo(f"         Reason: {c.quarantine_reason}")
+
+    if file_groups:
+        click.echo(f"\n--- Byte-identical files: {len(file_groups)} group(s) ---")
+        for fg_info in plan.file_groups:
+            click.echo(f"\n  Keeper: {fg_info['keeper']}")
+            for q in fg_info["quarantined"]:
+                click.echo(f"  [QUARANTINE] {q}")
+
+    reclaimable = plan.total_reclaimable_bytes
+    if reclaimable > 0:
+        mb = reclaimable / (1024 * 1024)
+        click.echo(f"\nTotal reclaimable: {mb:.1f} MB")
+
+    click.echo(f"Quarantine operations: {len(plan.operations)}")
+
+    if json_path:
+        import json as json_mod
+        with open(json_path, "w", encoding="utf-8") as f:
+            json_mod.dump(plan.to_dict(), f, indent=2, default=str)
+        click.echo(f"Plan written to {json_path}")
+
+    if apply:
+        if plan.has_conflicts():
+            click.echo("Error: plan has conflicts (destination files exist). Aborting.", err=True)
+            sys.exit(1)
+        engine.execute_plan(plan)
+        click.echo(f"Done. {len(plan.operations)} files quarantined to {plan.quarantine_root}")
+        click.echo(f"To undo: bookbot undo {plan.plan_id}")
+    else:
+        click.echo("\nDry run — no files moved. Use --apply to execute.")
+
+
 def main() -> None:
     """Main entry point for the CLI."""
     try:

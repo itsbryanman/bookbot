@@ -4,7 +4,6 @@ from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel, Field
-from rapidfuzz import fuzz
 
 from .logging import get_logger
 from .models import AudiobookSet
@@ -156,47 +155,24 @@ class LibraryHealthChecker:
     def check_duplicate_editions(
         self, audiobook_sets: list[AudiobookSet]
     ) -> list[list[AudiobookSet]]:
-        """Find groups of sets with the same title+author (fuzzy, threshold 85)."""
-        duplicates: list[list[AudiobookSet]] = []
-        checked: set[int] = set()
+        """Find groups of sets that are edition-duplicates.
 
-        for i, set_a in enumerate(audiobook_sets):
-            if i in checked:
-                continue
+        Uses the dedupe engine for consistent clustering with the dedupe command.
+        """
+        from .dedupe import DedupeEngine
 
-            group = [set_a]
-            title_a = (set_a.raw_title_guess or "").lower()
-            author_a = (set_a.author_guess or "").lower()
+        if not audiobook_sets:
+            return []
 
-            if not title_a:
-                continue
+        # Use a dummy library root; we only need the analysis, not the plan
+        library_root = audiobook_sets[0].source_path.parent
+        engine = DedupeEngine(library_root)
+        edition_groups = engine.analyze_editions(audiobook_sets)
 
-            for j, set_b in enumerate(audiobook_sets):
-                if j <= i or j in checked:
-                    continue
-
-                title_b = (set_b.raw_title_guess or "").lower()
-                author_b = (set_b.author_guess or "").lower()
-
-                if not title_b:
-                    continue
-
-                title_score = fuzz.token_sort_ratio(title_a, title_b)
-                author_score = (
-                    fuzz.token_sort_ratio(author_a, author_b)
-                    if author_a and author_b
-                    else 100
-                )
-
-                if title_score >= 85 and author_score >= 85:
-                    group.append(set_b)
-                    checked.add(j)
-
-            if len(group) > 1:
-                checked.add(i)
-                duplicates.append(group)
-
-        return duplicates
+        return [
+            [c.audiobook_set for c in g.members]
+            for g in edition_groups
+        ]
 
     def check_series_gaps(
         self, audiobook_sets: list[AudiobookSet]

@@ -1,8 +1,10 @@
 """Fuzzy matching for audiobook metadata."""
 
+import json
 import re
 import unicodedata
 from dataclasses import dataclass
+from pathlib import Path
 
 from rapidfuzz import fuzz
 
@@ -37,12 +39,87 @@ class AdvancedMatcher:
     # Articles to strip from titles
     ARTICLES: set[str] = {"the", "a", "an", "el", "la", "le", "der", "die"}
 
+    # Precompiled article-stripping regex (single alternation)
+    _ARTICLE_RE: re.Pattern[str] = re.compile(
+        r"^(?:" + "|".join(sorted(ARTICLES, key=len, reverse=True)) + r")\s+",
+        re.I,
+    )
+    # Trailing article pattern: "Stand, The" → "The Stand"
+    _TRAILING_ARTICLE_RE: re.Pattern[str] = re.compile(
+        r",\s*(?:" + "|".join(sorted(ARTICLES, key=len, reverse=True)) + r")$",
+        re.I,
+    )
+
     # Series detection patterns (pattern, confidence)
     SERIES_PATTERNS: list[tuple[re.Pattern[str], float]] = [
         (re.compile(r"(.+?)\s+(?:book|vol(?:ume)?)\s+(\d+)", re.I), 0.95),
         (re.compile(r"(.+?)\s+#(\d+)", re.I), 0.90),
         (re.compile(r"(.+?)\s+part\s+(\d+)", re.I), 0.85),
     ]
+
+    def __init__(self) -> None:
+        self._aliases_loaded = False
+        self._merged_aliases: dict[str, set[str]] | None = None
+
+    @property
+    def _effective_aliases(self) -> dict[str, set[str]]:
+        """Lazily load and cache merged author aliases."""
+        if self._merged_aliases is not None:
+            return self._merged_aliases
+        self._merged_aliases = self._load_merged_aliases()
+        return self._merged_aliases
+
+    def _load_merged_aliases(self) -> dict[str, set[str]]:
+        """Load aliases from builtin + optional config JSON, merged."""
+        # Start with a copy of the builtins
+        merged: dict[str, set[str]] = {
+            k: set(v) for k, v in self.AUTHOR_ALIASES.items()
+        }
+
+        # Try loading from config dir
+        json_path = self._find_aliases_json()
+        if json_path and json_path.is_file():
+            try:
+                raw = json.loads(json_path.read_text(encoding="utf-8"))
+                if isinstance(raw, dict):
+                    for canonical, aliases in raw.items():
+                        key = canonical.lower().strip()
+                        alias_set = {a.lower().strip() for a in aliases}
+                        if key in merged:
+                            merged[key] |= alias_set
+                        else:
+                            merged[key] = alias_set
+                    logger.info(f"Loaded author aliases from {json_path}")
+            except (json.JSONDecodeError, OSError) as e:
+                logger.warning(f"Failed to load author aliases JSON: {e}")
+
+        return merged
+
+    @staticmethod
+    def _find_aliases_json() -> Path | None:
+        """Find author_aliases.json in config dir or bundled data."""
+        import os
+
+        # Check config dir
+        if os.environ.get("XDG_CONFIG_HOME"):
+            config_path = Path(os.environ["XDG_CONFIG_HOME"]) / "bookbot"
+        elif os.name == "nt":
+            config_path = Path(
+                os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming")
+            ) / "bookbot"
+        else:
+            config_path = Path.home() / ".config" / "bookbot"
+
+        config_json = config_path / "author_aliases.json"
+        if config_json.is_file():
+            return config_json
+
+        # Check bundled data dir
+        bundled = Path(__file__).parent.parent / "data" / "author_aliases.json"
+        if bundled.is_file():
+            return bundled
+
+        return None
 
     def normalize_author(self, author: str) -> str:
         """Normalize author name for comparison."""
@@ -74,10 +151,9 @@ class AdvancedMatcher:
             return 1.0
 
         # Check aliases
-        for canonical, aliases in self.AUTHOR_ALIASES.items():
-            if (norm1 == canonical or norm1 in aliases) and (
-                norm2 == canonical or norm2 in aliases
-            ):
+        for canonical, aliases in self._effective_aliases.items():
+            all_names = aliases | {canonical}
+            if norm1 in all_names and norm2 in all_names:
                 return 1.0
 
         # Fuzzy match
@@ -91,10 +167,11 @@ class AdvancedMatcher:
         """Normalize title for comparison."""
         norm = title.lower().strip()
 
-        # Remove articles
-        for article in self.ARTICLES:
-            pattern = f"^{article}\\s+"
-            norm = re.sub(pattern, "", norm, flags=re.I)
+        # Handle trailing article: "Stand, The" → strip the trailing ", the"
+        norm = self._TRAILING_ARTICLE_RE.sub("", norm)
+
+        # Remove leading article using precompiled alternation
+        norm = self._ARTICLE_RE.sub("", norm)
 
         # Remove punctuation except hyphens
         norm = re.sub(r"[^\w\s-]", "", norm)

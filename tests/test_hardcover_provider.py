@@ -1,11 +1,8 @@
 """Tests for the Hardcover provider."""
 
-from pathlib import Path
-from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from bookbot.core.models import AudiobookSet, ProviderIdentity
 from bookbot.providers.hardcover import HardcoverProvider
 
 
@@ -77,23 +74,21 @@ class TestHardcoverProvider:
         assert identity.series_name == "Test Series"
         assert identity.series_index == "3"
 
-    def test_calculate_match_score_with_duration_bonus(self, provider):
-        ab_set = AudiobookSet(
-            source_path=Path("/tmp/test"),
-            raw_title_guess="Project Hail Mary",
-            author_guess="Andy Weir",
-            total_duration=58000.0,  # close to 58320
+    def test_match_score_via_advanced_matcher(self, provider):
+        from bookbot.core.matching import AdvancedMatcher
+
+        matcher = AdvancedMatcher()
+        score = matcher.calculate_match(
+            query_title="Project Hail Mary",
+            query_author="Andy Weir",
+            query_series=None,
+            query_year=None,
+            result_title="Project Hail Mary",
+            result_authors=["Andy Weir"],
+            result_series=None,
+            result_year=None,
         )
-        identity = ProviderIdentity(
-            provider="Hardcover",
-            external_id="42",
-            title="Project Hail Mary",
-            authors=["Andy Weir"],
-            raw_data={"_audio_seconds": 58320},
-        )
-        score = provider.calculate_match_score(ab_set, identity)
-        # Should include the 0.05 duration bonus
-        assert score > 0.8
+        assert score.combined_score >= 0.8
 
     @pytest.mark.asyncio
     async def test_search_empty_query(self, provider):

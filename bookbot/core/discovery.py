@@ -1,12 +1,19 @@
 """Audio file discovery and metadata extraction."""
 
 import re
+from collections import Counter
 from pathlib import Path
 
 from mutagen import File as MutagenFile
 from mutagen.id3 import ID3NoHeaderError
 
 from .models import AudiobookSet, AudioFormat, AudioTags, Track, TrackStatus
+
+# ISBN validation: 10 digits (trailing X allowed) or 13 digits, after stripping
+# hyphens/spaces
+_ISBN_RE = re.compile(r"^\d{9}[\dXx]$|^\d{13}$")
+# ASIN validation: B0 followed by 8 alphanumeric chars
+_ASIN_RE = re.compile(r"^B0[A-Z0-9]{8}$", re.IGNORECASE)
 
 
 class AudioFileScanner:
@@ -130,12 +137,18 @@ class AudioFileScanner:
 
         disc_count = max(disc_numbers) if disc_numbers else 1
 
+        # Extract majority ISBN/ASIN from track tags
+        isbn_guess = self._majority_identifier(tracks, "isbn")
+        asin_guess = self._majority_identifier(tracks, "asin")
+
         audiobook_set = AudiobookSet(
             source_path=source_path,
             raw_title_guess=title_guess,
             author_guess=author_guess,
             series_guess=series_guess,
             volume_guess=volume_guess,
+            isbn_guess=isbn_guess,
+            asin_guess=asin_guess,
             disc_count=disc_count,
             total_tracks=len(tracks),
             total_duration=total_duration if total_duration > 0 else None,
@@ -220,6 +233,17 @@ class AudioFileScanner:
                 "genre": ["TCON", "GENRE", "\xa9gen"],
                 "track": ["TRCK", "TRACKNUMBER", "trkn"],
                 "disc": ["TPOS", "DISCNUMBER", "disk"],
+                "isbn": [
+                    "TXXX:ISBN",
+                    "ISBN",
+                    "----:com.apple.iTunes:ISBN",
+                ],
+                "asin": [
+                    "TXXX:ASIN",
+                    "ASIN",
+                    "----:com.apple.iTunes:ASIN",
+                    "CDEK",
+                ],
             }
 
             for field, tag_keys in tag_mapping.items():
@@ -230,6 +254,10 @@ class AudioFileScanner:
                             if isinstance(audio_file[key], list)
                             else audio_file[key]
                         )
+
+                        # MP4 freeform tags are bytes — decode
+                        if isinstance(value, bytes):
+                            value = value.decode("utf-8", errors="ignore")
 
                         # Handle track/disc numbers that might be "1/10" format
                         if field in ["track", "disc"] and isinstance(value, str):
@@ -242,6 +270,18 @@ class AudioFileScanner:
                         ):
                             # Handle tuple format like (1, 10)
                             value = value[0]
+
+                        # Validate ISBN/ASIN before setting
+                        if field == "isbn":
+                            cleaned = re.sub(r"[-\s]", "", str(value))
+                            if not _ISBN_RE.match(cleaned):
+                                continue
+                            value = cleaned
+                        elif field == "asin":
+                            cleaned = str(value).strip()
+                            if not _ASIN_RE.match(cleaned):
+                                continue
+                            value = cleaned.upper()
 
                         setattr(tags, field, value)
                         break
@@ -363,6 +403,28 @@ class AudioFileScanner:
 
         # Default to disc 1
         return 1
+
+    @staticmethod
+    def _majority_identifier(tracks: list[Track], field: str) -> str | None:
+        """Return the majority ISBN/ASIN across tracks that carry the tag.
+
+        Requires agreement from >50% of tracks that have the tag set.
+        """
+        values: list[str] = []
+        for track in tracks:
+            val = getattr(track.existing_tags, field, None)
+            if val:
+                values.append(str(val))
+
+        if not values:
+            return None
+
+        counter = Counter(values)
+        most_common_val, count = counter.most_common(1)[0]
+        # Require >50% agreement among tracks that carry the tag
+        if count > len(values) / 2:
+            return most_common_val
+        return None
 
     def _extract_metadata_guesses(
         self, source_path: Path, tracks: list[Track]

@@ -80,11 +80,6 @@ class LocalMetadataProvider(MetadataProvider):
         """Fetching by external id is not supported for local metadata."""
         return None
 
-    def calculate_match_score(
-        self, audiobook_set: AudiobookSet, identity: ProviderIdentity
-    ) -> float:  # pragma: no cover - unused in local workflow
-        return 1.0
-
     # Internal helpers -----------------------------------------------------
 
     def _load_metadata_for_folder(self, folder: Path) -> dict[str, Any] | None:

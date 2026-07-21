@@ -7,10 +7,9 @@ from typing import TYPE_CHECKING, Any
 
 import aiohttp
 from pydantic import ValidationError
-from rapidfuzz import fuzz
 
 from ..core.logging import get_logger
-from ..core.models import AudiobookSet, ProviderIdentity
+from ..core.models import ProviderIdentity
 from .base import MetadataProvider
 
 if TYPE_CHECKING:
@@ -484,58 +483,3 @@ class OpenLibraryProvider(MetadataProvider):
         except (KeyError, TypeError, ValueError):
             return None
 
-    def calculate_match_score(
-        self, audiobook_set: AudiobookSet, identity: ProviderIdentity
-    ) -> float:
-        """Calculate match score between audiobook set and Open Library identity."""
-        score = 0.0
-        total_weight = 0.0
-
-        # Title similarity (highest weight)
-        if audiobook_set.raw_title_guess and identity.title:
-            title_similarity = (
-                fuzz.ratio(
-                    audiobook_set.raw_title_guess.lower(), identity.title.lower()
-                )
-                / 100.0
-            )
-            score += title_similarity * 0.4
-            total_weight += 0.4
-
-        # Author similarity
-        if audiobook_set.author_guess and identity.authors:
-            best_author_score = 0.0
-            for author in identity.authors:
-                author_similarity = (
-                    fuzz.ratio(audiobook_set.author_guess.lower(), author.lower())
-                    / 100.0
-                )
-                best_author_score = max(best_author_score, author_similarity)
-
-            score += best_author_score * 0.3
-            total_weight += 0.3
-
-        # Series similarity
-        if audiobook_set.series_guess and identity.series_name:
-            series_similarity = (
-                fuzz.ratio(
-                    audiobook_set.series_guess.lower(), identity.series_name.lower()
-                )
-                / 100.0
-            )
-            score += series_similarity * 0.2
-            total_weight += 0.2
-
-        # Language match
-        if audiobook_set.language_guess and identity.language:
-            if audiobook_set.language_guess.lower() == identity.language.lower():
-                score += 0.1
-            total_weight += 0.1
-
-        # Normalize score by total weight
-        if total_weight > 0:
-            score = score / total_weight
-        else:
-            score = 0.0
-
-        return min(1.0, max(0.0, score))

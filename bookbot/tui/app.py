@@ -13,6 +13,7 @@ from ..config.manager import ConfigManager
 from ..core.discovery import AudioFileScanner
 from ..core.models import AudiobookSet
 from ..providers.base import MetadataProvider
+from ..providers.manager import ProviderManager
 from ..providers.openlibrary import OpenLibraryProvider
 from .screens import (
     ConversionScreen,
@@ -280,13 +281,15 @@ class BookBotApp(App):
         self,
         config_manager: ConfigManager,
         source_folders: list[Path],
-        provider: MetadataProvider | None = None,
+        provider: MetadataProvider | ProviderManager | None = None,
     ):
         super().__init__()
         self.config_manager = config_manager
         self.source_folders = source_folders
         self.audiobook_sets: list[AudiobookSet] = []
-        self.provider = provider or OpenLibraryProvider()
+        self.provider: MetadataProvider | ProviderManager = (
+            provider or OpenLibraryProvider()
+        )
 
         # Application state
         self.current_step = "source_selection"
@@ -559,5 +562,8 @@ class BookBotApp(App):
         """Quit the application."""
         # Close provider connections
         if self.provider:
-            await self.provider.close()
+            if isinstance(self.provider, ProviderManager):
+                await self.provider.close_all()
+            else:
+                await self.provider.close()
         self.exit()

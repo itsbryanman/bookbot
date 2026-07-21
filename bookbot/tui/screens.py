@@ -23,6 +23,7 @@ from ..config.manager import ConfigManager
 from ..core.models import AudiobookSet, MatchCandidate, RenameOperation
 from ..core.operations import TransactionManager
 from ..providers.base import MetadataProvider
+from ..providers.manager import ProviderManager
 
 try:
     from ..drm.audible_client import AudibleAuthClient
@@ -194,7 +195,7 @@ class MatchReviewScreen(Static):
     def __init__(
         self,
         config_manager: ConfigManager,
-        provider: MetadataProvider,
+        provider: MetadataProvider | ProviderManager,
         **kwargs: Any,
     ) -> None:
         super().__init__(**kwargs)
@@ -207,14 +208,22 @@ class MatchReviewScreen(Static):
         yield DataTable(id="matches_table")
 
     async def find_matches(self, audiobook_sets: list[AudiobookSet]) -> None:
-        """Find matches for audiobook sets."""
+        """Find matches for audiobook sets using merged multi-provider results."""
         self.audiobook_sets = audiobook_sets
 
         table = self.query_one("#matches_table", DataTable)
         table.clear(columns=True)
         table.add_columns("Audiobook", "Best Match", "Confidence", "Action")
 
-        match_tasks = [self.provider.find_matches(a) for a in audiobook_sets]
+        # Use ProviderManager.find_matches_merged when available
+        if isinstance(self.provider, ProviderManager):
+            match_tasks = [
+                self.provider.find_matches_merged(a) for a in audiobook_sets
+            ]
+        else:
+            match_tasks = [
+                self.provider.find_matches(a) for a in audiobook_sets
+            ]
         results = await asyncio.gather(*match_tasks, return_exceptions=True)
 
         for audiobook_set, result in zip(audiobook_sets, results, strict=False):

@@ -5,10 +5,9 @@ import time
 from typing import TYPE_CHECKING, Any
 
 import aiohttp
-from rapidfuzz import fuzz
 
 from ..core.logging import get_logger
-from ..core.models import AudiobookSet, ProviderIdentity
+from ..core.models import ProviderIdentity
 from .base import MetadataProvider
 
 if TYPE_CHECKING:
@@ -329,57 +328,3 @@ query GetBook($id: Int!) {
         except (KeyError, TypeError, ValueError):
             return None
 
-    def calculate_match_score(
-        self, audiobook_set: AudiobookSet, identity: ProviderIdentity
-    ) -> float:
-        """Calculate match score. Same weights as Audnexus + duration bonus."""
-        score = 0.0
-
-        # Title similarity (weight: 0.5)
-        if audiobook_set.raw_title_guess and identity.title:
-            title_score = (
-                fuzz.token_sort_ratio(
-                    audiobook_set.raw_title_guess.lower(), identity.title.lower()
-                )
-                / 100.0
-            )
-            score += title_score * 0.5
-
-        # Author similarity (weight: 0.3)
-        if audiobook_set.author_guess and identity.authors:
-            best_author_score = 0.0
-            for author in identity.authors:
-                author_score = (
-                    fuzz.ratio(audiobook_set.author_guess.lower(), author.lower())
-                    / 100.0
-                )
-                best_author_score = max(best_author_score, author_score)
-            score += best_author_score * 0.3
-
-        # Narrator similarity (weight: 0.1)
-        if audiobook_set.narrator_guess and identity.narrator:
-            narrator_score = (
-                fuzz.ratio(
-                    audiobook_set.narrator_guess.lower(), identity.narrator.lower()
-                )
-                / 100.0
-            )
-            score += narrator_score * 0.1
-
-        # Year match (weight: 0.1)
-        if audiobook_set.year_guess and identity.year:
-            if audiobook_set.year_guess == identity.year:
-                score += 0.1
-            elif abs(audiobook_set.year_guess - identity.year) <= 1:
-                score += 0.05
-
-        # Duration bonus (0.05 if audio_seconds within 10% of total_duration)
-        audio_seconds = identity.raw_data.get("_audio_seconds")
-        if audio_seconds and audiobook_set.total_duration:
-            ratio = abs(audio_seconds - audiobook_set.total_duration) / max(
-                audiobook_set.total_duration, 1
-            )
-            if ratio <= 0.1:
-                score += 0.05
-
-        return min(1.0, max(0.0, score))

@@ -1,11 +1,9 @@
 """Tests for the Audnexus provider."""
 
-import asyncio
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from bookbot.core.models import AudiobookSet, ProviderIdentity
 from bookbot.providers.audnexus import AudnexusProvider
 
 
@@ -81,54 +79,53 @@ class TestAudnexusProvider:
         assert identity.series_name is None
         assert identity.series_index is None
 
-    def test_calculate_match_score_perfect(self, provider):
-        from pathlib import Path
+    def test_match_score_perfect(self, provider):
+        from bookbot.core.matching import AdvancedMatcher
 
-        ab_set = AudiobookSet(
-            source_path=Path("/tmp/test"),
-            raw_title_guess="The Name of the Wind",
-            author_guess="Patrick Rothfuss",
-            narrator_guess="Nick Podehl",
-            year_guess=2009,
+        matcher = AdvancedMatcher()
+        score = matcher.calculate_match(
+            query_title="The Name of the Wind",
+            query_author="Patrick Rothfuss",
+            query_series=None,
+            query_year=2009,
+            result_title="The Name of the Wind",
+            result_authors=["Patrick Rothfuss"],
+            result_series=None,
+            result_year=2009,
         )
-        identity = ProviderIdentity(
-            provider="Audnexus",
-            external_id="B003JVHSIO",
-            title="The Name of the Wind",
-            authors=["Patrick Rothfuss"],
-            narrator="Nick Podehl",
-            year=2009,
-        )
-        score = provider.calculate_match_score(ab_set, identity)
-        assert score > 0.9
+        assert score.combined_score > 0.85
 
-    def test_calculate_match_score_partial(self, provider):
-        from pathlib import Path
+    def test_match_score_partial(self, provider):
+        from bookbot.core.matching import AdvancedMatcher
 
-        ab_set = AudiobookSet(
-            source_path=Path("/tmp/test"),
-            raw_title_guess="name of the wind",
+        matcher = AdvancedMatcher()
+        score = matcher.calculate_match(
+            query_title="name of the wind",
+            query_author=None,
+            query_series=None,
+            query_year=None,
+            result_title="The Name of the Wind",
+            result_authors=["Patrick Rothfuss"],
+            result_series=None,
+            result_year=None,
         )
-        identity = ProviderIdentity(
-            provider="Audnexus",
-            external_id="B003JVHSIO",
-            title="The Name of the Wind",
-            authors=["Patrick Rothfuss"],
-        )
-        score = provider.calculate_match_score(ab_set, identity)
-        assert 0.3 < score < 0.8
+        assert 0.3 < score.combined_score < 0.8
 
-    def test_calculate_match_score_no_data(self, provider):
-        from pathlib import Path
+    def test_match_score_no_data(self, provider):
+        from bookbot.core.matching import AdvancedMatcher
 
-        ab_set = AudiobookSet(source_path=Path("/tmp/test"))
-        identity = ProviderIdentity(
-            provider="Audnexus",
-            external_id="X",
-            title="Something",
+        matcher = AdvancedMatcher()
+        score = matcher.calculate_match(
+            query_title="",
+            query_author=None,
+            query_series=None,
+            query_year=None,
+            result_title="Something",
+            result_authors=[],
+            result_series=None,
+            result_year=None,
         )
-        score = provider.calculate_match_score(ab_set, identity)
-        assert score == 0.0
+        assert score.combined_score < 0.5
 
     @pytest.mark.asyncio
     async def test_search_empty_query(self, provider):

@@ -6,9 +6,8 @@ from typing import TYPE_CHECKING
 
 import aiohttp
 from bs4 import BeautifulSoup
-from rapidfuzz import fuzz
 
-from ..core.models import AudiobookSet, ProviderIdentity
+from ..core.models import MatchCandidate, MatchConfidence, ProviderIdentity
 from .base import MetadataProvider
 
 if TYPE_CHECKING:
@@ -134,6 +133,18 @@ class AudibleProvider(MetadataProvider):
 
         except (aiohttp.ClientError, asyncio.TimeoutError):
             return None
+
+    async def _try_asin_lookup(self, asin: str) -> MatchCandidate | None:
+        """Resolve an ASIN directly via get_by_id."""
+        identity = await self.get_by_id(asin)
+        if identity is not None:
+            return MatchCandidate(
+                identity=identity,
+                confidence=1.0,
+                confidence_level=MatchConfidence.HIGH,
+                match_reasons=["ASIN exact match"],
+            )
+        return None
 
     def _parse_search_results(self, html: str) -> list[ProviderIdentity]:
         """Parse Audible search results HTML."""
@@ -358,6 +369,9 @@ class AudibleProvider(MetadataProvider):
             if runtime_match:
                 runtime = self._clean_text(runtime_match.group(1))
 
+        # Parse runtime string into minutes (e.g. "16 hrs and 12 mins")
+        runtime_minutes = self._parse_runtime_to_minutes(runtime)
+
         return ProviderIdentity(
             provider=self.name,
             external_id=asin,
@@ -369,6 +383,7 @@ class AudibleProvider(MetadataProvider):
             language="en",  # Audible is primarily English
             asin=asin,
             narrator=narrator,
+            runtime_minutes=runtime_minutes,
             cover_urls=cover_urls_list,
             description=description,
             raw_data={
@@ -378,6 +393,23 @@ class AudibleProvider(MetadataProvider):
                 "runtime": runtime,
             },
         )
+
+    @staticmethod
+    def _parse_runtime_to_minutes(runtime: str | None) -> int | None:
+        """Parse Audible runtime string to minutes.
+
+        Handles formats like "16 hrs and 12 mins", "3 hrs", "45 mins".
+        """
+        if not runtime:
+            return None
+        total = 0
+        hours_match = re.search(r"(\d+)\s*hr", runtime, re.IGNORECASE)
+        mins_match = re.search(r"(\d+)\s*min", runtime, re.IGNORECASE)
+        if hours_match:
+            total += int(hours_match.group(1)) * 60
+        if mins_match:
+            total += int(mins_match.group(1))
+        return total if total > 0 else None
 
     def _clean_text(self, text: str) -> str:
         """Clean and normalize text."""
@@ -389,77 +421,3 @@ class AudibleProvider(MetadataProvider):
         text = re.sub(r"\s+", " ", text)
         return text.strip()
 
-    def calculate_match_score(
-        self, audiobook_set: AudiobookSet, identity: ProviderIdentity
-    ) -> float:
-        """Calculate match score between audiobook set and Audible identity."""
-        score = 0.0
-        total_weight = 0.0
-
-        # Title matching (weight: 0.4)
-        if audiobook_set.raw_title_guess and identity.title:
-            title_ratio = (
-                fuzz.ratio(
-                    audiobook_set.raw_title_guess.lower(), identity.title.lower()
-                )
-                / 100.0
-            )
-            score += title_ratio * 0.4
-            total_weight += 0.4
-
-        # Author matching (weight: 0.3)
-        if audiobook_set.author_guess and identity.authors:
-            author_scores = []
-            for author in identity.authors:
-                author_ratio = (
-                    fuzz.ratio(audiobook_set.author_guess.lower(), author.lower())
-                    / 100.0
-                )
-                author_scores.append(author_ratio)
-
-            if author_scores:
-                best_author_score = max(author_scores)
-                score += best_author_score * 0.3
-                total_weight += 0.3
-
-        # Series matching (weight: 0.15)
-        if audiobook_set.series_guess and identity.series_name:
-            series_ratio = (
-                fuzz.ratio(
-                    audiobook_set.series_guess.lower(), identity.series_name.lower()
-                )
-                / 100.0
-            )
-            score += series_ratio * 0.15
-            total_weight += 0.15
-
-        # Narrator bonus if available (weight: 0.1)
-        narrator = identity.narrator
-        if narrator and audiobook_set.narrator_guess:
-            narrator_ratio = (
-                fuzz.ratio(audiobook_set.narrator_guess.lower(), narrator.lower())
-                / 100.0
-            )
-            score += narrator_ratio * 0.1
-            total_weight += 0.1
-
-        # Year proximity (weight: 0.05)
-        if audiobook_set.year_guess and identity.year:
-            year_diff = abs(audiobook_set.year_guess - identity.year)
-            if year_diff == 0:
-                year_score = 1.0
-            elif year_diff <= 2:
-                year_score = 0.8
-            elif year_diff <= 5:
-                year_score = 0.5
-            else:
-                year_score = 0.0
-
-            score += year_score * 0.05
-            total_weight += 0.05
-
-        # Normalize score
-        if total_weight > 0:
-            return score / total_weight
-        else:
-            return 0.0
