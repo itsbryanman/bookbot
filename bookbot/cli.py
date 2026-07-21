@@ -2602,14 +2602,39 @@ def abs_sync(
 
 @cli.command()
 @click.argument("folder", type=click.Path(exists=True, file_okay=False, path_type=Path))
-@click.option("--apply", is_flag=True, default=False, help="Execute the plan (default is dry-run)")
-@click.option("--files-only", is_flag=True, default=False, help="Only deduplicate files, skip editions")
-@click.option("--editions-only", is_flag=True, default=False, help="Only deduplicate editions, skip files")
 @click.option(
-    "--audio-hash", is_flag=True, default=False,
-    help="Use ffmpeg decoded-stream hash to catch retagged copies",
+    "--apply",
+    is_flag=True,
+    default=False,
+    help="Execute the plan (default is dry-run)",
 )
-@click.option("--json", "json_path", type=click.Path(path_type=Path), help="Write plan to JSON file")
+@click.option(
+    "--files-only",
+    is_flag=True,
+    default=False,
+    help="Only deduplicate files, skip editions",
+)
+@click.option(
+    "--editions-only",
+    is_flag=True,
+    default=False,
+    help="Only deduplicate editions, skip files",
+)
+@click.option(
+    "--audio-hash",
+    is_flag=True,
+    default=False,
+    help=(
+        "Reserved for future decoded-audio hashing; "
+        "currently only checks ffmpeg availability"
+    ),
+)
+@click.option(
+    "--json",
+    "json_path",
+    type=click.Path(path_type=Path),
+    help="Write plan to JSON file",
+)
 @click.pass_context
 def dedupe(
     ctx: click.Context,
@@ -2626,8 +2651,16 @@ def dedupe(
 
     if audio_hash:
         if shutil.which("ffmpeg") is None:
-            click.echo("Error: ffmpeg is required for --audio-hash but was not found on PATH.", err=True)
+            click.echo(
+                "Error: ffmpeg is required for --audio-hash but was not found "
+                "on PATH.",
+                err=True,
+            )
             sys.exit(1)
+        click.echo(
+            "Note: --audio-hash is not wired into dedupe analysis yet; "
+            "continuing with byte-hash detection only."
+        )
 
     scanner = AudioFileScanner(recursive=True, max_depth=5)
     audiobook_sets = scanner.scan_directory(folder)
@@ -2688,10 +2721,17 @@ def dedupe(
 
     if apply:
         if plan.has_conflicts():
-            click.echo("Error: plan has conflicts (destination files exist). Aborting.", err=True)
+            click.echo(
+                "Error: plan has conflicts (destination files exist). "
+                "Aborting.",
+                err=True,
+            )
             sys.exit(1)
         engine.execute_plan(plan)
-        click.echo(f"Done. {len(plan.operations)} files quarantined to {plan.quarantine_root}")
+        click.echo(
+            f"Done. {len(plan.operations)} files quarantined to "
+            f"{plan.quarantine_root}"
+        )
         click.echo(f"To undo: bookbot undo {plan.plan_id}")
     else:
         click.echo("\nDry run — no files moved. Use --apply to execute.")

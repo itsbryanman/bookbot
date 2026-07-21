@@ -40,7 +40,13 @@ BookBot is a Textual-powered terminal app and command-line toolkit for taming la
 - Safe-plan workflow with dry-runs, atomic file operations, transaction history, diffable JSON plans, and undo support.
 - Built-in profiles for `safe`, `audiobookshelf`, `plex`, `prologue`, and `apple-books`.
 - `bookbot doctor` checks your runtime, FFmpeg health, writable config/cache paths, and library integrity before changes land.
-- Fast metadata discovery that combines local heuristics with Open Library plus optional Google Books, LibriVox, and Audible lookups.
+- Unified matching via `AdvancedMatcher`, with article and Unicode normalization, shared title and author scoring across providers, series and volume extraction, and built-in plus user-supplied `author_aliases.json` support.
+- Identifier-first matching uses embedded ASIN and ISBN guesses when available, short-circuiting to deterministic lookups before falling back to fuzzy search.
+- Multi-provider matching queries every enabled provider concurrently, merges overlapping candidates by identifier or normalized author/title, boosts confidence when providers corroborate a result, and falls back from title+author+series to stripped-title, title-only, and author-only searches when needed.
+- Runtime cross-checking compares local duration against provider-reported audiobook length to reward exact matches and flag likely abridged or wrong-edition candidates.
+- Provider coverage includes Open Library by default, Audnexus enabled by default, and optional Google Books, LibriVox, Audible, and Hardcover providers when configured.
+- `bookbot dedupe` builds a reviewable quarantine plan for duplicate editions and byte-identical files using edition clustering plus staged hashing (size -> partial hash -> full hash), then reuses `bookbot undo` for rollback.
+- Dedupe never deletes files: `--apply` moves quarantined tracks into `.bookbot-quarantine/<plan_id>/...`, preserves relative paths, and can write the plan to JSON for review.
 - Mission-control TUI with scan, metadata review, preview, warnings, diff, and undo shortcuts in one interface.
 - Configurable templates and collector profiles so folders, file names, covers, and sidecars match the way your players expect them.
 - Optional M4B conversion pipeline with FFmpeg stream copy, loudness normalization, and chapter generation.
