@@ -257,52 +257,79 @@ class AudioFileScanner:
 
             for field, tag_keys in tag_mapping.items():
                 for key in tag_keys:
-                    if key in audio_file:
-                        value = (
-                            audio_file[key][0]
-                            if isinstance(audio_file[key], list)
-                            else audio_file[key]
-                        )
+                    try:
+                        if key not in audio_file:
+                            continue
+                        raw_value = audio_file[key]
+                    except Exception:
+                        continue
 
-                        # MP4 freeform tags are bytes — decode
-                        if isinstance(value, bytes):
-                            value = value.decode("utf-8", errors="ignore")
+                    if field in ["track", "disc"]:
+                        value = self._normalize_numeric_tag(raw_value)
+                    else:
+                        value = self._normalize_text_tag(raw_value)
+                    if value is None:
+                        continue
 
-                        # Handle track/disc numbers that might be "1/10" format
-                        if field in ["track", "disc"] and isinstance(value, str):
-                            try:
-                                value = int(value.split("/")[0])
-                            except (ValueError, IndexError):
-                                continue
-                        elif field in ["track", "disc"] and hasattr(
-                            value, "__getitem__"
-                        ):
-                            # Handle tuple format like (1, 10)
-                            value = value[0]
+                    # Validate ISBN/ASIN before setting
+                    if field == "isbn":
+                        cleaned = re.sub(r"[-\s]", "", value)
+                        if not _ISBN_RE.match(cleaned):
+                            continue
+                        value = cleaned
+                    elif field == "asin":
+                        cleaned = value.strip()
+                        if not _ASIN_RE.match(cleaned):
+                            continue
+                        value = cleaned.upper()
 
-                        # Validate ISBN/ASIN before setting
-                        if field == "isbn":
-                            cleaned = re.sub(r"[-\s]", "", str(value))
-                            if not _ISBN_RE.match(cleaned):
-                                continue
-                            value = cleaned
-                        elif field == "asin":
-                            cleaned = str(value).strip()
-                            if not _ASIN_RE.match(cleaned):
-                                continue
-                            value = cleaned.upper()
-
-                        setattr(tags, field, value)
-                        break
+                    setattr(tags, field, value)
+                    break
 
             # Store raw tags for preservation
-            tags.raw_tags = dict(audio_file)
+            try:
+                tags.raw_tags = dict(audio_file)
+            except Exception:
+                tags.raw_tags = {}
 
         except (ID3NoHeaderError, Exception):
             # File has no tags or error reading them
             pass
 
         return tags
+
+    def _normalize_tag_scalar(self, value: object) -> object | None:
+        """Flatten mutagen tag containers into a single scalar value."""
+        if value is None:
+            return None
+
+        if hasattr(value, "text"):
+            return self._normalize_tag_scalar(value.text)
+
+        if isinstance(value, (list, tuple)):
+            for item in value:
+                normalized = self._normalize_tag_scalar(item)
+                if normalized is not None:
+                    return normalized
+            return None
+
+        if isinstance(value, bytes):
+            value = value.decode("utf-8", errors="ignore")
+
+        if isinstance(value, str):
+            value = value.strip()
+            return value or None
+
+        return value
+
+    def _normalize_text_tag(self, value: object) -> str | None:
+        """Normalize a text tag to a plain string."""
+        normalized = self._normalize_tag_scalar(value)
+        if normalized is None:
+            return None
+
+        text = str(normalized).strip()
+        return text or None
 
     def _extract_audio_properties(
         self, file_path: Path
@@ -326,36 +353,16 @@ class AudioFileScanner:
 
     def _normalize_numeric_tag(self, value: object) -> int | None:
         """Attempt to normalize a numeric tag value to an integer."""
-        if value is None:
+        normalized = self._normalize_tag_scalar(value)
+        if normalized is None:
             return None
 
-        if isinstance(value, int):
-            return value
+        if isinstance(normalized, int):
+            return normalized
 
-        # Mutagen ID3 frames expose a ``text`` attribute with the raw values
-        if hasattr(value, "text"):
-            # Accessing .text may return a list of strings
-            normalized = self._normalize_numeric_tag(value.text)
-            if normalized is not None:
-                return normalized
-
-        # Handle containers like lists/tuples provided by different tag formats
-        if isinstance(value, (list, tuple)):
-            for item in value:
-                normalized = self._normalize_numeric_tag(item)
-                if normalized is not None:
-                    return normalized
-            return None
-
-        if isinstance(value, bytes):
-            try:
-                value = value.decode("utf-8", errors="ignore")
-            except Exception:
-                return None
-
-        if isinstance(value, str):
+        if isinstance(normalized, str):
             # Accept common patterns such as ``1/10`` or ``01``
-            match = re.search(r"\d+", value)
+            match = re.search(r"\d+", normalized)
             if match:
                 try:
                     return int(match.group())
