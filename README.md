@@ -13,11 +13,11 @@
   <a href="https://ghcr.io/itsbryanman/bookbot">
     <img alt="Docker" src="https://img.shields.io/badge/docker-ghcr.io%2Fitsbryanman%2Fbookbot-2496ED?style=for-the-badge&logo=docker&logoColor=white" />
   </a>
-  <a href="https://pypi.org/project/bookbot/">
-    <img alt="PyPI" src="https://img.shields.io/pypi/v/bookbot?style=for-the-badge&logo=pypi&logoColor=white" />
+  <a href="https://pypi.org/project/bookbot-cli/">
+    <img alt="PyPI" src="https://img.shields.io/pypi/v/bookbot-cli?style=for-the-badge&logo=pypi&logoColor=white" />
   </a>
-  <a href="https://pypi.org/project/bookbot/">
-    <img alt="Python versions" src="https://img.shields.io/pypi/pyversions/bookbot?style=for-the-badge&logo=python&logoColor=white" />
+  <a href="https://pypi.org/project/bookbot-cli/">
+    <img alt="Python versions" src="https://img.shields.io/pypi/pyversions/bookbot-cli?style=for-the-badge&logo=python&logoColor=white" />
   </a>
   <a href="LICENSE">
     <img alt="License" src="https://img.shields.io/github/license/itsbryanman/BookBot?style=for-the-badge&color=brightgreen" />
@@ -33,14 +33,23 @@
   </a>
 </p>
 
-BookBot is a Textual powered terminal app and command line toolkit for taming large audiobook libraries. It discovers tracks, reconciles metadata across multiple providers, proposes safe rename plans, and can optionally retag, convert, and de-DRM your collection end to end.
+BookBot is a Textual-powered terminal app and command-line toolkit for taming large audiobook libraries. Its core workflow is a safe, reviewable rename plan: scan a library, inspect the exact moves, apply them atomically, and undo them if needed.
 
 ## Highlights
 
+<<<<<<< HEAD
 - Safety first workflow with dry-runs, atomic file operations, transaction history, and undo support.
 - Fast metadata discovery that combines local heuristics with Open Library, Audnexus, and optional Google Books, LibriVox, Audible, and Hardcover lookups.
 - Modern TUI for interactive review plus full CLI coverage for scripting and automation.
 - Configurable templates and profiles so folders, file names, covers, and tags match the way your players expect them.
+=======
+- Safe-plan workflow with dry-runs, atomic file operations, transaction history, diffable JSON plans, and undo support.
+- Built-in profiles for `safe`, `audiobookshelf`, `plex`, `prologue`, and `apple-books`.
+- `bookbot doctor` checks your runtime, FFmpeg health, writable config/cache paths, and library integrity before changes land.
+- Fast metadata discovery that combines local heuristics with Open Library plus optional Google Books, LibriVox, and Audible lookups.
+- Mission-control TUI with scan, metadata review, preview, warnings, diff, and undo shortcuts in one interface.
+- Configurable templates and collector profiles so folders, file names, covers, and sidecars match the way your players expect them.
+>>>>>>> 42857c9ac3d68fc5ebe68c37634cf06abe75d9c4
 - Optional M4B conversion pipeline with FFmpeg stream copy, loudness normalization, and chapter generation.
 - M4B tooling for merging, splitting, tagging, and chapter injection.
 - Chapter detection pipeline with silence analysis, cue file parsing, track boundaries, and Audnexus chapter data.
@@ -59,16 +68,23 @@ Docker is the fastest way to run BookBot with every dependency pre-baked. It kee
 ```bash
 docker run -it --rm \
   -v "/path/to/audiobooks:/data" \
-  -v "$HOME/.config/bookbot:/root/.config/bookbot" \
+  -v "$PWD/config:/config" \
+  -e BOOKBOT_CONFIG_DIR=/config \
   ghcr.io/itsbryanman/bookbot:latest tui /data
 ```
 
-Mount your library into `/data` (or any path you prefer) and persist configuration under `~/.config/bookbot`. Swap `tui /data` for other commands like `scan /data` or `convert /book --profile conversion`.
+Mount your library into `/data` and persist configuration under `/config`. Swap `tui /data` for commands like `scan /data --plan /config/bookbot-plan.json`, `doctor /data`, or `convert /book --profile conversion`.
+
+Or use Docker Compose with the included [`docker-compose.yml`](docker-compose.yml):
+
+```bash
+docker compose up
+```
 
 You can also add a convenience alias:
 
 ```bash
-alias bookbot-docker='docker run -it --rm -v "$HOME/.config/bookbot:/root/.config/bookbot" -v "$PWD:/data" ghcr.io/itsbryanman/bookbot:latest'
+alias bookbot-docker='docker run -it --rm -v "$PWD/config:/config" -e BOOKBOT_CONFIG_DIR=/config -v "$PWD:/data" ghcr.io/itsbryanman/bookbot:latest'
 ```
 
 Then run `bookbot-docker tui /data` from any library directory.
@@ -76,16 +92,16 @@ Then run `bookbot-docker tui /data` from any library directory.
 ### pipx (alternative)
 
 ```bash
-pipx install bookbot
+pipx install bookbot-cli
 ```
 
-pipx keeps BookBot isolated and ensures the `bookbot` command lands on your PATH. If the executable is not found after install, add `$HOME/.local/bin` to your shell profile.
+The package on PyPI is `bookbot-cli`, but the executable is `bookbot`. pipx keeps BookBot isolated and places `bookbot` on your PATH. If the executable is not found after install, add `$HOME/.local/bin` to your shell profile.
 
 ### pip / virtualenv (alternative)
 
 ```bash
-python -m pip install bookbot
-python -m pip install "bookbot[conversion]"
+python -m pip install bookbot-cli
+python -m pip install "bookbot-cli[conversion]"
 ```
 
 You still need a system FFmpeg binary for audio conversion and DRM extraction.
@@ -103,19 +119,31 @@ The editable install gives you live reload while iterating on the app.
 ## Quick start
 
 ```bash
-# 1. Inspect a library without touching files
-bookbot scan /path/to/audiobooks
+# 1. Create a safe, reviewable rename plan
+bookbot scan /path/to/audiobooks --plan ./bookbot-plan.json
 
-# 2. Launch the Textual TUI to review matches and approve changes
+# 2. Review or diff the plan before touching files
+bookbot review ./bookbot-plan.json
+bookbot plan diff ./bookbot-plan.json
+
+# 3. Apply it atomically, then undo if needed
+bookbot apply ./bookbot-plan.json
+bookbot undo <transaction-id>
+
+# 4. Check the host or a mounted library before a bigger run
+bookbot doctor
+bookbot doctor /path/to/audiobooks --profile audiobookshelf
+
+# 5. Launch the Textual TUI for interactive review
 bookbot tui /path/to/audiobooks
 
 #    Stay offline by reusing existing sidecar metadata
 bookbot tui /path/to/audiobooks --metadata-from-files
 
-# 3. Convert a finished book to a single tagged M4B
+# 6. Convert a finished book to a single tagged M4B
 bookbot convert /path/to/book -o /path/to/output --normalize --chapters auto
 
-# 4. Authenticate with Audible once, then import books by ASIN
+# 7. Authenticate with Audible once, then import books by ASIN
 bookbot audible auth
 bookbot audible import B01234567X --remove-drm
 ```
@@ -125,12 +153,20 @@ Prefer a desktop entry point? `bookbot gui` launches the same Textual applicatio
 ## Core workflows
 
 **Organize safely**
-- Every scan is a dry-run. Use the TUI preview to inspect proposed renames, covers, tags, and conversions.
-- Confirmed changes are recorded as transactions so you can `bookbot history` and `bookbot undo <id>` at any time.
+- `bookbot scan DIR --plan bookbot-plan.json`
+- `bookbot review bookbot-plan.json`
+- `bookbot apply bookbot-plan.json`
+- `bookbot undo <transaction-id>`
+- The `bookbot plan` subgroup exposes the same flow explicitly: `create`, `show`, `diff`, `validate`, and `apply`.
 
 **Tailor metadata**
-- Activate opinionated profiles (`safe`, `full`, `plex`, `conversion`) with `bookbot config list` and `bookbot config show plex`.
-- Customize naming templates in `~/.config/bookbot/templates` or swap templates at runtime with `--template` flags.
+- Activate opinionated profiles with `bookbot profile list`, `bookbot profile show audiobookshelf`, and `bookbot profile use plex`.
+- Built-in collector profiles define folder layout, preferred packaged filename, cover behavior, sidecar output, M4B preference, and chapter style.
+- Customize templates or output behavior with `bookbot config show`, `bookbot config set output.folder_template ...`, and runtime `--profile` flags.
+
+**Diagnose first**
+- `bookbot doctor` checks Python, FFmpeg, config/cache writability, and provider configuration.
+- `bookbot doctor ./library --profile audiobookshelf` validates plan compatibility, cover art, narrators, duplicate titles, broken chapters, suspiciously short tracks, unsupported formats, and Windows/Samba-hostile filenames.
 
 **Bring your own providers**
 - Open Library and Audnexus are always on. Add Google Books, LibriVox, Audible, or Hardcover enrichment with:
@@ -157,8 +193,13 @@ Prefer a desktop entry point? `bookbot gui` launches the same Textual applicatio
 
 | Command | Purpose |
 | --- | --- |
-| `bookbot scan DIR` | Inspect directories, infer series/disc structure, and surface warnings without touching files. |
-| `bookbot tui DIR...` | Launch the interactive Textual interface to match metadata, approve rename plans, and start conversions. Add `--metadata-from-files` to reuse local NFO/JSON sidecars instead of online providers. |
+| `bookbot scan DIR --plan PLAN.json` | Inspect directories, infer series/disc structure, and write a reviewable rename plan without touching files. |
+| `bookbot review PLAN.json` | Show the saved plan with warnings, conflicts, and exact file moves. |
+| `bookbot apply PLAN.json` | Apply a saved plan atomically and emit a transaction ID for undo. |
+| `bookbot plan create/show/diff/validate/apply` | Explicit safe-plan workflow for scripting and auditing. |
+| `bookbot doctor [DIR]` | Verify runtime dependencies and optionally inspect a library for compatibility problems. |
+| `bookbot profile use NAME` | Apply a collector profile such as `safe`, `audiobookshelf`, `plex`, `prologue`, or `apple-books`. |
+| `bookbot tui DIR...` | Launch the interactive Textual mission-control interface. Add `--metadata-from-files` to reuse local NFO/JSON sidecars instead of online providers. |
 | `bookbot convert DIR -o OUT` | Build single-file, chaptered M4B releases with optional normalization and artwork. |
 | `bookbot history --days 7` | Review completed transactions and identify undo candidates. |
 | `bookbot undo ID` | Roll back an operation safely using its transaction identifier. |
@@ -195,9 +236,9 @@ Use `--help` on any command or subgroup for the full option set.
 | Location | Purpose |
 | --- | --- |
 | `~/.config/bookbot/config.toml` | Primary configuration file persisted by the TUI and CLI. |
-| `~/.config/bookbot/profiles/*.toml` | Saved profiles, including the bundled `safe`, `full`, `plex`, and `conversion` presets. |
+| `~/.config/bookbot/profiles/*.toml` | Saved profiles, including the bundled `safe`, `audiobookshelf`, `plex`, `prologue`, `apple-books`, `full`, and `conversion` presets. |
 | `~/.cache/bookbot/` | Cached metadata, cover art, and conversion plans. Delete to force fresh lookups. |
-| `~/.local/share/bookbot/transactions.json` | Transaction history used for undo and audit logs. |
+| `~/.local/share/bookbot/logs/transaction_*.json` | Transaction history used for undo and audit logs. |
 
 Config files use TOML; edit by hand or via `bookbot config` commands.
 

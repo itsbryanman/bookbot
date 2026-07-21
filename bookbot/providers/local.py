@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 import re
 from pathlib import Path
@@ -39,9 +38,7 @@ class LocalMetadataProvider(MetadataProvider):
         self, audiobook_set: AudiobookSet, limit: int = 10
     ) -> list[MatchCandidate]:
         """Return a single high-confidence match sourced from local metadata files."""
-        metadata = await asyncio.to_thread(
-            self._load_metadata_for_folder, audiobook_set.source_path
-        )
+        metadata = self._load_metadata_for_folder(audiobook_set.source_path)
 
         if not metadata:
             logger.debug(

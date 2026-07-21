@@ -276,9 +276,11 @@ class RenamePlan(BaseModel):
     plan_id: str
     created_at: datetime
     source_path: Path
+    profile_name: str | None = None
     operations: list[RenameOperation] = Field(default_factory=list)
     audiobook_sets: list[AudiobookSet] = Field(default_factory=list)
     dry_run: bool = True
+    applied_transaction_id: str | None = None
 
     # Plan validation
     conflicts: list[str] = Field(default_factory=list)
@@ -293,6 +295,12 @@ class RenamePlan(BaseModel):
         self.conflicts.clear()
         self.warnings.clear()
 
+        source_root = self.source_path.resolve(strict=False)
+        forbidden_chars = set('<>:"\\|?*')
+
+        if not self.operations:
+            self.warnings.append("Plan contains no file operations")
+
         # Check for path conflicts
         new_paths = [op.new_path for op in self.operations]
         if len(new_paths) != len(set(new_paths)):
@@ -300,6 +308,33 @@ class RenamePlan(BaseModel):
             self.conflicts.extend(
                 [f"Duplicate target path: {p}" for p in set(duplicates)]
             )
+
+        for operation in self.operations:
+            old_path = operation.old_path.resolve(strict=False)
+            new_path = operation.new_path.resolve(strict=False)
+
+            if self.applied_transaction_id is None and not operation.old_path.exists():
+                self.conflicts.append(f"Missing source file: {operation.old_path}")
+
+            if not old_path.is_relative_to(source_root):
+                self.conflicts.append(
+                    f"Source path escapes plan root: {operation.old_path}"
+                )
+            if not new_path.is_relative_to(source_root):
+                self.conflicts.append(
+                    f"Target path escapes plan root: {operation.new_path}"
+                )
+
+            illegal_parts = [
+                part
+                for part in operation.new_path.parts
+                if part not in {operation.new_path.anchor, "/"}
+                and any(char in forbidden_chars for char in part)
+            ]
+            if illegal_parts:
+                self.conflicts.append(
+                    f"Illegal filename characters in target path: {operation.new_path}"
+                )
 
         # Check for case-insensitive conflicts on case-insensitive filesystems
         is_case_insensitive = (

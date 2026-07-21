@@ -1,0 +1,12 @@
+services:
+  bookbot:
+    image: ghcr.io/itsbryanman/bookbot:latest
+    container_name: bookbot
+    stdin_open: true
+    tty: true
+    volumes:
+      - ./audiobooks:/data
+      - ./config:/config
+    environment:
+      - BOOKBOT_CONFIG_DIR=/config
+    command: tui /data

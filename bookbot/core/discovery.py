@@ -100,16 +100,25 @@ class AudioFileScanner:
             # Use the immediate parent directory as the grouping key
             # This handles most common audiobook organization patterns
             parent = file_path.parent
+            group_root = (
+                parent.parent
+                if parent.parent != parent and self._looks_like_disc_folder(parent.name)
+                else parent
+            )
 
-            if parent not in groups:
-                groups[parent] = []
-            groups[parent].append(file_path)
+            if group_root not in groups:
+                groups[group_root] = []
+            groups[group_root].append(file_path)
 
         # TODO: Implement duration-based splitting for mixed books in one folder
         # This would use k-means clustering on track durations to detect
         # multiple books in a single directory
 
         return groups
+
+    def _looks_like_disc_folder(self, folder_name: str) -> bool:
+        """Detect folders like CD1 or Disc 2 that should collapse into one book."""
+        return any(pattern.match(folder_name) for pattern in self.DISC_PATTERNS)
 
     def _create_audiobook_set(
         self, source_path: Path, files: list[Path]
@@ -451,9 +460,7 @@ class AudioFileScanner:
         author_title_match = re.search(r"^(.+?)\s*[-–—]\s*(.+)$", folder_name)
         if author_title_match:
             author_guess = author_title_match.group(1).strip()
-            # Keep full folder name as the initial title guess while extracting the
-            # author name.
-            title_guess = folder_name.strip()
+            title_guess = author_title_match.group(2).strip()
             return title_guess, author_guess, None, None
 
         # Look for consistent album/artist info in track tags
@@ -473,7 +480,9 @@ class AudioFileScanner:
         author_guess = (
             albumartists.pop()
             if len(albumartists) == 1
-            else artists.pop() if len(artists) == 1 else None
+            else artists.pop()
+            if len(artists) == 1
+            else None
         )
 
         return title_guess, author_guess, None, None

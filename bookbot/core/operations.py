@@ -109,6 +109,7 @@ class TransactionManager:
 
             # Update plan status
             plan.dry_run = False
+            plan.applied_transaction_id = transaction_id
 
             return True
 

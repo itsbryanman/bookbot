@@ -33,7 +33,10 @@ def loads(data: str | bytes) -> dict[str, Any]:
         try:
             result: dict[str, Any] = _toml_reader.loads(text)
             return result
-        except (ValueError, AttributeError) as exc:  # pragma: no cover - delegated errors
+        except (
+            ValueError,
+            AttributeError,
+        ) as exc:  # pragma: no cover - delegated errors
             raise TomlDecodeError(str(exc)) from exc
 
     # As a last resort parse via json for extremely simple configs

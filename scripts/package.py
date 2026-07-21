@@ -28,9 +28,13 @@ def build_wheel(project_root: Path) -> bool:
     print("Building wheel package...")
 
     try:
-        subprocess.run([
-            sys.executable, "-m", "build", "--wheel", str(project_root)
-        ], check=True, capture_output=True, text=True, cwd=project_root)
+        subprocess.run(
+            [sys.executable, "-m", "build", "--wheel", str(project_root)],
+            check=True,
+            capture_output=True,
+            text=True,
+            cwd=project_root,
+        )
 
         print("✓ Wheel built successfully")
         return True
@@ -47,9 +51,13 @@ def build_sdist(project_root: Path) -> bool:
     print("Building source distribution...")
 
     try:
-        subprocess.run([
-            sys.executable, "-m", "build", "--sdist", str(project_root)
-        ], check=True, capture_output=True, text=True, cwd=project_root)
+        subprocess.run(
+            [sys.executable, "-m", "build", "--sdist", str(project_root)],
+            check=True,
+            capture_output=True,
+            text=True,
+            cwd=project_root,
+        )
 
         print("✓ Source distribution built successfully")
         return True
@@ -71,9 +79,13 @@ def check_package(project_root: Path) -> bool:
         return False
 
     try:
-        subprocess.run([
-            sys.executable, "-m", "twine", "check", str(dist_dir / "*")
-        ], check=True, capture_output=True, text=True, cwd=project_root)
+        subprocess.run(
+            [sys.executable, "-m", "twine", "check", str(dist_dir / "*")],
+            check=True,
+            capture_output=True,
+            text=True,
+            cwd=project_root,
+        )
 
         print("✓ Package check passed")
         return True
@@ -104,9 +116,11 @@ def test_installation(project_root: Path) -> bool:
 
         try:
             # Create virtual environment
-            subprocess.run([
-                sys.executable, "-m", "venv", str(venv_path)
-            ], check=True, capture_output=True)
+            subprocess.run(
+                [sys.executable, "-m", "venv", str(venv_path)],
+                check=True,
+                capture_output=True,
+            )
 
             # Determine python executable in venv
             if sys.platform == "win32":
@@ -117,19 +131,27 @@ def test_installation(project_root: Path) -> bool:
                 pip_exe = venv_path / "bin" / "pip"
 
             # Install package
-            subprocess.run([
-                str(pip_exe), "install", str(wheel_file)
-            ], check=True, capture_output=True)
+            subprocess.run(
+                [str(pip_exe), "install", str(wheel_file)],
+                check=True,
+                capture_output=True,
+            )
 
             # Test basic functionality
-            result = subprocess.run([
-                str(python_exe), "-c", "import bookbot; print('Import successful')"
-            ], check=True, capture_output=True, text=True)
+            subprocess.run(
+                [str(python_exe), "-c", "import bookbot; print('Import successful')"],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
 
             # Test CLI
-            subprocess.run([
-                str(python_exe), "-m", "bookbot.cli", "--help"
-            ], check=True, capture_output=True, text=True)
+            subprocess.run(
+                [str(python_exe), "-m", "bookbot.cli", "--help"],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
 
             print("✓ Installation test passed")
             return True
@@ -150,12 +172,12 @@ def create_checksums(project_root: Path) -> None:
 
     print("Creating checksums...")
 
-    with open(checksum_file, 'w') as f:
+    with open(checksum_file, "w") as f:
         for file_path in sorted(dist_dir.glob("*")):
             if file_path.is_file() and file_path.name != "checksums.txt":
                 # Calculate SHA256
                 sha256_hash = hashlib.sha256()
-                with open(file_path, 'rb') as binary_file:
+                with open(file_path, "rb") as binary_file:
                     for chunk in iter(lambda: binary_file.read(4096), b""):
                         sha256_hash.update(chunk)
 
@@ -187,16 +209,25 @@ def show_package_info(project_root: Path) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Package BookBot for distribution")
-    parser.add_argument("--wheel-only", action="store_true",
-                       help="Build wheel only (skip source distribution)")
-    parser.add_argument("--sdist-only", action="store_true",
-                       help="Build source distribution only (skip wheel)")
-    parser.add_argument("--skip-test", action="store_true",
-                       help="Skip installation testing")
-    parser.add_argument("--skip-check", action="store_true",
-                       help="Skip package checking with twine")
-    parser.add_argument("--no-clean", action="store_true",
-                       help="Don't clean build directories first")
+    parser.add_argument(
+        "--wheel-only",
+        action="store_true",
+        help="Build wheel only (skip source distribution)",
+    )
+    parser.add_argument(
+        "--sdist-only",
+        action="store_true",
+        help="Build source distribution only (skip wheel)",
+    )
+    parser.add_argument(
+        "--skip-test", action="store_true", help="Skip installation testing"
+    )
+    parser.add_argument(
+        "--skip-check", action="store_true", help="Skip package checking with twine"
+    )
+    parser.add_argument(
+        "--no-clean", action="store_true", help="Don't clean build directories first"
+    )
 
     args = parser.parse_args()
 
