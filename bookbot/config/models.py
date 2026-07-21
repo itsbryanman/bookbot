@@ -205,13 +205,11 @@ class Config(BaseModel):
     # Providers
     providers: ProviderConfig = Field(default_factory=ProviderConfig)
 
-<<<<<<< HEAD
     # Audiobookshelf
     abs: ABSConfig = Field(default_factory=ABSConfig)
-=======
+
     # Library layout and sidecar outputs
     output: LibraryOutputConfig = Field(default_factory=LibraryOutputConfig)
->>>>>>> 42857c9ac3d68fc5ebe68c37634cf06abe75d9c4
 
     # Cache and logging
     cache_directory: Path = Path.home() / ".cache" / "bookbot"

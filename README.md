@@ -37,19 +37,12 @@ BookBot is a Textual-powered terminal app and command-line toolkit for taming la
 
 ## Highlights
 
-<<<<<<< HEAD
-- Safety first workflow with dry-runs, atomic file operations, transaction history, and undo support.
-- Fast metadata discovery that combines local heuristics with Open Library, Audnexus, and optional Google Books, LibriVox, Audible, and Hardcover lookups.
-- Modern TUI for interactive review plus full CLI coverage for scripting and automation.
-- Configurable templates and profiles so folders, file names, covers, and tags match the way your players expect them.
-=======
 - Safe-plan workflow with dry-runs, atomic file operations, transaction history, diffable JSON plans, and undo support.
 - Built-in profiles for `safe`, `audiobookshelf`, `plex`, `prologue`, and `apple-books`.
 - `bookbot doctor` checks your runtime, FFmpeg health, writable config/cache paths, and library integrity before changes land.
 - Fast metadata discovery that combines local heuristics with Open Library plus optional Google Books, LibriVox, and Audible lookups.
 - Mission-control TUI with scan, metadata review, preview, warnings, diff, and undo shortcuts in one interface.
 - Configurable templates and collector profiles so folders, file names, covers, and sidecars match the way your players expect them.
->>>>>>> 42857c9ac3d68fc5ebe68c37634cf06abe75d9c4
 - Optional M4B conversion pipeline with FFmpeg stream copy, loudness normalization, and chapter generation.
 - M4B tooling for merging, splitting, tagging, and chapter injection.
 - Chapter detection pipeline with silence analysis, cue file parsing, track boundaries, and Audnexus chapter data.

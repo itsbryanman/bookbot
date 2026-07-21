@@ -177,12 +177,9 @@ def scan(
             )
 
         if dry_run:
-            click.echo("\n" + "-" * 60)
-            click.echo("Scan completed. Next steps:")
+            click.echo("\n" + "─" * 60)
+            click.echo("✓ Scan completed. Next steps:")
             click.echo("")
-<<<<<<< HEAD
-            click.echo("  Interactive mode:")
-=======
             click.echo("  📋 Safe plan:")
             if plan_path:
                 click.echo(f"     bookbot review {plan_path}")
@@ -192,21 +189,15 @@ def scan(
                 click.echo(f"     bookbot plan create {folder}")
             click.echo("")
             click.echo("  📱 Interactive mode:")
->>>>>>> 42857c9ac3d68fc5ebe68c37634cf06abe75d9c4
             click.echo(f"     bookbot tui {folder}")
             click.echo("")
-            click.echo("  Convert to M4B:")
+            click.echo("  🎵 Convert to M4B:")
             if audiobook_sets:
                 example = audiobook_sets[0].source_path
                 click.echo(f'     bookbot convert "{example}" -o ./output --dry-run')
             click.echo("")
-<<<<<<< HEAD
-            click.echo("  View config:")
-            click.echo("     bookbot config show")
-=======
             click.echo("  🩺 Diagnose library:")
             click.echo(f"     bookbot doctor {folder}")
->>>>>>> 42857c9ac3d68fc5ebe68c37634cf06abe75d9c4
             click.echo("")
             click.echo("For more help, run: bookbot --help")
 

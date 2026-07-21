@@ -301,17 +301,6 @@ class PreviewScreen(Static):
         for audiobook_set in audiobook_sets:
             for track in audiobook_set.tracks:
                 current_name = track.src_path.name
-<<<<<<< HEAD
-
-                if audiobook_set.chosen_identity:
-                    proposed_name = template_engine.generate_filename(
-                        track, audiobook_set, audiobook_set.chosen_identity
-                    )
-                else:
-                    proposed_name = current_name
-
-                status = "Ready" if proposed_name != current_name else "No change"
-=======
                 operation = operations_by_source.get(track.src_path)
                 proposed_name = (
                     str(operation.new_path.relative_to(common_root))
@@ -319,7 +308,6 @@ class PreviewScreen(Static):
                     else str(track.src_path.relative_to(common_root))
                 )
                 status = "✓ Ready" if operation is not None else "→ No change"
->>>>>>> 42857c9ac3d68fc5ebe68c37634cf06abe75d9c4
                 table.add_row(current_name, proposed_name, status)
 
     async def apply_changes(self) -> bool:
@@ -357,13 +345,8 @@ class PreviewScreen(Static):
             table.clear()
             table.add_columns("Operation", "Result", "Transaction ID")
             table.add_row(
-<<<<<<< HEAD
-                f"Renamed {len(rename_operations)} files",
-                "Success",
-=======
                 f"Renamed {len(plan.operations)} files",
                 "✓ Success",
->>>>>>> 42857c9ac3d68fc5ebe68c37634cf06abe75d9c4
                 transaction_id[:8] + "...",
             )
 
