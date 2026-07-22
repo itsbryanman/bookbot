@@ -4,8 +4,6 @@ import asyncio
 import re
 from pathlib import Path
 
-import pytest
-
 from bookbot.core.discovery import _ASIN_RE, _ISBN_RE, AudioFileScanner
 from bookbot.core.models import (
     AudiobookSet,
@@ -108,25 +106,39 @@ class TestMajorityIdentifier:
 # ── Tag extraction (ID3 TXXX, MP4 freeform) ──
 
 
+
+FIXTURE_MP3 = (
+    Path(__file__).parent
+    / "fixtures"
+    / "messy_library"
+    / "Brandon Sanderson - The Way of Kings"
+    / "CD1"
+    / "01 - Prelude.mp3"
+)
+
+
+def _make_test_mp3(tmp_path: Path):
+    """Copy the real silent fixture MP3 and return a tag-stripped MP3 object."""
+    import shutil
+
+    from mutagen.mp3 import MP3
+
+    mp3_path = tmp_path / "test.mp3"
+    shutil.copy(FIXTURE_MP3, mp3_path)
+    audio = MP3(mp3_path)
+    if audio.tags is not None:
+        audio.delete()
+        audio = MP3(mp3_path)
+    audio.add_tags()
+    return mp3_path, audio
+
+
 class TestTagExtraction:
     def test_id3_isbn_extraction(self, tmp_path: Path) -> None:
         """Build a minimal MP3 with TXXX:ISBN and extract it."""
         from mutagen.id3 import TXXX
-        from mutagen.mp3 import MP3
 
-        mp3_path = tmp_path / "test.mp3"
-        # Create minimal valid MP3 (MPEG frame header + silence)
-        mp3_path.write_bytes(
-            b"\xff\xfb\x90\x00" + b"\x00" * 417  # MPEG1 Layer3 128kbps
-        )
-
-        try:
-            audio = MP3(mp3_path)
-        except Exception:
-            # If mutagen can't parse the minimal frame, skip
-            pytest.skip("Cannot create minimal MP3 for testing")
-
-        audio.add_tags()
+        mp3_path, audio = _make_test_mp3(tmp_path)
         audio.tags.add(TXXX(encoding=3, desc="ISBN", text=["9780451524935"]))
         audio.save()
 
@@ -137,19 +149,8 @@ class TestTagExtraction:
     def test_id3_asin_extraction(self, tmp_path: Path) -> None:
         """Build a minimal MP3 with TXXX:ASIN and extract it."""
         from mutagen.id3 import TXXX
-        from mutagen.mp3 import MP3
 
-        mp3_path = tmp_path / "test.mp3"
-        mp3_path.write_bytes(
-            b"\xff\xfb\x90\x00" + b"\x00" * 417
-        )
-
-        try:
-            audio = MP3(mp3_path)
-        except Exception:
-            pytest.skip("Cannot create minimal MP3 for testing")
-
-        audio.add_tags()
+        mp3_path, audio = _make_test_mp3(tmp_path)
         audio.tags.add(TXXX(encoding=3, desc="ASIN", text=["B0ABCDEFGH"]))
         audio.save()
 
@@ -160,19 +161,8 @@ class TestTagExtraction:
     def test_invalid_isbn_discarded(self, tmp_path: Path) -> None:
         """Invalid ISBN values should be silently discarded."""
         from mutagen.id3 import TXXX
-        from mutagen.mp3 import MP3
 
-        mp3_path = tmp_path / "test.mp3"
-        mp3_path.write_bytes(
-            b"\xff\xfb\x90\x00" + b"\x00" * 417
-        )
-
-        try:
-            audio = MP3(mp3_path)
-        except Exception:
-            pytest.skip("Cannot create minimal MP3 for testing")
-
-        audio.add_tags()
+        mp3_path, audio = _make_test_mp3(tmp_path)
         audio.tags.add(TXXX(encoding=3, desc="ISBN", text=["not-an-isbn"]))
         audio.save()
 
