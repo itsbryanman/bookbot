@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 import pytest
@@ -71,6 +72,30 @@ class BehaviorProvider(MetadataProvider):
 
     async def close(self) -> None:
         self.close_calls += 1
+
+
+class HangingProvider(MetadataProvider):
+    """Provider stub that exceeds the configured timeout."""
+
+    def __init__(self) -> None:
+        super().__init__("hanging")
+
+    async def search(
+        self,
+        *,
+        title: str | None = None,
+        author: str | None = None,
+        series: str | None = None,
+        isbn: str | None = None,
+        year: int | None = None,
+        language: str | None = None,
+        limit: int = 10,
+    ) -> list[ProviderIdentity]:
+        await asyncio.sleep(1)
+        return []
+
+    async def get_by_id(self, external_id: str) -> ProviderIdentity | None:
+        return None
 
 
 def _make_audiobook(title: str) -> AudiobookSet:
@@ -203,6 +228,57 @@ async def test_match_review_screen_reports_mixed_success_and_failure_counts(
         assert books[0].chosen_identity is not None
         assert books[0].chosen_identity.title == "Found Match"
         assert books[1].chosen_identity is None
+
+
+@pytest.mark.asyncio
+async def test_match_review_screen_times_out_provider_manager_requests(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_manager = ConfigManager(tmp_path / "config")
+    config = config_manager.load_config()
+    config.providers.request_timeout = 1
+    config_manager.save_config(config)
+
+    manager = object.__new__(ProviderManager)
+    manager.config_manager = config_manager
+    manager.cache_manager = None
+    manager.providers = {"openlibrary": HangingProvider()}
+    manager.get_enabled_providers = lambda: list(manager.providers.values())  # type: ignore[method-assign]
+
+    warnings: list[dict[str, str]] = []
+
+    def fake_warning(message: str, **kwargs: str) -> None:
+        warnings.append({"message": message, **kwargs})
+
+    monkeypatch.setattr("bookbot.tui.screens.logger.warning", fake_warning)
+
+    app = MatchHarness(config_manager, manager)
+    books = [_make_audiobook("Timed Out Book")]
+    async with app.run_test():
+        screen = app.query_one(MatchReviewScreen)
+        summary = await asyncio.wait_for(screen.find_matches(books), timeout=2)
+
+        table = screen.query_one("#matches_table", DataTable)
+        assert summary == MatchSummary(
+            matched_count=0,
+            unmatched_count=1,
+            failed_count=1,
+        )
+        assert table.get_row_at(0) == [
+            "Timed Out Book",
+            "No matches",
+            "0.00",
+            "Manual",
+            "",
+        ]
+
+    assert warnings == [
+        {
+            "message": "Metadata provider failed during TUI matching",
+            "title_guess": "Timed Out Book",
+            "error": "All metadata providers unavailable",
+        }
+    ]
 
 
 @pytest.mark.asyncio

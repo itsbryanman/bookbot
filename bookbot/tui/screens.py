@@ -22,6 +22,7 @@ from textual.widgets import (
 )
 
 from ..config.manager import ConfigManager
+from ..core.exceptions import MetadataError
 from ..core.logging import get_logger
 from ..core.models import AudiobookSet, MatchCandidate
 from ..core.operations import TransactionManager
@@ -229,6 +230,29 @@ class MatchReviewScreen(Static):
         """Render match reasons compactly for table display."""
         return "; ".join(candidate.match_reasons)
 
+    def _request_timeout_seconds(self) -> float:
+        """Return the configured timeout for a single provider match request."""
+        timeout = self.config_manager.load_config().providers.request_timeout
+        return max(1.0, float(timeout or 15))
+
+    async def _find_matches_with_timeout(
+        self,
+        audiobook_set: AudiobookSet,
+    ) -> list[MatchCandidate]:
+        """Bound direct-provider lookups so the TUI never hangs offline."""
+        timeout = self._request_timeout_seconds()
+        try:
+            return await asyncio.wait_for(
+                self.provider.find_matches(audiobook_set),
+                timeout=timeout,
+            )
+        except asyncio.TimeoutError as exc:
+            raise MetadataError(
+                f"Provider timed out after {timeout:.0f}s",
+                details={"timeout": timeout, "kind": "timeout"},
+                recoverable=True,
+            ) from exc
+
     async def find_matches(self, audiobook_sets: list[AudiobookSet]) -> MatchSummary:
         """Find matches for audiobook sets using merged multi-provider results."""
         self.audiobook_sets = audiobook_sets
@@ -251,7 +275,7 @@ class MatchReviewScreen(Static):
             ]
         else:
             match_tasks = [
-                self.provider.find_matches(a) for a in audiobook_sets
+                self._find_matches_with_timeout(a) for a in audiobook_sets
             ]
         results = await asyncio.gather(*match_tasks, return_exceptions=True)
 

@@ -290,7 +290,13 @@ def match(ctx: click.Context, folder: Path, limit: int) -> None:
     """Inspect merged metadata matches and the reasons behind them."""
     import asyncio
 
+    from .core.exceptions import MetadataError
+
     config_manager = ctx.obj["config_manager"]
+    request_timeout = max(
+        1.0,
+        float(config_manager.load_config().providers.request_timeout or 15),
+    )
     scanner = AudioFileScanner(recursive=True, max_depth=5)
     audiobook_sets = scanner.scan_directory(folder)
 
@@ -300,21 +306,60 @@ def match(ctx: click.Context, folder: Path, limit: int) -> None:
 
     provider = _build_matching_provider(config_manager)
 
+    def format_failure(error: BaseException) -> str:
+        if isinstance(error, MetadataError):
+            provider_errors = error.details.get("provider_errors")
+            if isinstance(provider_errors, list) and provider_errors:
+                detail_text = "; ".join(
+                    (
+                        f"{item.get('provider', 'provider')}: "
+                        f"{item.get('error', 'unavailable')}"
+                    )
+                    for item in provider_errors
+                    if isinstance(item, dict)
+                )
+                return (
+                    "Provider unavailable - no matches "
+                    f"(network error: {detail_text})"
+                )
+
+            if error.details.get("kind") == "timeout":
+                timeout = error.details.get("timeout", request_timeout)
+                return (
+                    "Provider unavailable - no matches "
+                    f"(network error: request timed out after {timeout:.0f}s)"
+                )
+
+        if isinstance(error, (asyncio.TimeoutError, TimeoutError)):
+            return (
+                "Provider unavailable - no matches "
+                f"(network error: request timed out after {request_timeout:.0f}s)"
+            )
+
+        return f"Provider unavailable - no matches (network error: {error})"
+
     async def inspect_matches() -> list[tuple]:
         try:
             results = []
             for audiobook_set in audiobook_sets:
-                if hasattr(provider, "find_matches_merged"):
-                    candidates = await provider.find_matches_merged(
-                        audiobook_set,
-                        limit=limit,
-                    )
+                try:
+                    if hasattr(provider, "find_matches_merged"):
+                        candidates = await provider.find_matches_merged(
+                            audiobook_set,
+                            limit=limit,
+                        )
+                    else:
+                        candidates = await asyncio.wait_for(
+                            provider.find_matches(
+                                audiobook_set,
+                                limit=limit,
+                            ),
+                            timeout=request_timeout,
+                        )
+                except BaseException as exc:
+                    results.append((audiobook_set, [], exc))
                 else:
-                    candidates = await provider.find_matches(
-                        audiobook_set,
-                        limit=limit,
-                    )
-                results.append((audiobook_set, candidates))
+                    results.append((audiobook_set, candidates, None))
             return results
         finally:
             if hasattr(provider, "close_all"):
@@ -322,12 +367,18 @@ def match(ctx: click.Context, folder: Path, limit: int) -> None:
             elif hasattr(provider, "close"):
                 await provider.close()
 
-    for audiobook_set, candidates in asyncio.run(inspect_matches()):
+    had_failures = False
+    for audiobook_set, candidates, error in asyncio.run(inspect_matches()):
         click.echo("")
         click.echo(f"Set: {audiobook_set.source_path}")
         click.echo(
             f"Query: {audiobook_set.raw_title_guess or audiobook_set.source_path.name}"
         )
+
+        if error is not None:
+            had_failures = True
+            click.echo(f"  {format_failure(error)}")
+            continue
 
         if not candidates:
             click.echo("  No matches found.")
@@ -348,6 +399,9 @@ def match(ctx: click.Context, folder: Path, limit: int) -> None:
             )
             click.echo(f"     Providers: {provider_text}")
             click.echo(f"     Reasons: {reasons}")
+
+    if had_failures:
+        sys.exit(1)
 
 
 @cli.command()

@@ -3,6 +3,7 @@
 import asyncio
 
 from ..config.manager import ConfigManager
+from ..core.exceptions import MetadataError
 from ..core.logging import get_logger
 from ..core.matching import AdvancedMatcher
 from ..core.models import (
@@ -109,6 +110,50 @@ class ProviderManager:
         enabled = self.get_enabled_providers()
         return enabled[0] if enabled else self.providers["openlibrary"]
 
+    def _request_timeout_seconds(self) -> float:
+        """Return the configured per-provider request timeout."""
+        if self.config_manager is None:
+            return max(1.0, float(getattr(self, "request_timeout", 15)))
+
+        timeout = self.config_manager.load_config().providers.request_timeout
+        return max(1.0, float(timeout or 15))
+
+    async def _find_matches_with_timeout(
+        self,
+        provider: MetadataProvider,
+        audiobook_set: AudiobookSet,
+        limit: int,
+    ) -> list[MatchCandidate]:
+        """Bound provider match lookups so unavailable services fail cleanly."""
+        timeout = self._request_timeout_seconds()
+        try:
+            return await asyncio.wait_for(
+                provider.find_matches(audiobook_set, limit),
+                timeout=timeout,
+            )
+        except asyncio.TimeoutError as exc:
+            raise MetadataError(
+                f"Provider {provider.name} timed out after {timeout:.0f}s",
+                details={
+                    "provider": provider.name,
+                    "timeout": timeout,
+                    "kind": "timeout",
+                },
+                recoverable=True,
+            ) from exc
+        except MetadataError:
+            raise
+        except Exception as exc:
+            raise MetadataError(
+                f"Provider {provider.name} unavailable: {exc}",
+                details={
+                    "provider": provider.name,
+                    "error": str(exc),
+                    "kind": "network",
+                },
+                recoverable=True,
+            ) from exc
+
     async def find_matches_merged(
         self, audiobook_set: AudiobookSet, limit: int = 10
     ) -> list[MatchCandidate]:
@@ -122,14 +167,23 @@ class ProviderManager:
             return []
 
         # Fan out concurrently
-        tasks = [p.find_matches(audiobook_set, limit) for p in enabled]
+        tasks = [
+            self._find_matches_with_timeout(p, audiobook_set, limit) for p in enabled
+        ]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
         # Collect all candidates, tagging each with its provider priority
         all_candidates: list[tuple[int, MatchCandidate]] = []
+        provider_failures: list[dict[str, object]] = []
         for i, result in enumerate(results):
             if isinstance(result, BaseException):
                 provider_name = enabled[i].name
+                provider_failures.append(
+                    {
+                        "provider": provider_name,
+                        "error": str(result),
+                    }
+                )
                 logger.warning(
                     f"Provider {provider_name} failed during find_matches",
                     error=str(result),
@@ -139,6 +193,12 @@ class ProviderManager:
                 all_candidates.append((i, candidate))  # i = priority index
 
         if not all_candidates:
+            if provider_failures and len(provider_failures) == len(enabled):
+                raise MetadataError(
+                    "All metadata providers unavailable",
+                    details={"provider_errors": provider_failures},
+                    recoverable=True,
+                )
             return []
 
         # Group candidates
