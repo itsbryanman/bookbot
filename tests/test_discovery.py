@@ -6,10 +6,33 @@ from pathlib import Path
 import pytest
 
 from bookbot.core.discovery import AudioFileScanner
+from bookbot.core.models import AudioTags
 
 
 class TestAudioFileScanner:
     """Test cases for AudioFileScanner."""
+
+    @staticmethod
+    def _patch_audio_metadata(
+        scanner: AudioFileScanner,
+        monkeypatch: pytest.MonkeyPatch,
+        tag_map: dict[Path, AudioTags],
+        duration_map: dict[Path, float | None] | None = None,
+    ) -> None:
+        duration_map = duration_map or {}
+
+        def fake_extract_audio_tags(file_path: Path) -> AudioTags:
+            return tag_map.get(file_path, AudioTags())
+
+        def fake_extract_audio_properties(
+            file_path: Path,
+        ) -> tuple[float | None, int | None, int | None, int | None]:
+            return duration_map.get(file_path), None, None, None
+
+        monkeypatch.setattr(scanner, "_extract_audio_tags", fake_extract_audio_tags)
+        monkeypatch.setattr(
+            scanner, "_extract_audio_properties", fake_extract_audio_properties
+        )
 
     def test_supported_extensions(self):
         """Test that all expected audio formats are supported."""
@@ -179,3 +202,110 @@ class TestAudioFileScanner:
 
         roots = {group.name for group in groups}
         assert "Brandon Sanderson - The Way of Kings" in roots
+
+    def test_scan_directory_splits_loose_files_by_album_and_keeps_asin_scoped(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        scanner = AudioFileScanner(recursive=True, max_depth=2)
+        ex_file = tmp_path / "Freida McFadden - The Ex.m4b"
+        goggins_file = tmp_path / "Can't Hurt Me....mp3"
+        ex_file.touch()
+        goggins_file.touch()
+
+        self._patch_audio_metadata(
+            scanner,
+            monkeypatch,
+            {
+                ex_file: AudioTags(
+                    album="The Ex",
+                    artist="Freida McFadden",
+                    asin="B0ABCDEFGH",
+                ),
+                goggins_file: AudioTags(
+                    album="Can't Hurt Me",
+                    artist="David Goggins",
+                ),
+            },
+            {
+                ex_file: 8_000,
+                goggins_file: 8_100,
+            },
+        )
+
+        audiobook_sets = scanner.scan_directory(tmp_path)
+
+        assert len(audiobook_sets) == 2
+
+        by_title = {book.raw_title_guess: book for book in audiobook_sets}
+        assert set(by_title) == {"The Ex", "Can't Hurt Me"}
+        assert by_title["The Ex"].author_guess == "Freida McFadden"
+        assert by_title["The Ex"].asin_guess == "B0ABCDEFGH"
+        assert by_title["The Ex"].total_tracks == 1
+        assert by_title["Can't Hurt Me"].author_guess == "David Goggins"
+        assert by_title["Can't Hurt Me"].asin_guess is None
+        assert by_title["Can't Hurt Me"].total_tracks == 1
+
+    def test_group_files_by_audiobook_keeps_same_album_mp3s_together(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        scanner = AudioFileScanner(recursive=True, max_depth=2)
+        files = []
+        tag_map: dict[Path, AudioTags] = {}
+
+        for track_number in range(1, 11):
+            file_path = tmp_path / f"{track_number:02d} - Chapter.mp3"
+            file_path.touch()
+            files.append(file_path)
+            tag_map[file_path] = AudioTags(album="Shared Album", artist="Author")
+
+        self._patch_audio_metadata(scanner, monkeypatch, tag_map)
+
+        groups = scanner._group_files_by_audiobook(files)
+
+        assert len(groups) == 1
+        assert list(groups.values())[0] == files
+
+    def test_group_files_by_audiobook_keeps_partial_album_tags_together(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        scanner = AudioFileScanner(recursive=True, max_depth=2)
+        files = []
+        tag_map: dict[Path, AudioTags] = {}
+
+        for track_number in range(1, 13):
+            file_path = tmp_path / f"{track_number:02d} - Chapter.mp3"
+            file_path.touch()
+            files.append(file_path)
+            if track_number <= 8:
+                tag_map[file_path] = AudioTags(album="Mostly Tagged", artist="Author")
+            else:
+                tag_map[file_path] = AudioTags(artist="Author")
+
+        self._patch_audio_metadata(scanner, monkeypatch, tag_map)
+
+        groups = scanner._group_files_by_audiobook(files)
+
+        assert len(groups) == 1
+        assert list(groups.values())[0] == files
+
+    def test_group_files_by_audiobook_splits_flat_untagged_m4bs(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        scanner = AudioFileScanner(recursive=True, max_depth=2)
+        files = []
+
+        for title in ("Book One", "Book Two", "Book Three"):
+            file_path = tmp_path / f"{title}.m4b"
+            file_path.touch()
+            files.append(file_path)
+
+        self._patch_audio_metadata(scanner, monkeypatch, {})
+
+        groups = scanner._group_files_by_audiobook(files)
+
+        assert len(groups) == 3
+        assert {tuple(group) for group in groups.values()} == {
+            (files[0],),
+            (files[1],),
+            (files[2],),
+        }

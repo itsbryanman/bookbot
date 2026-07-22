@@ -46,6 +46,7 @@ class AudioFileScanner:
         re.compile(r"^volume\s*(\d+)$", re.IGNORECASE),
         re.compile(r"^vol\.?\s*(\d+)$", re.IGNORECASE),
     ]
+    STANDALONE_BOOK_MIN_DURATION = 60 * 60
 
     def __init__(self, recursive: bool = True, max_depth: int = 5):
         self.recursive = recursive
@@ -66,7 +67,12 @@ class AudioFileScanner:
         # Convert groups to AudiobookSet objects
         audiobook_sets = []
         for group_path, files in grouped_files.items():
-            audiobook_set = self._create_audiobook_set(group_path, files)
+            source_path = (
+                group_path
+                if group_path.exists() and group_path.is_dir()
+                else group_path.parent
+            )
+            audiobook_set = self._create_audiobook_set(source_path, files)
             audiobook_sets.append(audiobook_set)
 
         return audiobook_sets
@@ -110,11 +116,93 @@ class AudioFileScanner:
                 groups[group_root] = []
             groups[group_root].append(file_path)
 
-        # TODO: Implement duration-based splitting for mixed books in one folder
-        # This would use k-means clustering on track durations to detect
-        # multiple books in a single directory
+        split_groups: dict[Path, list[Path]] = {}
+        synthetic_group_index = 0
 
-        return groups
+        for group_root, group_files in groups.items():
+            subgroups = self._split_group_by_album_evidence(group_files)
+            if len(subgroups) == 1:
+                split_groups[group_root] = subgroups[0]
+                continue
+
+            for subgroup in subgroups:
+                synthetic_group_index += 1
+                split_groups[
+                    group_root / f".__bookbot_group_{synthetic_group_index}__"
+                ] = subgroup
+
+        return split_groups
+
+    def _split_group_by_album_evidence(self, files: list[Path]) -> list[list[Path]]:
+        """Split same-folder files when tag evidence shows multiple books."""
+        tagged_groups: dict[str, list[Path]] = {}
+        untagged_files: list[Path] = []
+
+        for file_path in sorted(files):
+            try:
+                tags = self._extract_audio_tags(file_path)
+            except Exception:
+                tags = AudioTags()
+            album_key = self._normalize_grouping_text(tags.album)
+            if album_key is None:
+                untagged_files.append(file_path)
+                continue
+            tagged_groups.setdefault(album_key, []).append(file_path)
+
+        if not tagged_groups:
+            return self._split_untagged_files(untagged_files)
+
+        grouped_files = [sorted(paths) for paths in tagged_groups.values()]
+        residual_files: list[Path] = []
+
+        for file_path in untagged_files:
+            if self._looks_like_standalone_audiobook_file(file_path):
+                grouped_files.append([file_path])
+            else:
+                residual_files.append(file_path)
+
+        if residual_files:
+            if len(grouped_files) == 1:
+                grouped_files[0].extend(residual_files)
+                grouped_files[0].sort()
+            else:
+                grouped_files.append(sorted(residual_files))
+
+        return grouped_files
+
+    def _split_untagged_files(self, files: list[Path]) -> list[list[Path]]:
+        """Peel clearly standalone files out of fully untagged groups."""
+        groups: list[list[Path]] = []
+        residual_files: list[Path] = []
+
+        for file_path in sorted(files):
+            if self._looks_like_standalone_audiobook_file(file_path):
+                groups.append([file_path])
+            else:
+                residual_files.append(file_path)
+
+        if residual_files:
+            groups.append(residual_files)
+
+        return groups or [[]]
+
+    def _normalize_grouping_text(self, value: str | None) -> str | None:
+        """Normalize grouping text like album tags for comparisons."""
+        if value is None:
+            return None
+
+        normalized = value.strip().lower()
+        return normalized or None
+
+    def _looks_like_standalone_audiobook_file(self, file_path: Path) -> bool:
+        """Detect files that are very likely to represent complete books."""
+        if file_path.suffix.lower() == ".m4b":
+            return True
+
+        duration, _, _, _ = self._extract_audio_properties(file_path)
+        return (
+            duration is not None and duration >= self.STANDALONE_BOOK_MIN_DURATION
+        )
 
     def _looks_like_disc_folder(self, folder_name: str) -> bool:
         """Detect folders like CD1 or Disc 2 that should collapse into one book."""
@@ -446,12 +534,14 @@ class AudioFileScanner:
         self, source_path: Path, tracks: list[Track]
     ) -> tuple[str | None, str | None, str | None, str | None]:
         """Extract title, author, series, and volume guesses from path and tracks."""
-        # Use folder name as primary source
-        folder_name = source_path.name
+        if len(tracks) == 1:
+            title_guess, author_guess, series_guess, volume_guess = (
+                self._extract_single_track_guesses(tracks[0])
+            )
+            return title_guess, author_guess, series_guess, volume_guess
 
-        # Clean up common patterns
-        folder_name = re.sub(r"\s*\[.*?\]\s*", "", folder_name)  # Remove [brackets]
-        folder_name = re.sub(r"\s*\(.*?\)\s*", "", folder_name)  # Remove (parentheses)
+        # Use folder name as primary source
+        folder_name = self._clean_metadata_name(source_path.name)
 
         # Try to extract series and volume info
         series_match = re.search(
@@ -493,3 +583,49 @@ class AudioFileScanner:
         )
 
         return title_guess, author_guess, None, None
+
+    def _extract_single_track_guesses(
+        self, track: Track
+    ) -> tuple[str | None, str | None, str | None, str | None]:
+        """Prefer file-level metadata for single-file audiobook sets."""
+        tags = track.existing_tags
+        title_guess = tags.album or tags.title
+        author_guess = tags.albumartist or tags.artist
+        filename_title, filename_author, series_guess, volume_guess = (
+            self._extract_name_guesses(track.src_path.stem)
+        )
+
+        return (
+            title_guess or filename_title,
+            author_guess or filename_author,
+            series_guess,
+            volume_guess,
+        )
+
+    def _extract_name_guesses(
+        self, raw_name: str
+    ) -> tuple[str | None, str | None, str | None, str | None]:
+        """Extract metadata guesses from a folder or filename stem."""
+        cleaned_name = self._clean_metadata_name(raw_name)
+
+        series_match = re.search(
+            r"(.+?)\s+(?:book|vol|volume)\s*(\d+)", cleaned_name, re.IGNORECASE
+        )
+        if series_match:
+            series_name = series_match.group(1).strip()
+            volume = series_match.group(2)
+            return cleaned_name, None, series_name, volume
+
+        author_title_match = re.search(r"^(.+?)\s*[-–—]\s*(.+)$", cleaned_name)
+        if author_title_match:
+            author_guess = author_title_match.group(1).strip()
+            title_guess = author_title_match.group(2).strip()
+            return title_guess, author_guess, None, None
+
+        return cleaned_name or None, None, None, None
+
+    def _clean_metadata_name(self, raw_name: str) -> str:
+        """Remove common noise from folder names and filename stems."""
+        cleaned_name = re.sub(r"\s*\[.*?\]\s*", "", raw_name)
+        cleaned_name = re.sub(r"\s*\(.*?\)\s*", "", cleaned_name)
+        return cleaned_name.strip()
