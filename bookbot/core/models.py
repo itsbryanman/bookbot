@@ -209,8 +209,9 @@ class AudiobookSet(BaseModel):
     def validate_track_order(self) -> list[str]:
         """Validate track ordering and return any issues."""
         issues = []
+        discs_with_audio = sorted({track.disc for track in self.tracks}) or [1]
 
-        for disc in range(1, self.disc_count + 1):
+        for disc in discs_with_audio:
             disc_tracks = self.get_tracks_for_disc(disc)
             if not disc_tracks:
                 issues.append(f"Disc {disc} has no tracks")

@@ -407,8 +407,10 @@ class TestAudioFileScanner:
         assert audiobook.source_path == book_dir
         assert audiobook.raw_title_guess == "On Combat"
         assert audiobook.author_guess == "Dave Grossman"
+        assert audiobook.disc_count == 2
         assert [track.disc for track in audiobook.tracks] == [1, 1, 4, 4]
         assert [track.track_index for track in audiobook.tracks] == [1, 2, 1, 2]
+        assert not any("has no tracks" in warning for warning in audiobook.warnings)
 
     def test_single_file_uses_parent_author_when_dash_split_author_is_implausible(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

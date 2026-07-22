@@ -386,7 +386,7 @@ class AudioFileScanner:
             self._extract_metadata_guesses(source_path, tracks)
         )
 
-        disc_count = max(disc_numbers) if disc_numbers else 1
+        disc_count = len(disc_numbers) if disc_numbers else 1
 
         # Extract majority ISBN/ASIN from track tags
         isbn_guess = self._majority_identifier(tracks, "isbn")
