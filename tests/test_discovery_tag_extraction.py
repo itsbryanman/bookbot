@@ -73,12 +73,19 @@ def _write_tagged_mp3(
     audio.save()
 
 
-def _write_tagged_m4b(path: Path, *, narrator: str | None = None) -> None:
+def _write_tagged_m4b(
+    path: Path,
+    *,
+    narrator: str | None = None,
+    composer: str | None = None,
+) -> None:
     _write_silent_audio(path, ["-c:a", "aac"])
 
     audio = MP4(path)
     if narrator is not None:
         audio["\xa9nrt"] = [narrator]
+    if composer is not None:
+        audio["\xa9wrt"] = [composer]
     audio.save()
 
 
@@ -296,6 +303,16 @@ def test_scan_directory_extracts_narrator_guess_from_mp4_atom(
 
 
 @pytest.mark.requires_ffmpeg
+def test_scan_directory_uses_mp4_composer_as_low_priority_narrator_fallback(
+    tmp_path: Path,
+) -> None:
+    file_path = tmp_path / "Book.m4b"
+    _write_tagged_m4b(file_path, composer="Danny Campbell")
+
+    assert _scan_single_file(tmp_path, file_path.name) == "Danny Campbell"
+
+
+@pytest.mark.requires_ffmpeg
 def test_scan_directory_extracts_narrator_guess_from_mp3_narratedby_frame(
     tmp_path: Path,
 ) -> None:
@@ -323,6 +340,20 @@ def test_scan_directory_extracts_narrator_guess_from_vorbis_comments(
     _write_tagged_flac(file_path, narrator="George Guidall")
 
     assert _scan_single_file(tmp_path, file_path.name) == "George Guidall"
+
+
+@pytest.mark.requires_ffmpeg
+def test_scan_directory_extracts_narrator_guess_from_nfo_sidecar(
+    tmp_path: Path,
+) -> None:
+    file_path = tmp_path / "Book.mp3"
+    _write_tagged_mp3(file_path)
+    (tmp_path / "book.nfo").write_text(
+        "Title: Book\nRead By: Emma Grant Williams\n",
+        encoding="utf-8",
+    )
+
+    assert _scan_single_file(tmp_path, file_path.name) == "Emma Grant Williams"
 
 
 @pytest.mark.requires_ffmpeg

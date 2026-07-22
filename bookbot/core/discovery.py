@@ -17,6 +17,10 @@ _ISBN_RE = re.compile(r"^\d{9}[\dXx]$|^\d{13}$")
 # ASIN validation: B0 followed by 8 alphanumeric chars
 _ASIN_RE = re.compile(r"^B0[A-Z0-9]{8}$", re.IGNORECASE)
 _ASIN_SEARCH_RE = re.compile(r"\b(B0[A-Z0-9]{8})\b", re.IGNORECASE)
+_NFO_NARRATOR_RE = re.compile(
+    r"^\s*(?:read by|narrated by|narrator)\s*[:=-]\s*(.+?)\s*$",
+    re.IGNORECASE,
+)
 _IMPLAUSIBLE_AUTHOR_RE = re.compile(r"^[A-Z]{1,4}\s*\d+$")
 _PERSONAL_NAME_TOKEN_RE = re.compile(
     r"^(?:[A-Z][A-Za-z'`-]*|[A-Z](?:\.[A-Z])+\.?|[A-Z]\.)$"
@@ -392,6 +396,8 @@ class AudioFileScanner:
         isbn_guess = self._majority_identifier(tracks, "isbn")
         asin_guess = self._majority_identifier(tracks, "asin")
         narrator_guess = self._consistent_track_tag_value(tracks, "narrator")
+        if narrator_guess is None:
+            narrator_guess = self._nfo_narrator_guess(source_path)
 
         audiobook_set = AudiobookSet(
             source_path=source_path,
@@ -413,6 +419,27 @@ class AudioFileScanner:
         audiobook_set.warnings.extend(validation_issues)
 
         return audiobook_set
+
+    def _nfo_narrator_guess(self, source_path: Path) -> str | None:
+        """Read nearby NFO sidecars for narrator labels when tags are absent."""
+        if not source_path.is_dir():
+            return None
+
+        for nfo_path in sorted(source_path.glob("*.nfo")):
+            try:
+                content = nfo_path.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+
+            for line in content.splitlines():
+                match = _NFO_NARRATOR_RE.match(line)
+                if match is None:
+                    continue
+                narrator = match.group(1).strip()
+                if narrator:
+                    return narrator
+
+        return None
 
     def _create_track_from_file(self, file_path: Path) -> Track | None:
         """Create a Track object from an audio file."""
@@ -509,6 +536,7 @@ class AudioFileScanner:
                     "narrator",
                     "narratedby",
                     "TCOM",
+                    "\xa9wrt",
                 ],
             }
 
