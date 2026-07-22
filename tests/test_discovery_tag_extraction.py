@@ -7,13 +7,14 @@ from pathlib import Path
 
 import pytest
 from mutagen.flac import FLAC
-from mutagen.id3 import TALB, TCOM, TIT2, TPE1, TPOS, TRCK, TXXX
+from mutagen.id3 import TALB, TCOM, TIT2, TPE1, TPOS, TRCK, TSSE, TXXX
 from mutagen.mp3 import MP3
 from mutagen.mp4 import MP4, MP4FreeForm
 
 from bookbot.config.manager import ConfigManager
 from bookbot.core.discovery import AudioFileScanner
 from bookbot.core.models import TrackStatus
+from bookbot.core.planning import PlanBuilder, save_plan
 from bookbot.tui.app import BookBotApp
 
 _FFMPEG = shutil.which("ffmpeg")
@@ -61,6 +62,7 @@ def _write_tagged_mp3(
     audio.tags.add(TPE1(encoding=3, text=["The Artist"]))
     audio.tags.add(TRCK(encoding=3, text=["3/12"]))
     audio.tags.add(TPOS(encoding=3, text=["1/2"]))
+    audio.tags.add(TSSE(encoding=3, text=["Lavf"]))
     if narrator is not None:
         audio.tags.add(TXXX(encoding=3, desc=narrator_frame, text=[narrator]))
     if composer is not None:
@@ -106,6 +108,29 @@ def test_extract_audio_tags_normalizes_id3_frames(tmp_path: Path) -> None:
     assert tags.artist == "The Artist"
     assert tags.track == 3
     assert tags.disc == 1
+
+
+@pytest.mark.requires_ffmpeg
+def test_plan_serialization_handles_tsse_raw_tags(tmp_path: Path) -> None:
+    book_dir = tmp_path / "Author - Title"
+    book_dir.mkdir()
+    mp3_path = book_dir / "01 - tagged.mp3"
+    _write_tagged_mp3(mp3_path)
+
+    audiobook_sets = AudioFileScanner().scan_directory(tmp_path)
+    raw_tags = audiobook_sets[0].tracks[0].existing_tags.raw_tags
+    assert isinstance(raw_tags.get("TSSE"), str)
+
+    config = ConfigManager(tmp_path / "config").load_config()
+    plan = PlanBuilder(config).create_plan(
+        library_root=tmp_path,
+        audiobook_sets=audiobook_sets,
+        source_roots=[tmp_path],
+    )
+
+    save_plan(plan, tmp_path / "plan.json")
+
+    assert (tmp_path / "plan.json").exists()
 
 
 @pytest.mark.requires_ffmpeg

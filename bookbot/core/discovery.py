@@ -483,7 +483,13 @@ class AudioFileScanner:
 
             # Store raw tags for preservation
             try:
-                tags.raw_tags = dict(audio_file)
+                tags.raw_tags = {
+                    str(key): normalized
+                    for key, value in dict(audio_file).items()
+                    if (
+                        normalized := self._normalize_raw_tag_value(value)
+                    ) is not None
+                }
             except Exception:
                 tags.raw_tags = {}
 
@@ -524,6 +530,28 @@ class AudioFileScanner:
             return None
 
         text = str(normalized).strip()
+        return text or None
+
+    def _normalize_raw_tag_value(self, value: object) -> str | None:
+        """Normalize arbitrary mutagen values into JSON-safe plain strings."""
+        if value is None:
+            return None
+
+        if hasattr(value, "text"):
+            return self._normalize_raw_tag_value(value.text)
+
+        if isinstance(value, (list, tuple)):
+            normalized_items = [
+                normalized
+                for item in value
+                if (normalized := self._normalize_raw_tag_value(item)) is not None
+            ]
+            return "; ".join(normalized_items) or None
+
+        if isinstance(value, bytes):
+            value = value.decode("utf-8", errors="ignore")
+
+        text = str(value).strip()
         return text or None
 
     def _extract_audio_properties(

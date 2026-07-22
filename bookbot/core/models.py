@@ -67,7 +67,7 @@ class AudioTags(BaseModel):
     asin: str | None = None
 
     # Raw tag dict for preservation
-    raw_tags: dict[str, Any] = Field(default_factory=dict)
+    raw_tags: dict[str, str] = Field(default_factory=dict)
 
 
 class Track(BaseModel):
