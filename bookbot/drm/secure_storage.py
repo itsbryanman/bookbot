@@ -8,12 +8,13 @@ except ImportError:
 
 import toml
 
+from ..config.manager import get_runtime_config_dir
 from .models import Token
 
 
 def _get_fallback_file(service_name: str, key_name: str) -> Path:
     """Get fallback file path for when keyring is unavailable."""
-    config_dir = Path.home() / ".config" / "bookbot"
+    config_dir = get_runtime_config_dir()
     config_dir.mkdir(parents=True, exist_ok=True)
     return config_dir / f".{service_name}_{key_name}.json"
 

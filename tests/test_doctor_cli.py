@@ -66,3 +66,21 @@ def test_doctor_reports_duplicate_examples(tmp_path: Path) -> None:
     assert str(edition_b) in duplicate_title_check.message
     assert str(duplicate_a / "track.mp3") in duplicate_file_check.message
     assert str(duplicate_b / "track.mp3") in duplicate_file_check.message
+
+
+def test_doctor_uses_config_dir_with_unusable_home(tmp_path: Path) -> None:
+    runner = CliRunner()
+    library = tmp_path / "library"
+    config_dir = tmp_path / "config-root"
+    library.mkdir()
+    home_blocker = tmp_path / "home-blocker"
+    home_blocker.write_text("not a directory")
+
+    result = runner.invoke(
+        cli,
+        ["--config-dir", str(config_dir), "doctor", str(library)],
+        env={"HOME": str(home_blocker)},
+    )
+
+    assert result.exit_code == 0
+    assert (config_dir / "logs" / "doctor.jsonl").exists()

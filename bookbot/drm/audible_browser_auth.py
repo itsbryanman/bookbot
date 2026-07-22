@@ -4,8 +4,9 @@ import json
 import subprocess
 import sys
 import time
-from pathlib import Path
 from typing import Any
+
+from ..config.manager import get_runtime_config_dir
 
 try:
     from playwright.sync_api import Browser, BrowserContext, Page, sync_playwright
@@ -311,7 +312,7 @@ class AudibleBrowserAuth:
 
         # Fallback: save to config directory
         try:
-            config_dir = Path.home() / ".config" / "bookbot"
+            config_dir = get_runtime_config_dir()
             config_dir.mkdir(parents=True, exist_ok=True)
             cookie_file = config_dir / f"audible_cookies_{self.country_code}.json"
             cookie_file.write_text(json.dumps(cookie_data, indent=2))
@@ -342,7 +343,7 @@ class AudibleBrowserAuth:
         # Try file fallback
         if not cookie_data_str:
             try:
-                config_dir = Path.home() / ".config" / "bookbot"
+                config_dir = get_runtime_config_dir()
                 cookie_file = config_dir / f"audible_cookies_{self.country_code}.json"
                 if cookie_file.exists():
                     cookie_data_str = cookie_file.read_text()
@@ -406,7 +407,7 @@ class AudibleBrowserAuth:
 
         # Clear file
         try:
-            config_dir = Path.home() / ".config" / "bookbot"
+            config_dir = get_runtime_config_dir()
             cookie_file = config_dir / f"audible_cookies_{self.country_code}.json"
             if cookie_file.exists():
                 cookie_file.unlink()

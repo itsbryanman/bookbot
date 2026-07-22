@@ -71,6 +71,11 @@ def _build_matching_provider(
     return ProviderManager(config_manager)
 
 
+def _audible_library_cache_file(config_manager: ConfigManager) -> Path:
+    """Return the cache file used to hand off Audible list results."""
+    return config_manager.config_dir / ".audible_library_cache.json"
+
+
 def _create_and_save_plan(
     config: Config,
     folder: Path,
@@ -1058,8 +1063,16 @@ def plan_validate(plan_file: Path) -> None:
 @click.pass_context
 def doctor(ctx: click.Context, library_path: Path | None, profile: str | None) -> None:
     """Inspect the environment and an optional library path."""
+    from .core.logging import get_logger
+
     config_manager = ctx.obj["config_manager"]
     config, loaded_profile = _resolve_config(config_manager, profile)
+    logger = get_logger("doctor", config_manager.get_log_dir())
+    logger.info(
+        "Running doctor",
+        library_path=str(library_path) if library_path else None,
+        profile=loaded_profile.name if loaded_profile else None,
+    )
     report = LibraryDoctor(config, config_manager.config_dir).run(
         library_path=library_path,
         profile_name=loaded_profile.name if loaded_profile else None,
@@ -1210,7 +1223,7 @@ def audible_import(
         from .drm.remover import DRMRemover
 
         # Load cached library
-        cache_file = Path.home() / ".config" / "bookbot" / ".audible_library_cache.json"
+        cache_file = _audible_library_cache_file(ctx.obj["config_manager"])
         if not cache_file.exists():
             click.echo(
                 "Error:No library cache found. Run 'bookbot audible list' first.", err=True
@@ -1508,7 +1521,7 @@ def audible_list(ctx: click.Context, limit: int | None) -> None:
             return
 
         # Cache library for import command
-        cache_file = Path.home() / ".config" / "bookbot" / ".audible_library_cache.json"
+        cache_file = _audible_library_cache_file(ctx.obj["config_manager"])
         cache_file.parent.mkdir(parents=True, exist_ok=True)
         import json
 

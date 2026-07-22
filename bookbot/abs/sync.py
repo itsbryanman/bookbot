@@ -9,12 +9,13 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from ..config.manager import get_runtime_config_dir
 from ..core.logging import get_logger
 from .client import AudiobookshelfClient
 
 logger = get_logger("abs_sync")
 
-DEFAULT_DB_PATH = Path.home() / ".local" / "share" / "bookbot" / "progress.db"
+DEFAULT_DB_PATH = get_runtime_config_dir() / "progress.db"
 
 
 class SyncReport(BaseModel):

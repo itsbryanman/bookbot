@@ -3,10 +3,15 @@
 import json
 import logging
 import logging.handlers
+import os
 import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+
+from ..config.manager import get_runtime_config_dir
+
+_warned_log_paths: set[str] = set()
 
 
 class StructuredLogger:
@@ -17,25 +22,31 @@ class StructuredLogger:
         self.logger.setLevel(level)
         self.logger.handlers.clear()  # Prevent duplicate handlers
 
-        # Ensure log directory exists
-        log_dir.mkdir(parents=True, exist_ok=True)
-
-        # Rotating file handler (10MB, 7 backups = ~7 days)
-        log_file = log_dir / f"{name}.jsonl"
-        file_handler = logging.handlers.RotatingFileHandler(
-            log_file,
-            maxBytes=10 * 1024 * 1024,
-            backupCount=7,
-            encoding="utf-8",
-        )
-        file_handler.setFormatter(self._json_formatter())
-        self.logger.addHandler(file_handler)
-
         # Console for errors only
         console = logging.StreamHandler(sys.stderr)
         console.setLevel(logging.ERROR)
         console.setFormatter(logging.Formatter("%(levelname)s: %(message)s"))
         self.logger.addHandler(console)
+
+        try:
+            log_dir.mkdir(parents=True, exist_ok=True)
+            log_file = log_dir / f"{name}.jsonl"
+            file_handler = logging.handlers.RotatingFileHandler(
+                log_file,
+                maxBytes=10 * 1024 * 1024,
+                backupCount=7,
+                encoding="utf-8",
+            )
+            file_handler.setFormatter(self._json_formatter())
+            self.logger.addHandler(file_handler)
+        except OSError:
+            warning = (
+                f"Warning: log directory {log_dir} is not writable; "
+                "falling back to stderr-only logging."
+            )
+            if warning not in _warned_log_paths:
+                _warned_log_paths.add(warning)
+                print(warning, file=sys.stderr)
 
     def _json_formatter(self) -> logging.Formatter:
         class JSONFormatter(logging.Formatter):
@@ -76,6 +87,9 @@ def get_logger(name: str, log_dir: Path | None = None) -> StructuredLogger:
     """Get or create logger."""
     if name not in _loggers:
         if log_dir is None:
-            log_dir = Path.home() / ".local" / "share" / "bookbot" / "logs"
+            if os.environ.get("BOOKBOT_CONFIG_DIR"):
+                log_dir = get_runtime_config_dir() / "logs"
+            else:
+                log_dir = Path.home() / ".local" / "share" / "bookbot" / "logs"
         _loggers[name] = StructuredLogger(name, log_dir)
     return _loggers[name]

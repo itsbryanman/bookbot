@@ -1,6 +1,7 @@
 """Configuration management."""
 
 import os
+import sys
 from pathlib import Path
 
 from pydantic import ValidationError
@@ -10,13 +11,35 @@ import toml
 from .models import Config, OverwritePolicy, Profile
 
 
+def get_runtime_config_dir(config_dir: Path | None = None) -> Path:
+    """Resolve the runtime config directory, honoring explicit overrides first."""
+    if config_dir is not None:
+        return Path(config_dir).expanduser()
+
+    if os.environ.get("BOOKBOT_CONFIG_DIR"):
+        return Path(os.environ["BOOKBOT_CONFIG_DIR"]).expanduser()
+
+    if os.name == "nt":
+        base = Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming"))
+    elif os.environ.get("XDG_CONFIG_HOME"):
+        base = Path(os.environ["XDG_CONFIG_HOME"])
+    else:
+        base = Path.home() / ".config"
+
+    return base / "bookbot"
+
+
 class ConfigManager:
     """Manages configuration files and profiles."""
 
     def __init__(self, config_dir: Path | None = None):
-        self.config_dir = config_dir or self._get_default_config_dir()
+        self._explicit_config_dir = config_dir is not None
+        self.config_dir = get_runtime_config_dir(config_dir)
+        if self._explicit_config_dir:
+            os.environ["BOOKBOT_CONFIG_DIR"] = str(self.config_dir)
         self.config_file = self.config_dir / "config.toml"
         self.profiles_dir = self.config_dir / "profiles"
+        self._warned_paths: set[str] = set()
 
         # Ensure directories exist
         self.config_dir.mkdir(parents=True, exist_ok=True)
@@ -30,21 +53,11 @@ class ConfigManager:
     @staticmethod
     def _get_default_config_dir() -> Path:
         """Get the default configuration directory for the current platform."""
-        if os.environ.get("BOOKBOT_CONFIG_DIR"):
-            return Path(os.environ["BOOKBOT_CONFIG_DIR"]).expanduser()
-
-        if os.name == "nt":  # Windows
-            base = Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming"))
-        elif os.environ.get("XDG_CONFIG_HOME"):  # Linux/Unix with XDG
-            base = Path(os.environ["XDG_CONFIG_HOME"])
-        else:  # macOS and other Unix
-            base = Path.home() / ".config"
-
-        return base / "bookbot"
+        return get_runtime_config_dir()
 
     def _build_default_config(self) -> Config:
         """Build a default config, preferring config-local cache/log dirs in Docker."""
-        if os.environ.get("BOOKBOT_CONFIG_DIR"):
+        if self._explicit_config_dir or os.environ.get("BOOKBOT_CONFIG_DIR"):
             return Config(
                 cache_directory=self.config_dir / "cache",
                 log_directory=self.config_dir / "logs",
@@ -61,6 +74,8 @@ class ConfigManager:
                 with open(self.config_file, encoding="utf-8") as f:
                     config_data = toml.load(f)
                 self._config = Config(**config_data)
+                if self._normalize_runtime_paths(self._config):
+                    self.save_config(self._config)
             except (OSError, ValidationError, toml.TomlDecodeError) as e:
                 # Fall back to default config on error
                 print(f"Warning: Error loading config file: {e}")
@@ -71,6 +86,24 @@ class ConfigManager:
             self.save_config()  # Create default config file
 
         return self._config
+
+    def _normalize_runtime_paths(self, config: Config) -> bool:
+        """Re-root default writable paths under config_dir when explicitly scoped."""
+        if not (self._explicit_config_dir or os.environ.get("BOOKBOT_CONFIG_DIR")):
+            return False
+
+        changed = False
+        default_cache = Path(Config.model_fields["cache_directory"].default)
+        default_log = Path(Config.model_fields["log_directory"].default)
+
+        if config.cache_directory == default_cache:
+            config.cache_directory = self.config_dir / "cache"
+            changed = True
+        if config.log_directory == default_log:
+            config.log_directory = self.config_dir / "logs"
+            changed = True
+
+        return changed
 
     def save_config(self, config: Config | None = None) -> None:
         """Save configuration to file."""
@@ -372,11 +405,32 @@ class ConfigManager:
     def get_cache_dir(self) -> Path:
         """Get the cache directory, creating it if necessary."""
         cache_dir = self.load_config().cache_directory
-        cache_dir.mkdir(parents=True, exist_ok=True)
-        return cache_dir
+        return self._ensure_runtime_dir(cache_dir, fallback_name="cache")
 
     def get_log_dir(self) -> Path:
         """Get the log directory, creating it if necessary."""
         log_dir = self.load_config().log_directory
-        log_dir.mkdir(parents=True, exist_ok=True)
-        return log_dir
+        return self._ensure_runtime_dir(log_dir, fallback_name="logs")
+
+    def _ensure_runtime_dir(self, path: Path, *, fallback_name: str) -> Path:
+        """Create a writable directory, falling back under config_dir if needed."""
+        try:
+            path.mkdir(parents=True, exist_ok=True)
+            return path
+        except OSError:
+            fallback_path = self.config_dir / fallback_name
+            self._warn_once(
+                f"Warning: {path} is not writable; using {fallback_path} instead."
+            )
+            try:
+                fallback_path.mkdir(parents=True, exist_ok=True)
+            except OSError:
+                return fallback_path
+            return fallback_path
+
+    def _warn_once(self, message: str) -> None:
+        """Emit a warning only once per ConfigManager instance."""
+        if message in self._warned_paths:
+            return
+        self._warned_paths.add(message)
+        print(message, file=sys.stderr)
