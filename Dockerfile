@@ -26,7 +26,7 @@ FROM python:3.11-slim AS runtime
 
 LABEL org.opencontainers.image.title="BookBot" \
       org.opencontainers.image.description="A cross-platform TUI audiobook renamer and organizer" \
-      org.opencontainers.image.version="0.3.0" \
+      org.opencontainers.image.version="1.0.0" \
       org.opencontainers.image.authors="itsbryanman" \
       org.opencontainers.image.url="https://github.com/itsbryanman/bookbot" \
       org.opencontainers.image.source="https://github.com/itsbryanman/bookbot" \
