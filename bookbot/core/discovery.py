@@ -17,6 +17,31 @@ _ISBN_RE = re.compile(r"^\d{9}[\dXx]$|^\d{13}$")
 # ASIN validation: B0 followed by 8 alphanumeric chars
 _ASIN_RE = re.compile(r"^B0[A-Z0-9]{8}$", re.IGNORECASE)
 _IMPLAUSIBLE_AUTHOR_RE = re.compile(r"^[A-Z]{1,4}\s*\d+$")
+_PERSONAL_NAME_TOKEN_RE = re.compile(
+    r"^(?:[A-Z][A-Za-z'`-]*|[A-Z](?:\.[A-Z])+\.?|[A-Z]\.)$"
+)
+_PERSONAL_NAME_STOPWORDS = {
+    "a",
+    "an",
+    "and",
+    "book",
+    "cd",
+    "chapter",
+    "disc",
+    "disk",
+    "for",
+    "in",
+    "of",
+    "on",
+    "part",
+    "pt",
+    "the",
+    "to",
+    "track",
+    "vol",
+    "volume",
+    "with",
+}
 QUARANTINE_DIRNAME = ".bookbot-quarantine"
 
 
@@ -726,7 +751,9 @@ class AudioFileScanner:
             )
             return title_guess, author_guess, series_guess, volume_guess
 
-        folder_name, prefer_folder_title = self._group_title_source(source_path, tracks)
+        folder_name, prefer_folder_title, collapsed_disc_group = (
+            self._group_title_source(source_path, tracks)
+        )
 
         # Try to extract series and volume info
         series_match = re.search(
@@ -739,7 +766,11 @@ class AudioFileScanner:
             return title_guess, None, series_name, volume
 
         # Try author - title pattern
-        title_guess, author_guess = self._author_title_guess(folder_name)
+        title_guess, author_guess = (
+            self._collapsed_group_author_title_guess(folder_name)
+            if collapsed_disc_group
+            else self._author_title_guess(folder_name)
+        )
         if title_guess is not None:
             if author_guess is not None:
                 return title_guess, author_guess, None, None
@@ -775,7 +806,7 @@ class AudioFileScanner:
 
     def _group_title_source(
         self, source_path: Path, tracks: list[Track]
-    ) -> tuple[str, bool]:
+    ) -> tuple[str, bool, bool]:
         """Choose the best folder-derived title source for a grouped set."""
         folder_name = self._clean_metadata_name(source_path.name)
         disc_stems: set[str] = set()
@@ -793,7 +824,7 @@ class AudioFileScanner:
                 disc_stems.add(self._clean_metadata_name(match.stem))
 
         if not collapsed_disc_group:
-            return folder_name, False
+            return folder_name, False, False
 
         if len(disc_stems) == 1:
             stem = next(iter(disc_stems))
@@ -803,10 +834,10 @@ class AudioFileScanner:
                 normalized_folder == normalized_stem
                 or normalized_stem in normalized_folder
             ):
-                return folder_name, True
-            return stem, True
+                return folder_name, True, True
+            return stem, True, True
 
-        return folder_name, True
+        return folder_name, True, True
 
     def _extract_single_track_guesses(
         self, track: Track
@@ -847,16 +878,45 @@ class AudioFileScanner:
 
         return cleaned_name or None, None, None, None
 
+    def _split_dash_name(self, cleaned_name: str) -> tuple[str, str] | None:
+        """Split names that use a dash as the primary separator."""
+        author_title_match = re.search(r"^(.+?)\s*[-–—]\s*(.+)$", cleaned_name)
+        if author_title_match is None:
+            return None
+
+        return (
+            author_title_match.group(1).strip(),
+            author_title_match.group(2).strip(),
+        )
+
+    def _collapsed_group_author_title_guess(
+        self, cleaned_name: str
+    ) -> tuple[str | None, str | None]:
+        """Prefer the personal-name side when collapsed disc groups use `X - Y`."""
+        split_name = self._split_dash_name(cleaned_name)
+        if split_name is None:
+            return None, None
+
+        left, right = split_name
+        left_is_personal_name = self._looks_like_personal_name(left)
+        right_is_personal_name = self._looks_like_personal_name(right)
+
+        if left_is_personal_name and not right_is_personal_name:
+            return right, left
+        if right_is_personal_name and not left_is_personal_name:
+            return left, right
+
+        return self._author_title_guess(cleaned_name)
+
     def _author_title_guess(
         self, cleaned_name: str
     ) -> tuple[str | None, str | None]:
         """Split `Author - Title` names while rejecting implausible authors."""
-        author_title_match = re.search(r"^(.+?)\s*[-–—]\s*(.+)$", cleaned_name)
-        if author_title_match is None:
+        split_name = self._split_dash_name(cleaned_name)
+        if split_name is None:
             return None, None
 
-        author_guess = author_title_match.group(1).strip()
-        title_guess = author_title_match.group(2).strip()
+        author_guess, title_guess = split_name
         if self._is_implausible_author_guess(author_guess):
             return title_guess, None
         return title_guess, author_guess
@@ -885,6 +945,26 @@ class AudioFileScanner:
 
         tokens = cleaned_author.split()
         return len(tokens) == 1 and len(tokens[0]) <= 3
+
+    def _looks_like_personal_name(self, value: str) -> bool:
+        """Detect human-name shapes to disambiguate `Title - Author` folders."""
+        tokens = value.split()
+        if not 2 <= len(tokens) <= 4:
+            return False
+
+        word_like_tokens = 0
+        for token in tokens:
+            stripped_letters = re.sub(r"[^A-Za-z]", "", token)
+            if not stripped_letters or token[0].isdigit():
+                return False
+            if stripped_letters.lower() in _PERSONAL_NAME_STOPWORDS:
+                return False
+            if not _PERSONAL_NAME_TOKEN_RE.fullmatch(token):
+                return False
+            if len(stripped_letters) > 1:
+                word_like_tokens += 1
+
+        return word_like_tokens >= 1
 
     def _clean_metadata_name(self, raw_name: str) -> str:
         """Remove common noise from folder names and filename stems."""

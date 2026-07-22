@@ -377,6 +377,39 @@ class TestAudioFileScanner:
         assert audiobook.disc_count == 15
         assert [track.disc for track in audiobook.tracks] == list(range(1, 16))
 
+    def test_scan_directory_collapses_noncontiguous_disc_folders_with_parent_metadata(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        scanner = AudioFileScanner(recursive=True, max_depth=4)
+        book_dir = tmp_path / "On Combat - Dave Grossman"
+        book_dir.mkdir()
+        tag_map: dict[Path, AudioTags] = {}
+        duration_map: dict[Path, float | None] = {}
+
+        for disc_number in (1, 4):
+            disc_dir = book_dir / f"On Combat Disc {disc_number}"
+            disc_dir.mkdir()
+            for track_number in (1, 2):
+                track = disc_dir / f"{track_number:02d} - Chapter.mp3"
+                track.touch()
+                tag_map[track] = AudioTags(
+                    album=f"On Combat Disc {disc_number}",
+                    artist="Dave Grossman",
+                )
+                duration_map[track] = float(disc_number * 60 + track_number)
+
+        self._patch_audio_metadata(scanner, monkeypatch, tag_map, duration_map)
+
+        audiobook_sets = scanner.scan_directory(tmp_path)
+
+        assert len(audiobook_sets) == 1
+        audiobook = audiobook_sets[0]
+        assert audiobook.source_path == book_dir
+        assert audiobook.raw_title_guess == "On Combat"
+        assert audiobook.author_guess == "Dave Grossman"
+        assert [track.disc for track in audiobook.tracks] == [1, 1, 4, 4]
+        assert [track.track_index for track in audiobook.tracks] == [1, 2, 1, 2]
+
     def test_single_file_uses_parent_author_when_dash_split_author_is_implausible(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
