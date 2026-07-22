@@ -113,7 +113,7 @@ class TestMergeByISBN:
             manager, "get_enabled_providers",
             return_value=list(manager.providers.values()),
         ):
-            candidates = asyncio.get_event_loop().run_until_complete(
+            candidates = asyncio.run(
                 manager.find_matches_merged(_make_audiobook())
             )
 
@@ -143,7 +143,7 @@ class TestCorroborationBoost:
             manager, "get_enabled_providers",
             return_value=list(manager.providers.values()),
         ):
-            candidates = asyncio.get_event_loop().run_until_complete(
+            candidates = asyncio.run(
                 manager.find_matches_merged(_make_audiobook())
             )
 
@@ -169,7 +169,7 @@ class TestDurationCheck:
             manager, "get_enabled_providers",
             return_value=list(manager.providers.values()),
         ):
-            candidates = asyncio.get_event_loop().run_until_complete(
+            candidates = asyncio.run(
                 manager.find_matches_merged(audiobook)
             )
 
@@ -185,7 +185,7 @@ class TestDurationCheck:
             manager, "get_enabled_providers",
             return_value=list(manager.providers.values()),
         ):
-            candidates = asyncio.get_event_loop().run_until_complete(
+            candidates = asyncio.run(
                 manager.find_matches_merged(audiobook)
             )
 
@@ -206,7 +206,7 @@ class TestFailingProvider:
             manager, "get_enabled_providers",
             return_value=list(manager.providers.values()),
         ):
-            candidates = asyncio.get_event_loop().run_until_complete(
+            candidates = asyncio.run(
                 manager.find_matches_merged(_make_audiobook())
             )
 
@@ -254,9 +254,7 @@ class TestFallbackLadder:
         provider = _EmptyThenTitleProvider()
         audiobook = _make_audiobook()
 
-        candidates = asyncio.get_event_loop().run_until_complete(
-            provider.find_matches(audiobook)
-        )
+        candidates = asyncio.run(provider.find_matches(audiobook))
 
         # Should have found results via fallback
         assert len(candidates) >= 1

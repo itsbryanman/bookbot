@@ -202,9 +202,7 @@ class TestFindMatchesEndToEnd:
             author_guess="Stephen King",
         )
 
-        candidates = asyncio.get_event_loop().run_until_complete(
-            provider.find_matches(audiobook)
-        )
+        candidates = asyncio.run(provider.find_matches(audiobook))
 
         # Should return candidates sorted by confidence (highest first)
         assert len(candidates) == 2

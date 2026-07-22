@@ -244,9 +244,7 @@ class TestASINFastPath:
             asin_guess="B0ABCDEFGH",
         )
 
-        candidates = asyncio.get_event_loop().run_until_complete(
-            provider.find_matches(audiobook)
-        )
+        candidates = asyncio.run(provider.find_matches(audiobook))
 
         assert len(candidates) == 1
         assert candidates[0].confidence == 1.0
@@ -263,9 +261,7 @@ class TestASINFastPath:
             asin_guess="B0XXXXXXXXX",  # invalid — too long, won't match
         )
 
-        candidates = asyncio.get_event_loop().run_until_complete(
-            provider.find_matches(audiobook)
-        )
+        candidates = asyncio.run(provider.find_matches(audiobook))
 
         # Should fall through to fuzzy search
         assert provider.search_called
