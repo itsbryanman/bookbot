@@ -318,8 +318,12 @@ async def test_bookbot_app_with_preloaded_folders_starts_in_scanning_state(
 
         assert app.current_step == "scanning"
         assert app.query_one(TabbedContent).active == "mission"
-        assert app.query_one("#status_label", Label).content == (
-            "Scanning preloaded folders..."
+        # The scan worker may already have advanced the label from
+        # "Scanning preloaded folders..." to "Scanning <dir>..." depending on
+        # scheduling, so assert the scanning phase rather than an exact
+        # mid-race string.
+        assert str(app.query_one("#status_label", Label).content).startswith(
+            "Scanning"
         )
 
 
