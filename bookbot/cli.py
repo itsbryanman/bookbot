@@ -255,10 +255,6 @@ def tui(
             click.echo(f"Error: Profile '{profile}' not found", err=True)
             sys.exit(1)
 
-    if not folders:
-        click.echo("Error: At least one folder must be specified", err=True)
-        sys.exit(1)
-
     try:
         # Import TUI app here to avoid issues if textual is not installed
         from .tui.app import BookBotApp

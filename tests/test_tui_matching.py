@@ -6,9 +6,11 @@ import asyncio
 from pathlib import Path
 
 import pytest
+from click.testing import CliRunner
 from textual.app import App, ComposeResult
-from textual.widgets import DataTable, Label, Static
+from textual.widgets import DataTable, Label, Static, TabbedContent
 
+from bookbot.cli import cli
 from bookbot.config.manager import ConfigManager
 from bookbot.core.models import (
     AudiobookSet,
@@ -303,6 +305,25 @@ async def test_bookbot_app_reports_no_matches_found_honestly(
 
 
 @pytest.mark.asyncio
+async def test_bookbot_app_with_preloaded_folders_starts_in_scanning_state(
+    tmp_path: Path,
+) -> None:
+    library = tmp_path / "library"
+    library.mkdir()
+
+    app = BookBotApp(ConfigManager(tmp_path / "config"), [library])
+
+    async with app.run_test() as pilot:
+        await pilot.pause(0)
+
+        assert app.current_step == "scanning"
+        assert app.query_one(TabbedContent).active == "mission"
+        assert app.query_one("#status_label", Label).content == (
+            "Scanning preloaded folders..."
+        )
+
+
+@pytest.mark.asyncio
 async def test_bookbot_app_reports_partial_match_status(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -323,6 +344,58 @@ async def test_bookbot_app_reports_partial_match_status(
         assert "Some providers failed" in app.query_one(
             "#warnings_panel", Static
         ).content
+
+
+def test_tui_cli_allows_manual_launch_without_folder_args(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runner = CliRunner()
+    launched: dict[str, list[Path]] = {}
+
+    monkeypatch.setattr(
+        "bookbot.cli._build_matching_provider",
+        lambda config_manager, metadata_from_files=False: object(),
+    )
+
+    def fake_run(self: BookBotApp) -> None:
+        launched["folders"] = self.source_folders
+
+    monkeypatch.setattr(BookBotApp, "run", fake_run)
+
+    result = runner.invoke(
+        cli,
+        ["--config-dir", str(tmp_path / "config"), "tui"],
+    )
+
+    assert result.exit_code == 0
+    assert launched["folders"] == []
+
+
+def test_tui_cli_passes_folder_args_through_to_preloaded_app(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runner = CliRunner()
+    library = tmp_path / "library"
+    library.mkdir()
+    launched: dict[str, list[Path]] = {}
+
+    monkeypatch.setattr(
+        "bookbot.cli._build_matching_provider",
+        lambda config_manager, metadata_from_files=False: object(),
+    )
+
+    def fake_run(self: BookBotApp) -> None:
+        launched["folders"] = self.source_folders
+
+    monkeypatch.setattr(BookBotApp, "run", fake_run)
+
+    result = runner.invoke(
+        cli,
+        ["--config-dir", str(tmp_path / "config"), "tui", str(library)],
+    )
+
+    assert result.exit_code == 0
+    assert launched["folders"] == [library]
 
 
 def test_bookbot_app_defaults_to_provider_manager(tmp_path: Path) -> None:

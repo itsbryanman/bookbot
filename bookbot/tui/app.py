@@ -376,10 +376,14 @@ class BookBotApp(App):
         self.config_manager.create_default_profiles()
 
         # Set initial status
-        self.update_status("Select folders and start scanning")
+        self.update_status(
+            "Scanning preloaded folders..." if self.source_folders
+            else "Select folders and start scanning"
+        )
 
         # If folders were provided, start scanning automatically
         if self.source_folders:
+            self.current_step = "scanning"
             self.set_timer(0.1, lambda: self.post_message(self.StartScan()))
 
     async def on_drm_login_screen_login_success(self, message: LoginSuccess) -> None:
@@ -453,6 +457,7 @@ class BookBotApp(App):
         scan_button.label = "Scanning..."
 
         self.update_status("Scanning for audiobooks...")
+        self.current_step = "scanning"
 
         try:
             scanner_tasks = []
@@ -475,6 +480,7 @@ class BookBotApp(App):
 
             self.audiobook_sets = all_audiobook_sets
             self.scanning_complete = True
+            self.current_step = "scan_complete"
 
             # Update UI
             scan_screen = self.query_one("#scan_screen", ScanResultsScreen)
@@ -498,6 +504,7 @@ class BookBotApp(App):
             )
 
         except Exception as e:
+            self.current_step = "source_selection"
             self.update_status(f"Scan failed: {e}")
             self.update_warning_panel(f"Scan failed: {e}")
 
