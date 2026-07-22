@@ -509,6 +509,46 @@ class TestPlanAndUndo:
         assert (d1 / "track.mp3").exists()
         assert (d2 / "track.mp3").exists()
 
+    def test_file_keeper_prefers_nested_original_over_root_copy(
+        self, tmp_path: Path
+    ) -> None:
+        lib = tmp_path / "lib"
+        nested_dir = lib / "Author - Title" / "Disc 1"
+        nested_dir.mkdir(parents=True)
+
+        original = nested_dir / "track.mp3"
+        stray_copy = lib / "track.mp3"
+        original.write_bytes(b"same-audio")
+        stray_copy.write_bytes(b"same-audio")
+
+        engine = DedupeEngine(lib)
+        groups = engine.analyze_files()
+        assert len(groups) == 1
+
+        plan = engine.build_plan(file_groups=groups)
+
+        assert groups[0].keeper == original
+        assert plan.file_groups[0]["keeper"] == str(original)
+        assert [op.source for op in plan.operations] == [stray_copy]
+
+    def test_file_keeper_equal_depth_uses_existing_deterministic_tiebreak(
+        self, tmp_path: Path
+    ) -> None:
+        lib = tmp_path / "lib"
+        alpha_dir = lib / "alpha"
+        bravo_dir = lib / "bravo"
+        alpha_dir.mkdir(parents=True)
+        bravo_dir.mkdir()
+
+        alpha = alpha_dir / "track.mp3"
+        bravo = bravo_dir / "track.mp3"
+        alpha.write_bytes(b"same-audio")
+        bravo.write_bytes(b"same-audio")
+
+        engine = DedupeEngine(lib)
+
+        assert engine._pick_file_keeper([bravo, alpha], set()) == alpha
+
     def test_overlapping_edition_and_file_groups_do_not_double_quarantine(
         self, tmp_path: Path, config_manager
     ) -> None:

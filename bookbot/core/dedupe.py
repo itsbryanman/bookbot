@@ -31,6 +31,7 @@ from rapidfuzz import fuzz
 
 from ..config.manager import ConfigManager
 from .discovery import (
+    AudioFileScanner,
     is_within_quarantine_tree,
     iter_files_excluding_quarantine,
 )
@@ -177,6 +178,7 @@ class DedupeEngine:
     def __init__(self, library_root: Path) -> None:
         self.library_root = library_root
         self.matcher = AdvancedMatcher()
+        self.scanner = AudioFileScanner()
         self.analysis_warnings: list[str] = []
 
     def analyze_editions(
@@ -612,18 +614,64 @@ class DedupeEngine:
         self, paths: list[Path], keeper_edition_paths: set[Path]
     ) -> Path:
         """Pick the keeper file from byte-identical duplicates."""
-        # Prefer the copy inside a keeper edition
-        for p in paths:
-            for kep in keeper_edition_paths:
-                try:
-                    p.relative_to(kep)
-                    return p
-                except ValueError:
-                    continue
-
-        # Shortest path
-        paths_sorted = sorted(paths, key=lambda p: (len(str(p)), str(p)))
+        paths_sorted = sorted(
+            paths,
+            key=lambda p: (
+                -self._file_keeper_score(p, keeper_edition_paths)[0],
+                -self._file_keeper_score(p, keeper_edition_paths)[1],
+                -self._file_keeper_score(p, keeper_edition_paths)[2],
+                len(str(p)),
+                str(p),
+            ),
+        )
         return paths_sorted[0]
+
+    def _file_keeper_score(
+        self, path: Path, keeper_edition_paths: set[Path]
+    ) -> tuple[int, int, int]:
+        """Score byte-identical file candidates for keeper selection."""
+        return (
+            1 if self._is_within_keeper_edition(path, keeper_edition_paths) else 0,
+            self._relative_directory_depth(path),
+            1 if self._has_structured_parent_metadata(path) else 0,
+        )
+
+    @staticmethod
+    def _is_within_keeper_edition(
+        path: Path, keeper_edition_paths: set[Path]
+    ) -> bool:
+        """Check whether a duplicate file lives inside an already-kept edition."""
+        for keeper_path in keeper_edition_paths:
+            try:
+                path.relative_to(keeper_path)
+                return True
+            except ValueError:
+                continue
+        return False
+
+    def _relative_directory_depth(self, path: Path) -> int:
+        """Count how many folders separate a file from the library root."""
+        try:
+            relative_path = path.relative_to(self.library_root)
+        except ValueError:
+            relative_path = path
+        return max(len(relative_path.parts) - 1, 0)
+
+    def _has_structured_parent_metadata(self, path: Path) -> bool:
+        """Detect whether ancestor folders look like organized audiobook metadata."""
+        try:
+            relative_path = path.relative_to(self.library_root)
+        except ValueError:
+            return False
+
+        for index in range(len(relative_path.parts) - 1):
+            folder_name = relative_path.parts[index]
+            cleaned_name = self.scanner._clean_metadata_name(folder_name)
+            title_guess, author_guess = self.scanner._author_title_guess(cleaned_name)
+            if title_guess and author_guess:
+                return True
+
+        return False
 
     # ── Hashing helpers ──
 
