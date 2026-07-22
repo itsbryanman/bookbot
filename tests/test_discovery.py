@@ -309,3 +309,35 @@ class TestAudioFileScanner:
             (files[1],),
             (files[2],),
         }
+
+    def test_scan_directory_collapses_suffix_disc_folders_into_one_set(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        scanner = AudioFileScanner(recursive=True, max_depth=4)
+        book_dir = tmp_path / "Author - Title"
+        book_dir.mkdir()
+        tag_map: dict[Path, AudioTags] = {}
+        duration_map: dict[Path, float | None] = {}
+
+        for disc_number in range(1, 16):
+            disc_dir = book_dir / f"Title Disc {disc_number}"
+            disc_dir.mkdir()
+            track = disc_dir / "01 - Chapter.mp3"
+            track.touch()
+            tag_map[track] = AudioTags(
+                album=f"Title Disc {disc_number}",
+                artist="Author",
+            )
+            duration_map[track] = float(disc_number * 60)
+
+        self._patch_audio_metadata(scanner, monkeypatch, tag_map, duration_map)
+
+        audiobook_sets = scanner.scan_directory(tmp_path)
+
+        assert len(audiobook_sets) == 1
+        audiobook = audiobook_sets[0]
+        assert audiobook.source_path == book_dir
+        assert audiobook.raw_title_guess == "Title"
+        assert audiobook.author_guess == "Author"
+        assert audiobook.disc_count == 15
+        assert [track.disc for track in audiobook.tracks] == list(range(1, 16))

@@ -2,6 +2,7 @@
 
 import re
 from collections import Counter
+from dataclasses import dataclass
 from pathlib import Path
 
 from mutagen import File as MutagenFile
@@ -14,6 +15,14 @@ from .models import AudiobookSet, AudioFormat, AudioTags, Track, TrackStatus
 _ISBN_RE = re.compile(r"^\d{9}[\dXx]$|^\d{13}$")
 # ASIN validation: B0 followed by 8 alphanumeric chars
 _ASIN_RE = re.compile(r"^B0[A-Z0-9]{8}$", re.IGNORECASE)
+
+
+@dataclass(frozen=True)
+class DiscFolderMatch:
+    """Parsed disc-folder naming details used during grouping."""
+
+    number: int
+    stem: str | None = None
 
 
 class AudioFileScanner:
@@ -46,6 +55,10 @@ class AudioFileScanner:
         re.compile(r"^volume\s*(\d+)$", re.IGNORECASE),
         re.compile(r"^vol\.?\s*(\d+)$", re.IGNORECASE),
     ]
+    SUFFIX_DISC_PATTERN = re.compile(
+        r"^(?P<stem>.+?)[\s\-_]+(?:disc|cd|disk|part|pt)[\s\-_]*(?P<num>\d+)$",
+        re.IGNORECASE,
+    )
     STANDALONE_BOOK_MIN_DURATION = 60 * 60
 
     def __init__(self, recursive: bool = True, max_depth: int = 5):
@@ -103,14 +116,7 @@ class AudioFileScanner:
         groups: dict[Path, list[Path]] = {}
 
         for file_path in files:
-            # Use the immediate parent directory as the grouping key
-            # This handles most common audiobook organization patterns
-            parent = file_path.parent
-            group_root = (
-                parent.parent
-                if parent.parent != parent and self._looks_like_disc_folder(parent.name)
-                else parent
-            )
+            group_root = self._group_root_for_file(file_path)
 
             if group_root not in groups:
                 groups[group_root] = []
@@ -120,7 +126,7 @@ class AudioFileScanner:
         synthetic_group_index = 0
 
         for group_root, group_files in groups.items():
-            subgroups = self._split_group_by_album_evidence(group_files)
+            subgroups = self._split_group_by_album_evidence(group_root, group_files)
             if len(subgroups) == 1:
                 split_groups[group_root] = subgroups[0]
                 continue
@@ -133,8 +139,20 @@ class AudioFileScanner:
 
         return split_groups
 
-    def _split_group_by_album_evidence(self, files: list[Path]) -> list[list[Path]]:
+    def _group_root_for_file(self, file_path: Path) -> Path:
+        """Resolve the logical group root for a file."""
+        parent = file_path.parent
+        if parent.parent != parent and self._disc_folder_match(parent) is not None:
+            return parent.parent
+        return parent
+
+    def _split_group_by_album_evidence(
+        self, group_root: Path, files: list[Path]
+    ) -> list[list[Path]]:
         """Split same-folder files when tag evidence shows multiple books."""
+        if self._is_collapsed_disc_group(group_root, files):
+            return [sorted(files)]
+
         tagged_groups: dict[str, list[Path]] = {}
         untagged_files: list[Path] = []
 
@@ -169,6 +187,24 @@ class AudioFileScanner:
                 grouped_files.append(sorted(residual_files))
 
         return grouped_files
+
+    def _is_collapsed_disc_group(self, group_root: Path, files: list[Path]) -> bool:
+        """Detect groups that came from disc-named child folders."""
+        if not files:
+            return False
+
+        saw_disc_child = False
+        for file_path in files:
+            parent = file_path.parent
+            if parent == group_root:
+                continue
+            if parent.parent != group_root:
+                return False
+            if self._disc_folder_match(parent) is None:
+                return False
+            saw_disc_child = True
+
+        return saw_disc_child
 
     def _split_untagged_files(self, files: list[Path]) -> list[list[Path]]:
         """Peel clearly standalone files out of fully untagged groups."""
@@ -207,6 +243,66 @@ class AudioFileScanner:
     def _looks_like_disc_folder(self, folder_name: str) -> bool:
         """Detect folders like CD1 or Disc 2 that should collapse into one book."""
         return any(pattern.match(folder_name) for pattern in self.DISC_PATTERNS)
+
+    def _disc_folder_match(self, folder: Path) -> DiscFolderMatch | None:
+        """Parse a folder name as an exact or suffix-style disc folder."""
+        exact_match = self._exact_disc_folder_match(folder.name)
+        if exact_match is not None:
+            return exact_match
+
+        suffix_match = self.SUFFIX_DISC_PATTERN.match(folder.name)
+        if suffix_match is None:
+            return None
+
+        stem = self._clean_metadata_name(suffix_match.group("stem"))
+        try:
+            number = int(suffix_match.group("num"))
+        except ValueError:
+            return None
+
+        if not self._suffix_disc_folder_qualifies(folder, stem, number):
+            return None
+
+        return DiscFolderMatch(number=number, stem=stem)
+
+    def _exact_disc_folder_match(self, folder_name: str) -> DiscFolderMatch | None:
+        """Parse exact disc folder names like `CD1` or `Disc 2`."""
+        for pattern in self.DISC_PATTERNS:
+            match = pattern.match(folder_name)
+            if match is None:
+                continue
+            try:
+                return DiscFolderMatch(number=int(match.group(1)))
+            except ValueError:
+                return None
+        return None
+
+    def _suffix_disc_folder_qualifies(
+        self, folder: Path, stem: str, number: int
+    ) -> bool:
+        """Require sibling or parent evidence before collapsing suffix folders."""
+        parent_name = self._clean_metadata_name(folder.parent.name).lower()
+        stem_name = stem.lower()
+        if stem_name and (parent_name == stem_name or stem_name in parent_name):
+            return True
+
+        for sibling in folder.parent.iterdir():
+            if not sibling.is_dir() or sibling == folder:
+                continue
+            sibling_match = self.SUFFIX_DISC_PATTERN.match(sibling.name)
+            if sibling_match is None:
+                continue
+            sibling_stem = self._clean_metadata_name(sibling_match.group("stem"))
+            if sibling_stem.lower() != stem_name:
+                continue
+            try:
+                sibling_number = int(sibling_match.group("num"))
+            except ValueError:
+                continue
+            if sibling_number != number:
+                return True
+
+        return False
 
     def _create_audiobook_set(
         self, source_path: Path, files: list[Path]
@@ -497,27 +593,36 @@ class AudioFileScanner:
         if from_tags is not None:
             return from_tags
 
-        # Check filename and a few parent directory levels for disc hints
-        search_targets: list[str] = [file_path.stem.lower()]
+        exact_filename_match = self._exact_disc_folder_match(file_path.stem)
+        if exact_filename_match is not None:
+            return exact_filename_match.number
 
         parent = file_path.parent
         depth = 0
         while parent != parent.parent and depth < 3:
-            search_targets.append(parent.name.lower())
+            folder_match = self._disc_number_from_folder_name(parent.name)
+            if folder_match is not None:
+                return folder_match
             parent = parent.parent
             depth += 1
 
-        for target in search_targets:
-            for pattern in self.DISC_PATTERNS:
-                match = pattern.match(target)
-                if match:
-                    try:
-                        return int(match.group(1))
-                    except ValueError:
-                        continue
-
         # Default to disc 1
         return 1
+
+    def _disc_number_from_folder_name(self, folder_name: str) -> int | None:
+        """Extract a disc number from an exact or suffix-style folder name."""
+        exact_match = self._exact_disc_folder_match(folder_name)
+        if exact_match is not None:
+            return exact_match.number
+
+        suffix_match = self.SUFFIX_DISC_PATTERN.match(folder_name)
+        if suffix_match is None:
+            return None
+
+        try:
+            return int(suffix_match.group("num"))
+        except ValueError:
+            return None
 
     @staticmethod
     def _majority_identifier(tracks: list[Track], field: str) -> str | None:
@@ -561,8 +666,7 @@ class AudioFileScanner:
             )
             return title_guess, author_guess, series_guess, volume_guess
 
-        # Use folder name as primary source
-        folder_name = self._clean_metadata_name(source_path.name)
+        folder_name, prefer_folder_title = self._group_title_source(source_path, tracks)
 
         # Try to extract series and volume info
         series_match = re.search(
@@ -594,7 +698,11 @@ class AudioFileScanner:
             if track.existing_tags.albumartist:
                 albumartists.add(str(track.existing_tags.albumartist))
 
-        title_guess = albums.pop() if len(albums) == 1 else folder_name
+        title_guess = (
+            folder_name
+            if prefer_folder_title
+            else albums.pop() if len(albums) == 1 else folder_name
+        )
         author_guess = (
             albumartists.pop()
             if len(albumartists) == 1
@@ -604,6 +712,41 @@ class AudioFileScanner:
         )
 
         return title_guess, author_guess, None, None
+
+    def _group_title_source(
+        self, source_path: Path, tracks: list[Track]
+    ) -> tuple[str, bool]:
+        """Choose the best folder-derived title source for a grouped set."""
+        folder_name = self._clean_metadata_name(source_path.name)
+        disc_stems: set[str] = set()
+        collapsed_disc_group = False
+
+        for track in tracks:
+            parent = track.src_path.parent
+            if parent.parent != source_path:
+                continue
+            match = self._disc_folder_match(parent)
+            if match is None:
+                continue
+            collapsed_disc_group = True
+            if match.stem:
+                disc_stems.add(self._clean_metadata_name(match.stem))
+
+        if not collapsed_disc_group:
+            return folder_name, False
+
+        if len(disc_stems) == 1:
+            stem = next(iter(disc_stems))
+            normalized_folder = folder_name.lower()
+            normalized_stem = stem.lower()
+            if (
+                normalized_folder == normalized_stem
+                or normalized_stem in normalized_folder
+            ):
+                return folder_name, True
+            return stem, True
+
+        return folder_name, True
 
     def _extract_single_track_guesses(
         self, track: Track

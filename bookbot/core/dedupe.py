@@ -20,7 +20,7 @@ Edition scoring priority (descending):
 """
 
 import hashlib
-import json
+import re
 import uuid
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -46,6 +46,10 @@ FORMAT_RANK: dict[AudioFormat, int] = {
     AudioFormat.AAC: 2,
     AudioFormat.WAV: 1,
 }
+SEGMENT_SUFFIX_PATTERN = re.compile(
+    r"^(?P<base>.+?)(?:[\s\-_]+(?:disc|cd|disk|part|pt))?[\s\-_]*(?P<num>\d+)$",
+    re.IGNORECASE,
+)
 
 
 @dataclass
@@ -157,11 +161,14 @@ class DedupeEngine:
     def __init__(self, library_root: Path) -> None:
         self.library_root = library_root
         self.matcher = AdvancedMatcher()
+        self.analysis_warnings: list[str] = []
 
     def analyze_editions(
         self, audiobook_sets: list[AudiobookSet]
     ) -> list[EditionGroup]:
         """Find edition-duplicate groups among audiobook sets."""
+        self.analysis_warnings = []
+
         # Pass 1: exact key clustering
         clusters: dict[str, list[AudiobookSet]] = defaultdict(list)
         for ab_set in audiobook_sets:
@@ -200,6 +207,11 @@ class DedupeEngine:
         # Score and pick keepers
         edition_groups: list[EditionGroup] = []
         for members in merged_clusters:
+            guard_warning = self._segment_group_warning(members)
+            if guard_warning is not None:
+                self.analysis_warnings.append(guard_warning)
+                continue
+
             group = EditionGroup()
             candidates = [
                 DedupeCandidate(audiobook_set=ab) for ab in members
@@ -225,6 +237,88 @@ class DedupeEngine:
             edition_groups.append(group)
 
         return edition_groups
+
+    def _segment_group_warning(
+        self, members: list[AudiobookSet]
+    ) -> str | None:
+        """Return a warning when a cluster looks like one segmented work."""
+        if self._looks_like_numbered_sibling_segments(members):
+            title = members[0].raw_title_guess or members[0].source_path.name
+            return (
+                f"Skipped potential duplicate edition group for '{title}' because "
+                "the members look like segmented discs of one work. The library "
+                "may have uncollapsed disc folders."
+            )
+
+        if self._looks_like_partitioned_sibling_durations(members):
+            title = members[0].raw_title_guess or members[0].source_path.name
+            return (
+                f"Skipped potential duplicate edition group for '{title}' because "
+                "the sibling durations look like partitioned segments of one work. "
+                "The library may have uncollapsed disc folders."
+            )
+
+        return None
+
+    def _looks_like_numbered_sibling_segments(
+        self, members: list[AudiobookSet]
+    ) -> bool:
+        """Reject sibling folders that only differ by a trailing sequence number."""
+        if not self._share_common_parent(members):
+            return False
+
+        labels = [member.source_path.name for member in members]
+        if self._labels_form_numbered_sequence(labels):
+            return True
+
+        raw_titles = [
+            member.raw_title_guess or member.source_path.name
+            for member in members
+        ]
+        return self._labels_form_numbered_sequence(raw_titles)
+
+    def _labels_form_numbered_sequence(self, labels: list[str]) -> bool:
+        """Check whether labels only differ by a trailing numbered segment."""
+        bases: set[str] = set()
+        numbers: set[int] = set()
+
+        for label in labels:
+            match = SEGMENT_SUFFIX_PATTERN.match(label)
+            if match is None:
+                return False
+            bases.add(self.matcher.normalize_title(match.group("base")))
+            try:
+                numbers.add(int(match.group("num")))
+            except ValueError:
+                return False
+
+        return len(bases) == 1 and len(numbers) == len(labels)
+
+    def _looks_like_partitioned_sibling_durations(
+        self, members: list[AudiobookSet]
+    ) -> bool:
+        """Reject sibling groups whose durations look like partitioned segments."""
+        if not self._share_common_parent(members) or len(members) < 3:
+            return False
+
+        durations = [member.total_duration for member in members]
+        if any(duration is None for duration in durations):
+            return False
+
+        typed_durations = [
+            float(duration) for duration in durations if duration is not None
+        ]
+        total_duration = sum(typed_durations)
+        longest_member = max(typed_durations, default=0.0)
+        if longest_member == 0:
+            return False
+
+        return total_duration > longest_member * 2.5
+
+    def _share_common_parent(self, members: list[AudiobookSet]) -> bool:
+        """Check whether all candidate sets are sibling folders."""
+        parents = {member.source_path.parent for member in members}
+        return len(parents) == 1
 
     def analyze_files(
         self, audio_extensions: set[str] | None = None,
@@ -314,6 +408,7 @@ class DedupeEngine:
 
         if keeper_edition_paths is None:
             keeper_edition_paths = set()
+        scheduled_sources: set[Path] = set()
 
         # Edition quarantines
         if edition_groups:
@@ -341,6 +436,7 @@ class DedupeEngine:
                                 ),
                             )
                         )
+                        scheduled_sources.add(src)
                     group_info["quarantined"].append({
                         "path": str(ab.source_path),
                         "reason": candidate.quarantine_reason,
@@ -363,7 +459,7 @@ class DedupeEngine:
                 }
 
                 for p in fg.paths:
-                    if p == keeper:
+                    if p == keeper or p in scheduled_sources:
                         continue
                     rel = p.relative_to(self.library_root)
                     dest = quarantine_root / rel
@@ -374,6 +470,7 @@ class DedupeEngine:
                             reason="Byte-identical duplicate",
                         )
                     )
+                    scheduled_sources.add(p)
                     fg_info["quarantined"].append(str(p))
 
                 plan.file_groups.append(fg_info)

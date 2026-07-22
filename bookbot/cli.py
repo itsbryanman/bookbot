@@ -2674,6 +2674,8 @@ def dedupe(
 
     if not files_only:
         edition_groups = engine.analyze_editions(audiobook_sets)
+        for warning in engine.analysis_warnings:
+            click.echo(f"Warning: {warning}", err=True)
 
     keeper_paths: set[Path] = set()
     if edition_groups:
