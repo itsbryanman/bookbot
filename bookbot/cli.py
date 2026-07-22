@@ -2838,6 +2838,14 @@ def dedupe(
 
     plan = engine.build_plan(edition_groups, file_groups, keeper_paths)
 
+    if json_path:
+        import json as json_mod
+
+        json_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(json_path, "w", encoding="utf-8") as f:
+            json_mod.dump(plan.to_dict(), f, indent=2, default=str)
+        click.echo(f"Plan written to {json_path}")
+
     if not plan.operations:
         click.echo("No duplicates found.")
         return
@@ -2866,12 +2874,6 @@ def dedupe(
         click.echo(f"\nTotal reclaimable: {mb:.1f} MB")
 
     click.echo(f"Quarantine operations: {len(plan.operations)}")
-
-    if json_path:
-        import json as json_mod
-        with open(json_path, "w", encoding="utf-8") as f:
-            json_mod.dump(plan.to_dict(), f, indent=2, default=str)
-        click.echo(f"Plan written to {json_path}")
 
     if apply:
         if plan.has_conflicts():

@@ -1,5 +1,6 @@
 """Tests for Phase 4: deduplication engine and quarantine workflow."""
 
+import json
 from datetime import datetime
 from pathlib import Path
 
@@ -604,3 +605,37 @@ def test_history_lists_rename_and_dedupe_transaction_types(
     assert result.exit_code == 0
     assert f"{rename_id[:8]}... - 2026-07-20T12:00:00 - rename -" in result.output
     assert f"{dedupe_id[:8]}... - 2026-07-21T12:00:00 - dedupe -" in result.output
+
+
+def test_dedupe_json_writes_empty_plan_when_no_duplicates(tmp_path: Path) -> None:
+    runner = CliRunner()
+    library = tmp_path / "library"
+    config_dir = tmp_path / "config"
+    unique_book = library / "Unique Book"
+    json_path = tmp_path / "plans" / "dedupe-plan.json"
+
+    unique_book.mkdir(parents=True)
+    (unique_book / "track.mp3").write_bytes(b"unique-audio")
+
+    result = runner.invoke(
+        cli,
+        [
+            "--config-dir",
+            str(config_dir),
+            "dedupe",
+            str(library),
+            "--json",
+            str(json_path),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "Plan written to" in result.output
+    assert "No duplicates found." in result.output
+    assert json_path.exists()
+
+    plan_data = json.loads(json_path.read_text())
+    assert plan_data["operations"] == []
+    assert plan_data["edition_groups"] == []
+    assert plan_data["file_groups"] == []
+    assert plan_data["library_root"] == str(library)
