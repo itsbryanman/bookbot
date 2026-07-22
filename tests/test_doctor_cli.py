@@ -1,5 +1,8 @@
 """CLI and doctor regression tests for duplicate reporting."""
 
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 from click.testing import CliRunner
@@ -7,6 +10,32 @@ from click.testing import CliRunner
 from bookbot.cli import cli
 from bookbot.config.manager import ConfigManager
 from bookbot.core.doctor import LibraryDoctor
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+def _run_cli_subprocess(
+    args: list[str], *, env: dict[str, str] | None = None
+) -> subprocess.CompletedProcess[str]:
+    full_env = os.environ.copy()
+    if env:
+        full_env.update(env)
+
+    pythonpath = full_env.get("PYTHONPATH")
+    full_env["PYTHONPATH"] = (
+        str(REPO_ROOT)
+        if not pythonpath
+        else f"{REPO_ROOT}{os.pathsep}{pythonpath}"
+    )
+
+    return subprocess.run(
+        [sys.executable, "-m", "bookbot.cli", *args],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+        env=full_env,
+    )
 
 
 def test_dedupe_audio_hash_flag_errors(tmp_path: Path) -> None:
@@ -134,3 +163,66 @@ def test_doctor_uses_config_dir_with_unusable_home(tmp_path: Path) -> None:
 
     assert result.exit_code == 0
     assert (config_dir / "logs" / "doctor.jsonl").exists()
+
+
+def test_cli_help_doctor_and_scan_avoid_default_home_log_warning(
+    tmp_path: Path,
+) -> None:
+    library = tmp_path / "library"
+    config_dir = tmp_path / "config-root"
+    library.mkdir()
+    home_blocker = tmp_path / "home-blocker"
+    home_blocker.write_text("not a directory")
+
+    env = {"HOME": str(home_blocker)}
+
+    help_result = _run_cli_subprocess(
+        ["--config-dir", str(config_dir), "--help"],
+        env=env,
+    )
+    assert help_result.returncode == 0
+    assert "Warning: log directory" not in (help_result.stdout + help_result.stderr)
+
+    doctor_result = _run_cli_subprocess(
+        ["--config-dir", str(config_dir), "doctor", str(library)],
+        env=env,
+    )
+    assert doctor_result.returncode == 0
+    assert "Warning: log directory" not in (
+        doctor_result.stdout + doctor_result.stderr
+    )
+    assert (config_dir / "logs" / "doctor.jsonl").exists()
+
+    scan_result = _run_cli_subprocess(
+        ["--config-dir", str(config_dir), "scan", str(library)],
+        env=env,
+    )
+    assert scan_result.returncode == 0
+    assert "Warning: log directory" not in (scan_result.stdout + scan_result.stderr)
+
+
+def test_doctor_warns_once_when_resolved_log_dir_is_unwritable(
+    tmp_path: Path,
+) -> None:
+    library = tmp_path / "library"
+    config_dir = tmp_path / "config-root"
+    library.mkdir()
+    config_dir.mkdir()
+    (config_dir / "logs").write_text("not a directory")
+
+    result = _run_cli_subprocess(
+        ["--config-dir", str(config_dir), "doctor", str(library)],
+    )
+
+    combined_output = result.stdout + result.stderr
+    warning = (
+        f"Warning: log directory {config_dir / 'logs'} is not writable; "
+        "falling back to stderr-only logging."
+    )
+
+    assert result.returncode == 0
+    assert combined_output.count(warning) == 1
+    assert (
+        f"Warning: {config_dir / 'logs'} is not writable; using "
+        f"{config_dir / 'logs'} instead."
+    ) not in combined_output

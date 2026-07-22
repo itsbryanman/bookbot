@@ -419,6 +419,8 @@ class ConfigManager:
             return path
         except OSError:
             fallback_path = self.config_dir / fallback_name
+            if fallback_path == path:
+                return fallback_path
             self._warn_once(
                 f"Warning: {path} is not writable; using {fallback_path} instead."
             )
