@@ -9,6 +9,7 @@ from click.testing import CliRunner
 
 from bookbot.cli import cli
 from bookbot.config.manager import ConfigManager
+from bookbot.core.dedupe import DedupeEngine
 from bookbot.core.doctor import LibraryDoctor
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -145,6 +146,49 @@ def test_doctor_excludes_quarantine_duplicates_and_reports_state(
     hidden_total = hidden_a.stat().st_size + hidden_b.stat().st_size
     assert "1 transaction(s)" in quarantine_check.message
     assert f"{hidden_total} bytes" in quarantine_check.message
+
+
+def test_doctor_reports_quarantine_local_transaction_ids_and_undo_guidance(
+    tmp_path: Path, monkeypatch
+) -> None:
+    runner = CliRunner()
+    library = tmp_path / "library"
+    original_config = ConfigManager(tmp_path / "original-config")
+    current_config = ConfigManager(tmp_path / "current-config")
+
+    a_dir = library / "a"
+    b_dir = library / "b"
+    a_dir.mkdir(parents=True)
+    b_dir.mkdir()
+    (a_dir / "track.mp3").write_bytes(b"same-audio")
+    (b_dir / "track.mp3").write_bytes(b"same-audio")
+
+    engine = DedupeEngine(library)
+    plan = engine.build_plan(file_groups=engine.analyze_files())
+    engine.execute_plan(plan, original_config)
+
+    doctor = LibraryDoctor(current_config.load_config(), current_config.config_dir)
+    report = doctor.run(library_path=library)
+    quarantine_check = next(
+        check for check in report.checks if "Quarantine contains" in check.message
+    )
+
+    assert plan.plan_id in quarantine_check.message
+    assert plan.created_at in quarantine_check.message
+    assert "bookbot history" not in quarantine_check.message
+    assert f"bookbot undo {plan.plan_id}" in quarantine_check.message
+    assert "original --config-dir" in quarantine_check.message
+
+    monkeypatch.chdir(library)
+    result = runner.invoke(
+        cli,
+        ["--config-dir", str(current_config.config_dir), "undo", plan.plan_id],
+    )
+
+    assert result.exit_code == 0
+    assert f"Transaction {plan.plan_id} undone successfully" in result.output
+    assert (a_dir / "track.mp3").exists()
+    assert (b_dir / "track.mp3").exists()
 
 
 def test_doctor_uses_config_dir_with_unusable_home(tmp_path: Path) -> None:

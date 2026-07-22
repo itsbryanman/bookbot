@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
@@ -48,6 +49,24 @@ class DoctorReport:
     @property
     def has_failures(self) -> bool:
         return any(check.status == "fail" for check in self.checks)
+
+
+@dataclass
+class QuarantineTransactionRecord:
+    """Quarantine transaction metadata recovered from local transaction files."""
+
+    transaction_id: str
+    timestamp: str | None
+    present_in_current_logs: bool
+
+
+@dataclass
+class QuarantineSummary:
+    """Summarized quarantine state for doctor messaging."""
+
+    transaction_count: int
+    total_size: int
+    transactions: list[QuarantineTransactionRecord] = field(default_factory=list)
 
 
 class LibraryDoctor:
@@ -215,7 +234,7 @@ class LibraryDoctor:
 
         quarantine_summary = self._quarantine_summary(library_path)
         if quarantine_summary is not None:
-            report.add("warn", self._format_quarantine_summary(*quarantine_summary))
+            report.add("warn", self._format_quarantine_summary(quarantine_summary))
 
         audiobook_sets = self.scanner.scan_directory(library_path)
         if audiobook_sets:
@@ -371,7 +390,7 @@ class LibraryDoctor:
                 unsafe.append(path)
         return unsafe
 
-    def _quarantine_summary(self, library_path: Path) -> tuple[int, int] | None:
+    def _quarantine_summary(self, library_path: Path) -> QuarantineSummary | None:
         """Summarize quarantine state under the scanned library root."""
         quarantine_root = library_path / QUARANTINE_DIRNAME
         if not quarantine_root.exists() or not quarantine_root.is_dir():
@@ -387,16 +406,83 @@ class LibraryDoctor:
             except OSError:
                 continue
 
-        return len(transaction_dirs), total_size
+        return QuarantineSummary(
+            transaction_count=len(transaction_dirs),
+            total_size=total_size,
+            transactions=self._quarantine_transaction_records(transaction_dirs),
+        )
 
-    def _format_quarantine_summary(
-        self, transaction_count: int, total_size: int
-    ) -> str:
+    def _quarantine_transaction_records(
+        self, transaction_dirs: list[Path]
+    ) -> list[QuarantineTransactionRecord]:
+        """Recover transaction ids and timestamps from quarantine-local logs."""
+        log_dir = self.config.log_directory
+        records: list[QuarantineTransactionRecord] = []
+
+        for transaction_dir in sorted(transaction_dirs):
+            for log_path in sorted(transaction_dir.glob("transaction_*.json")):
+                try:
+                    log_data = json.loads(log_path.read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError):
+                    continue
+
+                transaction_id = str(
+                    log_data.get("transaction_id") or transaction_dir.name
+                )
+                timestamp = log_data.get("timestamp")
+                records.append(
+                    QuarantineTransactionRecord(
+                        transaction_id=transaction_id,
+                        timestamp=str(timestamp) if timestamp else None,
+                        present_in_current_logs=(
+                            log_dir / f"transaction_{transaction_id}.json"
+                        ).exists(),
+                    )
+                )
+                break
+
+        return records
+
+    def _format_quarantine_summary(self, summary: QuarantineSummary) -> str:
         """Render an actionable quarantine summary for doctor output."""
-        return (
+        message = (
             "Quarantine contains "
-            f"{transaction_count} transaction(s) totaling {total_size} bytes. "
-            "Use 'bookbot history' or 'bookbot undo <id>' to review or restore."
+            f"{summary.transaction_count} transaction(s) totaling "
+            f"{summary.total_size} bytes."
+        )
+
+        if not summary.transactions:
+            return (
+                f"{message} Review the quarantine folders directly because no "
+                "transaction record could be read."
+            )
+
+        record_descriptions = [
+            record.transaction_id
+            if record.timestamp is None
+            else f"{record.transaction_id} ({record.timestamp})"
+            for record in summary.transactions[:3]
+        ]
+        message += " Transactions: " + ", ".join(record_descriptions) + "."
+
+        missing_from_logs = [
+            record for record in summary.transactions
+            if not record.present_in_current_logs
+        ]
+        if missing_from_logs:
+            undo_examples = ", ".join(
+                f"'bookbot undo {record.transaction_id}'"
+                for record in missing_from_logs[:3]
+            )
+            return (
+                f"{message} History for the current config may not list these "
+                f"quarantine-local transaction(s). Run {undo_examples} from the "
+                "library root, or reuse the original --config-dir."
+            )
+
+        return (
+            f"{message} Use 'bookbot history' or 'bookbot undo <id>' to review "
+            "or restore."
         )
 
     def _find_duplicate_file_groups(self, library_path: Path) -> list[list[str]]:
