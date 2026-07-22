@@ -224,13 +224,24 @@ class MatchReviewScreen(Static):
         yield Label("Metadata Matches", classes="section-title")
         yield DataTable(id="matches_table")
 
+    @staticmethod
+    def _format_reasons(candidate: MatchCandidate) -> str:
+        """Render match reasons compactly for table display."""
+        return "; ".join(candidate.match_reasons)
+
     async def find_matches(self, audiobook_sets: list[AudiobookSet]) -> MatchSummary:
         """Find matches for audiobook sets using merged multi-provider results."""
         self.audiobook_sets = audiobook_sets
 
         table = self.query_one("#matches_table", DataTable)
         table.clear(columns=True)
-        table.add_columns("Audiobook", "Best Match", "Confidence", "Action")
+        table.add_columns(
+            "Audiobook",
+            "Best Match",
+            "Confidence",
+            "Action",
+            "Reasons",
+        )
         summary = MatchSummary()
 
         # Use ProviderManager.find_matches_merged when available
@@ -274,6 +285,7 @@ class MatchReviewScreen(Static):
                     ),
                     f"{best_match.confidence:.2f}",
                     "Accept" if best_match.confidence > 0.85 else "Review",
+                    self._format_reasons(best_match),
                 )
             else:
                 summary.unmatched_count += 1
@@ -282,6 +294,7 @@ class MatchReviewScreen(Static):
                     "No matches",
                     "0.00",
                     "Manual",
+                    "",
                 )
 
         return summary

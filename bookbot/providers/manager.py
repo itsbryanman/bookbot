@@ -231,6 +231,11 @@ class ProviderManager:
             confidence = min(1.0, confidence + 0.07 * (n_providers - 1))
             all_reasons.append(f"Corroborated by {n_providers} providers")
 
+        surviving_identity.raw_data = dict(surviving_identity.raw_data)
+        surviving_identity.raw_data["providers"] = sorted(
+            provider_names or {surviving_identity.provider}
+        )
+
         # Deduplicate reasons while preserving order
         seen: set[str] = set()
         unique_reasons: list[str] = []

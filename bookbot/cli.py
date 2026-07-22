@@ -55,6 +55,22 @@ def _resolve_config(
     return config_manager.load_config().model_copy(deep=True), None
 
 
+def _build_matching_provider(
+    config_manager: ConfigManager,
+    *,
+    metadata_from_files: bool = False,
+):
+    """Build the configured metadata provider stack for matching flows."""
+    if metadata_from_files:
+        from .providers.local import LocalMetadataProvider
+
+        return LocalMetadataProvider()
+
+    from .providers.manager import ProviderManager
+
+    return ProviderManager(config_manager)
+
+
 def _create_and_save_plan(
     config: Config,
     folder: Path,
@@ -238,10 +254,12 @@ def tui(
 
     try:
         # Import TUI app here to avoid issues if textual is not installed
-        from .providers.local import LocalMetadataProvider
         from .tui.app import BookBotApp
 
-        provider = LocalMetadataProvider() if metadata_from_files else None
+        provider = _build_matching_provider(
+            config_manager,
+            metadata_from_files=metadata_from_files,
+        )
         app = BookBotApp(config_manager, list(folders), provider=provider)
         app.run()
 
@@ -255,6 +273,74 @@ def tui(
     except Exception as e:
         click.echo(f"Error running TUI: {e}", err=True)
         sys.exit(1)
+
+
+@cli.command("match")
+@click.argument("folder", type=click.Path(exists=True, file_okay=False, path_type=Path))
+@click.option("--limit", type=int, default=5, show_default=True)
+@click.pass_context
+def match(ctx: click.Context, folder: Path, limit: int) -> None:
+    """Inspect merged metadata matches and the reasons behind them."""
+    import asyncio
+
+    config_manager = ctx.obj["config_manager"]
+    scanner = AudioFileScanner(recursive=True, max_depth=5)
+    audiobook_sets = scanner.scan_directory(folder)
+
+    if not audiobook_sets:
+        click.echo("No audiobooks found in the specified directory.")
+        return
+
+    provider = _build_matching_provider(config_manager)
+
+    async def inspect_matches() -> list[tuple]:
+        try:
+            results = []
+            for audiobook_set in audiobook_sets:
+                if hasattr(provider, "find_matches_merged"):
+                    candidates = await provider.find_matches_merged(
+                        audiobook_set,
+                        limit=limit,
+                    )
+                else:
+                    candidates = await provider.find_matches(
+                        audiobook_set,
+                        limit=limit,
+                    )
+                results.append((audiobook_set, candidates))
+            return results
+        finally:
+            if hasattr(provider, "close_all"):
+                await provider.close_all()
+            elif hasattr(provider, "close"):
+                await provider.close()
+
+    for audiobook_set, candidates in asyncio.run(inspect_matches()):
+        click.echo("")
+        click.echo(f"Set: {audiobook_set.source_path}")
+        click.echo(
+            f"Query: {audiobook_set.raw_title_guess or audiobook_set.source_path.name}"
+        )
+
+        if not candidates:
+            click.echo("  No matches found.")
+            continue
+
+        for index, candidate in enumerate(candidates, 1):
+            authors = ", ".join(candidate.identity.authors) or "Unknown author"
+            providers = candidate.identity.raw_data.get(
+                "providers",
+                [candidate.identity.provider],
+            )
+            provider_text = ", ".join(str(name) for name in providers)
+            reasons = "; ".join(candidate.match_reasons) or "No reasons provided"
+
+            click.echo(
+                f"  {index}. {candidate.confidence:.2f} - "
+                f"{candidate.identity.title} - {authors}"
+            )
+            click.echo(f"     Providers: {provider_text}")
+            click.echo(f"     Reasons: {reasons}")
 
 
 @cli.command()

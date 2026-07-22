@@ -26,7 +26,6 @@ from ..core.operations import TransactionManager
 from ..core.planning import PlanBuilder, format_plan_diff
 from ..providers.base import MetadataProvider
 from ..providers.manager import ProviderManager
-from ..providers.openlibrary import OpenLibraryProvider
 from .screens import (
     ConversionScreen,
     DRMLoginScreen,
@@ -310,7 +309,7 @@ class BookBotApp(App):
         self.source_folders = source_folders
         self.audiobook_sets: list[AudiobookSet] = []
         self.provider: MetadataProvider | ProviderManager = (
-            provider or OpenLibraryProvider()
+            provider or ProviderManager(config_manager)
         )
 
         # Application state

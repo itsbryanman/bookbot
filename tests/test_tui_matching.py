@@ -16,6 +16,7 @@ from bookbot.core.models import (
     ProviderIdentity,
 )
 from bookbot.providers.base import MetadataProvider
+from bookbot.providers.manager import ProviderManager
 from bookbot.tui.app import BookBotApp
 from bookbot.tui.screens import MatchReviewScreen, MatchSummary
 
@@ -24,7 +25,9 @@ class MatchHarness(App[None]):
     """Minimal Textual app for exercising the match review screen."""
 
     def __init__(
-        self, config_manager: ConfigManager, provider: MetadataProvider
+        self,
+        config_manager: ConfigManager,
+        provider: MetadataProvider | ProviderManager,
     ) -> None:
         super().__init__()
         self.config_manager = config_manager
@@ -124,8 +127,20 @@ async def test_match_review_screen_reports_failures_as_unmatched_rows(
             unmatched_count=2,
             failed_count=2,
         )
-        assert table.get_row_at(0) == ["Book One", "No matches", "0.00", "Manual"]
-        assert table.get_row_at(1) == ["Book Two", "No matches", "0.00", "Manual"]
+        assert table.get_row_at(0) == [
+            "Book One",
+            "No matches",
+            "0.00",
+            "Manual",
+            "",
+        ]
+        assert table.get_row_at(1) == [
+            "Book Two",
+            "No matches",
+            "0.00",
+            "Manual",
+            "",
+        ]
         assert all(book.chosen_identity is None for book in books)
         assert all(book.provider_candidates == [] for book in books)
 
@@ -176,12 +191,14 @@ async def test_match_review_screen_reports_mixed_success_and_failure_counts(
             "Found Match - Author Name",
             "0.91",
             "Accept",
+            "stub",
         ]
         assert table.get_row_at(1) == [
             "Broken Book",
             "No matches",
             "0.00",
             "Manual",
+            "",
         ]
         assert books[0].chosen_identity is not None
         assert books[0].chosen_identity.title == "Found Match"
@@ -232,6 +249,12 @@ async def test_bookbot_app_reports_partial_match_status(
         ).content
 
 
+def test_bookbot_app_defaults_to_provider_manager(tmp_path: Path) -> None:
+    app = BookBotApp(ConfigManager(tmp_path / "config"), [])
+
+    assert isinstance(app.provider, ProviderManager)
+
+
 @pytest.mark.asyncio
 async def test_bookbot_app_closes_provider_on_quit_action(tmp_path: Path) -> None:
     provider = BehaviorProvider()
@@ -242,6 +265,26 @@ async def test_bookbot_app_closes_provider_on_quit_action(tmp_path: Path) -> Non
         await pilot.pause()
 
     assert provider.close_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_bookbot_app_closes_provider_manager_on_quit_action(
+    tmp_path: Path,
+) -> None:
+    manager = object.__new__(ProviderManager)
+    close_calls = {"count": 0}
+
+    async def fake_close_all() -> None:
+        close_calls["count"] += 1
+
+    manager.close_all = fake_close_all  # type: ignore[method-assign]
+    app = BookBotApp(ConfigManager(tmp_path / "config"), [], provider=manager)
+
+    async with app.run_test() as pilot:
+        await app.action_quit()
+        await pilot.pause()
+
+    assert close_calls["count"] == 1
 
 
 @pytest.mark.asyncio
