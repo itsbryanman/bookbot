@@ -63,6 +63,16 @@ testing/
 *.wav
 *.aac
 *.opus
+# allow test fixture audio files
+!tests/fixtures/**/*.m4b
+!tests/fixtures/**/*.mp3
+!tests/fixtures/**/*.m4a
+!tests/fixtures/**/*.aax
+!tests/fixtures/**/*.flac
+!tests/fixtures/**/*.ogg
+!tests/fixtures/**/*.wav
+!tests/fixtures/**/*.aac
+!tests/fixtures/**/*.opus
 
 # Config and cache (user data)
 .bookbot/
