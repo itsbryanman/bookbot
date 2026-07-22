@@ -3,6 +3,7 @@
 import asyncio
 import os
 from asyncio import to_thread
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +22,7 @@ from textual.widgets import (
 )
 
 from ..config.manager import ConfigManager
+from ..core.logging import get_logger
 from ..core.models import AudiobookSet, MatchCandidate
 from ..core.operations import TransactionManager
 from ..core.planning import PlanBuilder
@@ -31,6 +33,17 @@ try:
     from ..drm.audible_client import AudibleAuthClient
 except Exception:  # pragma: no cover
     AudibleAuthClient = None  # type: ignore[assignment,misc]
+
+logger = get_logger("tui_screens")
+
+
+@dataclass(slots=True)
+class MatchSummary:
+    """Summary of a match run across the current audiobook queue."""
+
+    matched_count: int = 0
+    unmatched_count: int = 0
+    failed_count: int = 0
 
 
 class LoginSuccess(Message):
@@ -211,13 +224,14 @@ class MatchReviewScreen(Static):
         yield Label("Metadata Matches", classes="section-title")
         yield DataTable(id="matches_table")
 
-    async def find_matches(self, audiobook_sets: list[AudiobookSet]) -> None:
+    async def find_matches(self, audiobook_sets: list[AudiobookSet]) -> MatchSummary:
         """Find matches for audiobook sets using merged multi-provider results."""
         self.audiobook_sets = audiobook_sets
 
         table = self.query_one("#matches_table", DataTable)
         table.clear(columns=True)
         table.add_columns("Audiobook", "Best Match", "Confidence", "Action")
+        summary = MatchSummary()
 
         # Use ProviderManager.find_matches_merged when available
         if isinstance(self.provider, ProviderManager):
@@ -231,9 +245,18 @@ class MatchReviewScreen(Static):
         results = await asyncio.gather(*match_tasks, return_exceptions=True)
 
         for audiobook_set, result in zip(audiobook_sets, results, strict=False):
+            audiobook_set.provider_candidates = []
+            audiobook_set.chosen_identity = None
             candidates: list[MatchCandidate] = []
             if isinstance(result, BaseException):
-                candidates = []
+                summary.failed_count += 1
+                logger.warning(
+                    "Metadata provider failed during TUI matching",
+                    title_guess=(
+                        audiobook_set.raw_title_guess or audiobook_set.source_path.name
+                    ),
+                    error=str(result),
+                )
             else:
                 candidates = result
 
@@ -241,6 +264,7 @@ class MatchReviewScreen(Static):
                 best_match = candidates[0]
                 audiobook_set.provider_candidates = candidates
                 audiobook_set.chosen_identity = best_match.identity
+                summary.matched_count += 1
 
                 table.add_row(
                     audiobook_set.raw_title_guess or "Unknown",
@@ -252,12 +276,15 @@ class MatchReviewScreen(Static):
                     "Accept" if best_match.confidence > 0.85 else "Review",
                 )
             else:
+                summary.unmatched_count += 1
                 table.add_row(
                     audiobook_set.raw_title_guess or "Unknown",
-                    "No matches found",
+                    "No matches",
                     "0.00",
                     "Manual",
                 )
+
+        return summary
 
 
 class PreviewScreen(Static):

@@ -20,6 +20,7 @@ from textual.widgets import (
 
 from ..config.manager import ConfigManager
 from ..core.discovery import AudioFileScanner
+from ..core.logging import get_logger
 from ..core.models import AudiobookSet
 from ..core.operations import TransactionManager
 from ..core.planning import PlanBuilder, format_plan_diff
@@ -36,6 +37,8 @@ from .screens import (
     ScanResultsScreen,
     SourceSelectionScreen,
 )
+
+logger = get_logger("tui_app")
 
 
 class BookBotApp(App):
@@ -315,6 +318,7 @@ class BookBotApp(App):
         self.scanning_complete = False
         self.last_transaction_id: str | None = None
         self.warning_filter_enabled = False
+        self._provider_closed = False
 
     def compose(self) -> ComposeResult:
         """Create child widgets for the app."""
@@ -517,7 +521,7 @@ class BookBotApp(App):
 
         try:
             match_screen = self.query_one("#match_screen", MatchReviewScreen)
-            await match_screen.find_matches(self.audiobook_sets)
+            summary = await match_screen.find_matches(self.audiobook_sets)
 
             # Enable next step
             preview_button = self.query_one("#preview_changes", Button)
@@ -527,10 +531,34 @@ class BookBotApp(App):
             tabbed_content = self.query_one(TabbedContent)
             tabbed_content.active = "mission"
 
-            self.update_status("Matches found - review and confirm")
-            self.update_warning_panel(
-                "Metadata candidates loaded. Press p to preview the rename plan."
-            )
+            total_books = len(self.audiobook_sets)
+            if summary.matched_count == total_books:
+                self.update_status("Matches found - review and confirm")
+                self.update_warning_panel(
+                    "Metadata candidates loaded. Press p to preview the rename plan."
+                )
+            elif summary.matched_count == 0:
+                self.update_status("No matches found")
+                self.update_warning_panel(
+                    "No metadata candidates were found. Check network/providers, "
+                    "then try manual search if available."
+                )
+            else:
+                self.update_status(
+                    f"Matched {summary.matched_count} of {total_books} - "
+                    "review unmatched"
+                )
+                if summary.failed_count:
+                    self.update_warning_panel(
+                        f"{summary.unmatched_count} book(s) still need matches. "
+                        "Some providers failed, so check network/providers or try "
+                        "manual search if available."
+                    )
+                else:
+                    self.update_warning_panel(
+                        f"{summary.unmatched_count} book(s) still need matches. "
+                        "Review the unmatched rows or try manual search if available."
+                    )
 
         except Exception as e:
             self.update_status(f"Match finding failed: {e}")
@@ -699,12 +727,25 @@ class BookBotApp(App):
         self.update_status("Refreshing...")
         # TODO: Implement refresh logic
 
-    async def action_quit(self) -> None:
-        """Quit the application."""
-        # Close provider connections
-        if self.provider:
+    async def _close_provider(self) -> None:
+        """Close provider resources exactly once across all exit paths."""
+        if self._provider_closed or not self.provider:
+            return
+
+        self._provider_closed = True
+        try:
             if isinstance(self.provider, ProviderManager):
                 await self.provider.close_all()
             else:
                 await self.provider.close()
+        except Exception as e:
+            logger.warning("Failed to close TUI provider", error=str(e))
+
+    async def on_unmount(self) -> None:
+        """Ensure provider teardown also runs on abort and direct exit paths."""
+        await self._close_provider()
+
+    async def action_quit(self) -> None:
+        """Quit the application."""
+        await self._close_provider()
         self.exit()
