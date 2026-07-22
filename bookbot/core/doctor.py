@@ -7,11 +7,11 @@ import shutil
 import subprocess
 import sys
 import tempfile
-from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from ..config.models import Config
+from .dedupe import DedupeEngine
 from .discovery import AudioFileScanner
 from .planning import PlanBuilder
 
@@ -229,10 +229,14 @@ class LibraryDoctor:
         else:
             report.add("ok", "Folder structure compatible")
 
-        duplicate_titles = self._find_duplicate_titles(audiobook_sets)
+        duplicate_titles = self._find_duplicate_title_groups(
+            library_path,
+            audiobook_sets,
+        )
         if duplicate_titles:
             report.add(
-                "warn", f"{duplicate_titles} duplicate title grouping(s) detected"
+                "warn",
+                self._format_duplicate_title_warning(duplicate_titles),
             )
         else:
             report.add("ok", "No duplicate titles detected")
@@ -316,25 +320,24 @@ class LibraryDoctor:
         else:
             report.add("ok", "Filenames are Windows/Samba-safe")
 
-        duplicate_files = self._find_duplicate_files(library_path)
+        duplicate_files = self._find_duplicate_file_groups(library_path)
         if duplicate_files:
             report.add(
-                "warn", f"{duplicate_files} potential duplicate file(s) detected"
+                "warn",
+                self._format_duplicate_file_warning(duplicate_files),
             )
         else:
             report.add("ok", "No obvious duplicate files detected")
 
-    def _find_duplicate_titles(self, audiobook_sets: list) -> int:
-        counter: Counter[tuple[str, str]] = Counter()
-        for audiobook_set in audiobook_sets:
-            title = (
-                (audiobook_set.raw_title_guess or audiobook_set.source_path.name)
-                .strip()
-                .lower()
-            )
-            author = (audiobook_set.author_guess or "").strip().lower()
-            counter[(author, title)] += 1
-        return sum(1 for count in counter.values() if count > 1)
+    def _find_duplicate_title_groups(
+        self, library_path: Path, audiobook_sets: list
+    ) -> list[list[str]]:
+        engine = DedupeEngine(library_path)
+        groups = engine.analyze_editions(audiobook_sets)
+        return [
+            [str(candidate.audiobook_set.source_path) for candidate in group.members]
+            for group in groups
+        ]
 
     def _count_missing_covers(self, audiobook_sets: list) -> int:
         missing = 0
@@ -360,12 +363,31 @@ class LibraryDoctor:
                 unsafe.append(path)
         return unsafe
 
-    def _find_duplicate_files(self, library_path: Path) -> int:
-        candidates: defaultdict[tuple[str, int], list[Path]] = defaultdict(list)
-        for path in library_path.rglob("*"):
-            if path.is_file():
-                try:
-                    candidates[(path.name.lower(), path.stat().st_size)].append(path)
-                except OSError:
-                    continue
-        return sum(len(paths) for paths in candidates.values() if len(paths) > 1)
+    def _find_duplicate_file_groups(self, library_path: Path) -> list[list[str]]:
+        engine = DedupeEngine(library_path)
+        groups = engine.analyze_files()
+        return [[str(path) for path in group.paths] for group in groups]
+
+    def _format_duplicate_title_warning(self, groups: list[list[str]]) -> str:
+        """Render duplicate edition warnings with example paths."""
+        return self._format_duplicate_warning(
+            groups,
+            prefix=f"{len(groups)} duplicate edition group(s) detected",
+        )
+
+    def _format_duplicate_file_warning(self, groups: list[list[str]]) -> str:
+        """Render duplicate file warnings with example paths."""
+        return self._format_duplicate_warning(
+            groups,
+            prefix=f"{len(groups)} potential duplicate file group(s) detected",
+        )
+
+    def _format_duplicate_warning(
+        self, groups: list[list[str]], *, prefix: str
+    ) -> str:
+        """Format up to three duplicate groups with concrete paths."""
+        lines = [prefix]
+        for index, group in enumerate(groups[:3], 1):
+            lines.append(f"  Example {index}:")
+            lines.extend(f"    {path}" for path in group)
+        return "\n".join(lines)

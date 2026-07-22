@@ -2738,17 +2738,12 @@ def dedupe(
     from .core.discovery import AudioFileScanner
 
     if audio_hash:
-        if shutil.which("ffmpeg") is None:
-            click.echo(
-                "Error: ffmpeg is required for --audio-hash but was not found "
-                "on PATH.",
-                err=True,
-            )
-            sys.exit(1)
         click.echo(
-            "Note: --audio-hash is not wired into dedupe analysis yet; "
-            "continuing with byte-hash detection only."
+            "Error: --audio-hash is not implemented yet. Refusing to continue "
+            "with byte-hash-only dedupe.",
+            err=True,
         )
+        sys.exit(1)
 
     scanner = AudioFileScanner(recursive=True, max_depth=5)
     audiobook_sets = scanner.scan_directory(folder)
