@@ -237,6 +237,7 @@ class AudioFileScanner:
         # Extract majority ISBN/ASIN from track tags
         isbn_guess = self._majority_identifier(tracks, "isbn")
         asin_guess = self._majority_identifier(tracks, "asin")
+        narrator_guess = self._consistent_track_tag_value(tracks, "narrator")
 
         audiobook_set = AudiobookSet(
             source_path=source_path,
@@ -244,6 +245,7 @@ class AudioFileScanner:
             author_guess=author_guess,
             series_guess=series_guess,
             volume_guess=volume_guess,
+            narrator_guess=narrator_guess,
             isbn_guess=isbn_guess,
             asin_guess=asin_guess,
             disc_count=disc_count,
@@ -340,6 +342,15 @@ class AudioFileScanner:
                     "ASIN",
                     "----:com.apple.iTunes:ASIN",
                     "CDEK",
+                ],
+                "narrator": [
+                    "\xa9nrt",
+                    "----:com.apple.iTunes:NARRATOR",
+                    "TXXX:NARRATEDBY",
+                    "TXXX:NARRATOR",
+                    "narrator",
+                    "narratedby",
+                    "TCOM",
                 ],
             }
 
@@ -529,6 +540,16 @@ class AudioFileScanner:
         if count > len(values) / 2:
             return most_common_val
         return None
+
+    @staticmethod
+    def _consistent_track_tag_value(tracks: list[Track], field: str) -> str | None:
+        """Return a shared text tag when the sampled tracks agree."""
+        values = {
+            str(value)
+            for track in tracks[:5]
+            if (value := getattr(track.existing_tags, field, None))
+        }
+        return next(iter(values)) if len(values) == 1 else None
 
     def _extract_metadata_guesses(
         self, source_path: Path, tracks: list[Track]

@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 from mutagen.flac import FLAC
-from mutagen.id3 import TALB, TIT2, TPE1, TPOS, TRCK
+from mutagen.id3 import TALB, TCOM, TIT2, TPE1, TPOS, TRCK, TXXX
 from mutagen.mp3 import MP3
 from mutagen.mp4 import MP4, MP4FreeForm
 
@@ -44,7 +44,13 @@ def _write_silent_audio(path: Path, codec_args: list[str]) -> None:
     )
 
 
-def _write_tagged_mp3(path: Path) -> None:
+def _write_tagged_mp3(
+    path: Path,
+    *,
+    narrator: str | None = None,
+    narrator_frame: str = "NARRATEDBY",
+    composer: str | None = None,
+) -> None:
     _write_silent_audio(path, ["-c:a", "libmp3lame"])
 
     audio = MP3(path)
@@ -55,7 +61,37 @@ def _write_tagged_mp3(path: Path) -> None:
     audio.tags.add(TPE1(encoding=3, text=["The Artist"]))
     audio.tags.add(TRCK(encoding=3, text=["3/12"]))
     audio.tags.add(TPOS(encoding=3, text=["1/2"]))
+    if narrator is not None:
+        audio.tags.add(TXXX(encoding=3, desc=narrator_frame, text=[narrator]))
+    if composer is not None:
+        audio.tags.add(TCOM(encoding=3, text=[composer]))
     audio.save()
+
+
+def _write_tagged_m4b(path: Path, *, narrator: str | None = None) -> None:
+    _write_silent_audio(path, ["-c:a", "aac"])
+
+    audio = MP4(path)
+    if narrator is not None:
+        audio["\xa9nrt"] = [narrator]
+    audio.save()
+
+
+def _write_tagged_flac(path: Path, *, narrator: str | None = None) -> None:
+    _write_silent_audio(path, ["-c:a", "flac"])
+
+    audio = FLAC(path)
+    if narrator is not None:
+        audio["narrator"] = [narrator]
+    audio.save()
+
+
+def _scan_single_file(tmp_path: Path, filename: str) -> str | None:
+    audiobook_sets = AudioFileScanner().scan_directory(tmp_path)
+
+    assert len(audiobook_sets) == 1
+    assert audiobook_sets[0].tracks[0].src_path.name == filename
+    return audiobook_sets[0].narrator_guess
 
 
 @pytest.mark.requires_ffmpeg
@@ -114,6 +150,56 @@ def test_extract_audio_tags_normalizes_vorbis_comments(tmp_path: Path) -> None:
     assert tags.album == "The Album"
     assert tags.artist == "The Artist"
     assert tags.track == 3
+
+
+@pytest.mark.requires_ffmpeg
+def test_scan_directory_extracts_narrator_guess_from_mp4_atom(
+    tmp_path: Path,
+) -> None:
+    file_path = tmp_path / "Book.m4b"
+    _write_tagged_m4b(file_path, narrator="Julia Whelan")
+
+    assert _scan_single_file(tmp_path, file_path.name) == "Julia Whelan"
+
+
+@pytest.mark.requires_ffmpeg
+def test_scan_directory_extracts_narrator_guess_from_mp3_narratedby_frame(
+    tmp_path: Path,
+) -> None:
+    file_path = tmp_path / "Book.mp3"
+    _write_tagged_mp3(file_path, narrator="Ray Porter")
+
+    assert _scan_single_file(tmp_path, file_path.name) == "Ray Porter"
+
+
+@pytest.mark.requires_ffmpeg
+def test_scan_directory_uses_tcom_as_low_priority_narrator_fallback(
+    tmp_path: Path,
+) -> None:
+    file_path = tmp_path / "Book.mp3"
+    _write_tagged_mp3(file_path, composer="Bahni Turpin")
+
+    assert _scan_single_file(tmp_path, file_path.name) == "Bahni Turpin"
+
+
+@pytest.mark.requires_ffmpeg
+def test_scan_directory_extracts_narrator_guess_from_vorbis_comments(
+    tmp_path: Path,
+) -> None:
+    file_path = tmp_path / "Book.flac"
+    _write_tagged_flac(file_path, narrator="George Guidall")
+
+    assert _scan_single_file(tmp_path, file_path.name) == "George Guidall"
+
+
+@pytest.mark.requires_ffmpeg
+def test_scan_directory_leaves_narrator_guess_empty_without_supported_tags(
+    tmp_path: Path,
+) -> None:
+    file_path = tmp_path / "Book.mp3"
+    _write_tagged_mp3(file_path)
+
+    assert _scan_single_file(tmp_path, file_path.name) is None
 
 
 @pytest.mark.parametrize(
