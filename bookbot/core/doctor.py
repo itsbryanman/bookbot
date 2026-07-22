@@ -12,7 +12,11 @@ from pathlib import Path
 
 from ..config.models import Config
 from .dedupe import DedupeEngine
-from .discovery import AudioFileScanner
+from .discovery import (
+    QUARANTINE_DIRNAME,
+    AudioFileScanner,
+    iter_files_excluding_quarantine,
+)
 from .planning import PlanBuilder
 
 
@@ -209,6 +213,10 @@ class LibraryDoctor:
         else:
             report.add("warn", "Library directory is read-only")
 
+        quarantine_summary = self._quarantine_summary(library_path)
+        if quarantine_summary is not None:
+            report.add("warn", self._format_quarantine_summary(*quarantine_summary))
+
         audiobook_sets = self.scanner.scan_directory(library_path)
         if audiobook_sets:
             report.add("ok", f"Detected {len(audiobook_sets)} audiobook set(s)")
@@ -349,19 +357,47 @@ class LibraryDoctor:
 
     def _find_unsupported_formats(self, library_path: Path) -> list[Path]:
         unsupported = []
-        for path in library_path.rglob("*"):
+        for path in iter_files_excluding_quarantine(library_path):
             if path.is_file() and path.suffix.lower() in self.AUDIOISH_EXTENSIONS:
                 unsupported.append(path)
         return unsupported
 
     def _find_unsafe_filenames(self, library_path: Path) -> list[Path]:
         unsafe = []
-        for path in library_path.rglob("*"):
+        for path in iter_files_excluding_quarantine(library_path):
             if path.is_file() and any(
                 char in self.FORBIDDEN_FILENAME_CHARS for char in path.name
             ):
                 unsafe.append(path)
         return unsafe
+
+    def _quarantine_summary(self, library_path: Path) -> tuple[int, int] | None:
+        """Summarize quarantine state under the scanned library root."""
+        quarantine_root = library_path / QUARANTINE_DIRNAME
+        if not quarantine_root.exists() or not quarantine_root.is_dir():
+            return None
+
+        transaction_dirs = [path for path in quarantine_root.iterdir() if path.is_dir()]
+        total_size = 0
+        for path in quarantine_root.rglob("*"):
+            if not path.is_file():
+                continue
+            try:
+                total_size += path.stat().st_size
+            except OSError:
+                continue
+
+        return len(transaction_dirs), total_size
+
+    def _format_quarantine_summary(
+        self, transaction_count: int, total_size: int
+    ) -> str:
+        """Render an actionable quarantine summary for doctor output."""
+        return (
+            "Quarantine contains "
+            f"{transaction_count} transaction(s) totaling {total_size} bytes. "
+            "Use 'bookbot history' or 'bookbot undo <id>' to review or restore."
+        )
 
     def _find_duplicate_file_groups(self, library_path: Path) -> list[list[str]]:
         engine = DedupeEngine(library_path)

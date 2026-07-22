@@ -30,6 +30,10 @@ from pathlib import Path
 from rapidfuzz import fuzz
 
 from ..config.manager import ConfigManager
+from .discovery import (
+    is_within_quarantine_tree,
+    iter_files_excluding_quarantine,
+)
 from .health import COVER_NAMES, IMAGE_EXTENSIONS
 from .matching import AdvancedMatcher
 from .models import AudiobookSet, AudioFormat, OperationRecord
@@ -116,6 +120,18 @@ class DedupePlan:
             if op.destination.exists():
                 return True
         return False
+
+    def validate_sources_outside_quarantine(self) -> None:
+        """Reject plans that try to move files already inside quarantine."""
+        invalid_sources = [
+            op.source for op in self.operations if is_within_quarantine_tree(op.source)
+        ]
+        if invalid_sources:
+            sample = ", ".join(str(path) for path in invalid_sources[:3])
+            raise ValueError(
+                "Plan includes source path(s) inside .bookbot-quarantine: "
+                f"{sample}"
+            )
 
     def to_dict(self) -> dict:
         return {
@@ -332,7 +348,7 @@ class DedupeEngine:
 
         # Stage 1: group by exact size
         size_groups: dict[int, list[Path]] = defaultdict(list)
-        for f in self.library_root.rglob("*"):
+        for f in iter_files_excluding_quarantine(self.library_root):
             if not f.is_file():
                 continue
             if f.suffix.lower() not in audio_extensions:
@@ -475,10 +491,12 @@ class DedupeEngine:
 
                 plan.file_groups.append(fg_info)
 
+        plan.validate_sources_outside_quarantine()
         return plan
 
     def execute_plan(self, plan: DedupePlan, config_manager: ConfigManager) -> None:
         """Execute a quarantine plan (move files)."""
+        plan.validate_sources_outside_quarantine()
         if plan.has_conflicts():
             raise ValueError(
                 "Plan has conflicts — destination files already exist"

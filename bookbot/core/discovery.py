@@ -2,6 +2,7 @@
 
 import re
 from collections import Counter
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -16,6 +17,29 @@ _ISBN_RE = re.compile(r"^\d{9}[\dXx]$|^\d{13}$")
 # ASIN validation: B0 followed by 8 alphanumeric chars
 _ASIN_RE = re.compile(r"^B0[A-Z0-9]{8}$", re.IGNORECASE)
 _IMPLAUSIBLE_AUTHOR_RE = re.compile(r"^[A-Z]{1,4}\s*\d+$")
+QUARANTINE_DIRNAME = ".bookbot-quarantine"
+
+
+def is_within_quarantine_tree(path: Path) -> bool:
+    """Check whether a path lives under a BookBot quarantine directory."""
+    return QUARANTINE_DIRNAME in path.parts
+
+
+def iter_files_excluding_quarantine(root: Path) -> Iterator[Path]:
+    """Yield files under ``root`` while skipping quarantine trees entirely."""
+    if root.name == QUARANTINE_DIRNAME:
+        return
+
+    try:
+        for item in root.iterdir():
+            if item.is_dir():
+                if item.name == QUARANTINE_DIRNAME:
+                    continue
+                yield from iter_files_excluding_quarantine(item)
+            elif item.is_file():
+                yield item
+    except PermissionError:
+        return
 
 
 @dataclass(frozen=True)
@@ -93,19 +117,26 @@ class AudioFileScanner:
 
     def _find_audio_files(self, path: Path, current_depth: int = 0) -> list[Path]:
         """Recursively find all audio files in a directory."""
+        if path.name == QUARANTINE_DIRNAME:
+            return []
+
         audio_files = []
 
         try:
             for item in path.iterdir():
                 if item.is_file() and item.suffix.lower() in self.SUPPORTED_EXTENSIONS:
                     audio_files.append(item)
-                elif (
-                    item.is_dir()
-                    and self.recursive
-                    and current_depth < self.max_depth
-                    and not item.name.startswith(".")
-                ):
-                    audio_files.extend(self._find_audio_files(item, current_depth + 1))
+                elif item.is_dir():
+                    if item.name == QUARANTINE_DIRNAME:
+                        continue
+                    if (
+                        self.recursive
+                        and current_depth < self.max_depth
+                        and not item.name.startswith(".")
+                    ):
+                        audio_files.extend(
+                            self._find_audio_files(item, current_depth + 1)
+                        )
         except PermissionError:
             # Skip directories we can't read
             pass

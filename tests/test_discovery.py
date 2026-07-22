@@ -177,6 +177,41 @@ class TestAudioFileScanner:
         assert all(f.suffix == ".mp3" for f in files)
         assert all("Chapter" in f.stem or "Prologue" in f.stem for f in files)
 
+    def test_scan_directory_ignores_quarantine_tree(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        scanner = AudioFileScanner(recursive=True, max_depth=4)
+        visible_file = tmp_path / "Visible Book.m4b"
+        visible_file.touch()
+
+        quarantined_file = (
+            tmp_path
+            / ".bookbot-quarantine"
+            / "tx-1"
+            / "Hidden Duplicate.m4b"
+        )
+        quarantined_file.parent.mkdir(parents=True)
+        quarantined_file.touch()
+
+        self._patch_audio_metadata(
+            scanner,
+            monkeypatch,
+            {
+                visible_file: AudioTags(album="Visible Book", artist="Author"),
+                quarantined_file: AudioTags(album="Hidden Duplicate", artist="Author"),
+            },
+            {
+                visible_file: 8_000,
+                quarantined_file: 8_000,
+            },
+        )
+
+        audiobook_sets = scanner.scan_directory(tmp_path)
+
+        assert len(audiobook_sets) == 1
+        assert audiobook_sets[0].source_path == tmp_path
+        assert [track.src_path for track in audiobook_sets[0].tracks] == [visible_file]
+
     def test_group_files_by_audiobook(self, temp_audio_structure):
         """Test grouping files into audiobook sets."""
         scanner = AudioFileScanner()

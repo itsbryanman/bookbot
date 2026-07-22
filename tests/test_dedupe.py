@@ -284,6 +284,35 @@ class TestStagedHashing:
         groups = engine.analyze_files()
         assert len(groups) == 0
 
+    def test_analyze_files_ignores_quarantine_tree(self, tmp_path: Path) -> None:
+        lib = tmp_path / "lib"
+        visible_a = lib / "visible-a"
+        visible_b = lib / "visible-b"
+        visible_a.mkdir(parents=True)
+        visible_b.mkdir(parents=True)
+        (visible_a / "track.mp3").write_bytes(b"same-visible")
+        (visible_b / "track.mp3").write_bytes(b"same-visible")
+
+        quarantined_a = lib / ".bookbot-quarantine" / "tx-1" / "hidden-a"
+        quarantined_b = lib / ".bookbot-quarantine" / "tx-1" / "hidden-b"
+        quarantined_a.mkdir(parents=True)
+        quarantined_b.mkdir(parents=True)
+        (quarantined_a / "track.mp3").write_bytes(b"same-hidden")
+        (quarantined_b / "track.mp3").write_bytes(b"same-hidden")
+
+        engine = DedupeEngine(lib)
+        groups = engine.analyze_files()
+
+        assert len(groups) == 1
+        assert len(groups[0].paths) == 2
+        assert all(".bookbot-quarantine" not in path.parts for path in groups[0].paths)
+
+        plan = engine.build_plan(file_groups=groups)
+        assert len(plan.operations) == 1
+        assert all(
+            ".bookbot-quarantine" not in op.source.parts for op in plan.operations
+        )
+
 
 # ── Plan quarantine and undo ──
 
@@ -418,6 +447,45 @@ class TestPlanAndUndo:
         assert plan.has_conflicts()
         with pytest.raises(ValueError, match="conflicts"):
             engine.execute_plan(plan, config_manager)
+
+    def test_execute_plan_rejects_quarantine_sources(
+        self, tmp_path: Path, config_manager
+    ) -> None:
+        lib = tmp_path / "lib"
+        quarantined_source = (
+            lib / ".bookbot-quarantine" / "old-tx" / "nested" / "track.mp3"
+        )
+        quarantined_source.parent.mkdir(parents=True)
+        quarantined_source.write_bytes(b"already quarantined")
+
+        plan = DedupePlan(
+            plan_id="bad-plan",
+            created_at="2026-07-22T00:00:00",
+            library_root=str(lib),
+            quarantine_root=str(lib / ".bookbot-quarantine" / "new-tx"),
+            operations=[
+                QuarantineOp(
+                    source=quarantined_source,
+                    destination=(
+                        lib
+                        / ".bookbot-quarantine"
+                        / "new-tx"
+                        / ".bookbot-quarantine"
+                        / "old-tx"
+                        / "nested"
+                        / "track.mp3"
+                    ),
+                    reason="should be rejected",
+                )
+            ],
+        )
+
+        engine = DedupeEngine(lib)
+
+        with pytest.raises(ValueError, match=r"\.bookbot-quarantine"):
+            engine.execute_plan(plan, config_manager)
+
+        assert quarantined_source.exists()
 
     def test_dry_run_touches_no_files(self, tmp_path: Path) -> None:
         """Dry-run (just building the plan) should not modify any files."""
