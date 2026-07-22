@@ -274,6 +274,25 @@ class PreviewScreen(Static):
         yield Label("Preview Changes", classes="section-title")
         yield DataTable(id="preview_table")
 
+    @staticmethod
+    def _format_preview_path(path: Path, common_root: Path) -> str:
+        """Render a readable relative path when the destination is nearby."""
+        try:
+            relative_path = Path(os.path.relpath(path, common_root))
+        except ValueError:
+            return str(path)
+
+        leading_parents = 0
+        for part in relative_path.parts:
+            if part != "..":
+                break
+            leading_parents += 1
+
+        if leading_parents > 2:
+            return str(path)
+
+        return str(relative_path)
+
     def set_audiobook_sets(self, audiobook_sets: list[AudiobookSet]) -> None:
         """Set audiobook sets and generate preview."""
         self.audiobook_sets = audiobook_sets
@@ -303,9 +322,9 @@ class PreviewScreen(Static):
                 current_name = track.src_path.name
                 operation = operations_by_source.get(track.src_path)
                 proposed_name = (
-                    str(operation.new_path.relative_to(common_root))
+                    self._format_preview_path(operation.new_path, common_root)
                     if operation is not None
-                    else str(track.src_path.relative_to(common_root))
+                    else self._format_preview_path(track.src_path, common_root)
                 )
                 status = "✓ Ready" if operation is not None else "→ No change"
                 table.add_row(current_name, proposed_name, status)
