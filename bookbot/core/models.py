@@ -219,7 +219,7 @@ class AudiobookSet(BaseModel):
             # Check for gaps in track numbering
             track_numbers = sorted([t.track_index for t in disc_tracks])
             expected = list(range(1, len(track_numbers) + 1))
-            if track_numbers != expected:
+            if len(track_numbers) > 1 and track_numbers != expected:
                 issues.append(
                     f"Disc {disc} has gaps in track numbering: {track_numbers}"
                 )

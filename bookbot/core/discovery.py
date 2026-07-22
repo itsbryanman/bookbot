@@ -15,6 +15,7 @@ from .models import AudiobookSet, AudioFormat, AudioTags, Track, TrackStatus
 _ISBN_RE = re.compile(r"^\d{9}[\dXx]$|^\d{13}$")
 # ASIN validation: B0 followed by 8 alphanumeric chars
 _ASIN_RE = re.compile(r"^B0[A-Z0-9]{8}$", re.IGNORECASE)
+_IMPLAUSIBLE_AUTHOR_RE = re.compile(r"^[A-Z]{1,4}\s*\d+$")
 
 
 @dataclass(frozen=True)
@@ -707,11 +708,11 @@ class AudioFileScanner:
             return title_guess, None, series_name, volume
 
         # Try author - title pattern
-        author_title_match = re.search(r"^(.+?)\s*[-–—]\s*(.+)$", folder_name)
-        if author_title_match:
-            author_guess = author_title_match.group(1).strip()
-            title_guess = author_title_match.group(2).strip()
-            return title_guess, author_guess, None, None
+        title_guess, author_guess = self._author_title_guess(folder_name)
+        if title_guess is not None:
+            if author_guess is not None:
+                return title_guess, author_guess, None, None
+            folder_name = title_guess
 
         # Look for consistent album/artist info in track tags
         albums = set()
@@ -736,7 +737,7 @@ class AudioFileScanner:
             if len(albumartists) == 1
             else artists.pop()
             if len(artists) == 1
-            else None
+            else self._parent_author_guess(source_path.parent)
         )
 
         return title_guess, author_guess, None, None
@@ -786,10 +787,11 @@ class AudioFileScanner:
         filename_title, filename_author, series_guess, volume_guess = (
             self._extract_name_guesses(track.src_path.stem)
         )
+        parent_author = self._parent_author_guess(track.src_path.parent)
 
         return (
             title_guess or filename_title,
-            author_guess or filename_author,
+            author_guess or filename_author or parent_author,
             series_guess,
             volume_guess,
         )
@@ -808,13 +810,50 @@ class AudioFileScanner:
             volume = series_match.group(2)
             return cleaned_name, None, series_name, volume
 
-        author_title_match = re.search(r"^(.+?)\s*[-–—]\s*(.+)$", cleaned_name)
-        if author_title_match:
-            author_guess = author_title_match.group(1).strip()
-            title_guess = author_title_match.group(2).strip()
+        title_guess, author_guess = self._author_title_guess(cleaned_name)
+        if title_guess is not None:
             return title_guess, author_guess, None, None
 
         return cleaned_name or None, None, None, None
+
+    def _author_title_guess(
+        self, cleaned_name: str
+    ) -> tuple[str | None, str | None]:
+        """Split `Author - Title` names while rejecting implausible authors."""
+        author_title_match = re.search(r"^(.+?)\s*[-–—]\s*(.+)$", cleaned_name)
+        if author_title_match is None:
+            return None, None
+
+        author_guess = author_title_match.group(1).strip()
+        title_guess = author_title_match.group(2).strip()
+        if self._is_implausible_author_guess(author_guess):
+            return title_guess, None
+        return title_guess, author_guess
+
+    def _parent_author_guess(self, parent_path: Path) -> str | None:
+        """Extract a plausible author from a parent folder name."""
+        _, parent_author = self._author_title_guess(
+            self._clean_metadata_name(parent_path.name)
+        )
+        return parent_author
+
+    def _is_implausible_author_guess(self, author_guess: str) -> bool:
+        """Reject short codes and heavily numeric prefixes as author guesses."""
+        cleaned_author = author_guess.strip()
+        if not cleaned_author:
+            return False
+
+        if _IMPLAUSIBLE_AUTHOR_RE.fullmatch(cleaned_author):
+            return True
+
+        non_space = [char for char in cleaned_author if not char.isspace()]
+        if non_space:
+            digit_ratio = sum(char.isdigit() for char in non_space) / len(non_space)
+            if digit_ratio > 0.5:
+                return True
+
+        tokens = cleaned_author.split()
+        return len(tokens) == 1 and len(tokens[0]) <= 3
 
     def _clean_metadata_name(self, raw_name: str) -> str:
         """Remove common noise from folder names and filename stems."""

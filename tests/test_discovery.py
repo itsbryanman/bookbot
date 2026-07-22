@@ -341,3 +341,78 @@ class TestAudioFileScanner:
         assert audiobook.author_guess == "Author"
         assert audiobook.disc_count == 15
         assert [track.disc for track in audiobook.tracks] == list(range(1, 16))
+
+    def test_single_file_uses_parent_author_when_dash_split_author_is_implausible(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        scanner = AudioFileScanner(recursive=True, max_depth=3)
+        book_dir = tmp_path / "Donald J. Sobol - Encyclopedia Brown"
+        book_dir.mkdir()
+        book_file = book_dir / "EB 01 - Encyclopedia Brown and the Case.m4b"
+        book_file.touch()
+
+        self._patch_audio_metadata(
+            scanner,
+            monkeypatch,
+            {book_file: AudioTags()},
+            {book_file: 8_000},
+        )
+
+        audiobook_sets = scanner.scan_directory(tmp_path)
+
+        assert len(audiobook_sets) == 1
+        assert audiobook_sets[0].author_guess == "Donald J. Sobol"
+
+    def test_single_file_does_not_warn_about_track_gaps(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        scanner = AudioFileScanner(recursive=True, max_depth=2)
+        book_file = tmp_path / "Single Book.m4b"
+        book_file.touch()
+
+        self._patch_audio_metadata(
+            scanner,
+            monkeypatch,
+            {book_file: AudioTags(track=14)},
+            {book_file: 8_000},
+        )
+
+        audiobook_sets = scanner.scan_directory(tmp_path)
+
+        assert len(audiobook_sets) == 1
+        assert not any(
+            "gaps in track numbering" in warning
+            for warning in audiobook_sets[0].warnings
+        )
+
+    def test_multi_track_sets_still_warn_about_track_gaps(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        scanner = AudioFileScanner(recursive=True, max_depth=2)
+        book_dir = tmp_path / "Gap Book"
+        book_dir.mkdir()
+        track_one = book_dir / "01 - Chapter.mp3"
+        track_three = book_dir / "03 - Chapter.mp3"
+        track_one.touch()
+        track_three.touch()
+
+        self._patch_audio_metadata(
+            scanner,
+            monkeypatch,
+            {
+                track_one: AudioTags(track=1),
+                track_three: AudioTags(track=3),
+            },
+            {
+                track_one: 120.0,
+                track_three: 120.0,
+            },
+        )
+
+        audiobook_sets = scanner.scan_directory(tmp_path)
+
+        assert len(audiobook_sets) == 1
+        assert any(
+            "gaps in track numbering" in warning
+            for warning in audiobook_sets[0].warnings
+        )
