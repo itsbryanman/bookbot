@@ -182,6 +182,8 @@ def scan(
                 click.echo(f"   Title: {audiobook_set.raw_title_guess}")
             if audiobook_set.author_guess:
                 click.echo(f"   Author: {audiobook_set.author_guess}")
+            if audiobook_set.asin_guess:
+                click.echo(f"   ASIN: {audiobook_set.asin_guess}")
 
             if audiobook_set.warnings:
                 click.echo("   Warnings:")

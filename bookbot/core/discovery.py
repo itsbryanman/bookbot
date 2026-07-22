@@ -16,6 +16,7 @@ from .models import AudiobookSet, AudioFormat, AudioTags, Track, TrackStatus
 _ISBN_RE = re.compile(r"^\d{9}[\dXx]$|^\d{13}$")
 # ASIN validation: B0 followed by 8 alphanumeric chars
 _ASIN_RE = re.compile(r"^B0[A-Z0-9]{8}$", re.IGNORECASE)
+_ASIN_SEARCH_RE = re.compile(r"\b(B0[A-Z0-9]{8})\b", re.IGNORECASE)
 _IMPLAUSIBLE_AUTHOR_RE = re.compile(r"^[A-Z]{1,4}\s*\d+$")
 _PERSONAL_NAME_TOKEN_RE = re.compile(
     r"^(?:[A-Z][A-Za-z'`-]*|[A-Z](?:\.[A-Z])+\.?|[A-Z]\.)$"
@@ -492,9 +493,13 @@ class AudioFileScanner:
                 ],
                 "asin": [
                     "TXXX:ASIN",
+                    "TXXX:AUDIBLE_ASIN",
                     "ASIN",
+                    "asin",
                     "----:com.apple.iTunes:ASIN",
+                    "----:com.pilabor.tone:AUDIBLE_ASIN",
                     "CDEK",
+                    "WOAS",
                 ],
                 "narrator": [
                     "\xa9nrt",
@@ -530,13 +535,16 @@ class AudioFileScanner:
                             continue
                         value = cleaned
                     elif field == "asin":
-                        cleaned = value.strip()
-                        if not _ASIN_RE.match(cleaned):
+                        normalized_asin = self._extract_asin_from_text(value)
+                        if normalized_asin is None:
                             continue
-                        value = cleaned.upper()
+                        value = normalized_asin
 
                     setattr(tags, field, value)
                     break
+
+            if tags.asin is None:
+                tags.asin = self._extract_asin_from_url_tags(audio_file)
 
             # Store raw tags for preservation
             try:
@@ -563,6 +571,9 @@ class AudioFileScanner:
 
         if hasattr(value, "text"):
             return self._normalize_tag_scalar(value.text)
+
+        if hasattr(value, "url"):
+            return self._normalize_tag_scalar(value.url)
 
         if isinstance(value, (list, tuple)):
             for item in value:
@@ -597,6 +608,9 @@ class AudioFileScanner:
         if hasattr(value, "text"):
             return self._normalize_raw_tag_value(value.text)
 
+        if hasattr(value, "url"):
+            return self._normalize_raw_tag_value(value.url)
+
         if isinstance(value, (list, tuple)):
             normalized_items = [
                 normalized
@@ -610,6 +624,40 @@ class AudioFileScanner:
 
         text = str(value).strip()
         return text or None
+
+    def _extract_asin_from_text(self, value: str) -> str | None:
+        """Extract a valid Audible-style ASIN from freeform tag text."""
+        cleaned = value.strip()
+        if _ASIN_RE.match(cleaned):
+            return cleaned.upper()
+
+        match = _ASIN_SEARCH_RE.search(cleaned)
+        if match is None:
+            return None
+
+        candidate = match.group(1).upper()
+        return candidate if _ASIN_RE.match(candidate) else None
+
+    def _extract_asin_from_url_tags(self, audio_file: object) -> str | None:
+        """Search URL-style tag frames for Audible product links."""
+        try:
+            items = audio_file.items()
+        except Exception:
+            return None
+
+        for key, raw_value in items:
+            key_name = str(key).upper()
+            if not (key_name.startswith("WOAS") or key_name.startswith("WXXX")):
+                continue
+
+            value = self._normalize_text_tag(raw_value)
+            if value is None:
+                continue
+
+            if (asin := self._extract_asin_from_text(value)) is not None:
+                return asin
+
+        return None
 
     def _extract_audio_properties(
         self, file_path: Path

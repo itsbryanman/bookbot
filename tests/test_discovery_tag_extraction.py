@@ -1,16 +1,19 @@
 """Regression tests for audio tag normalization across container formats."""
 
 import asyncio
+import json
 import shutil
 import subprocess
 from pathlib import Path
 
 import pytest
+from click.testing import CliRunner
 from mutagen.flac import FLAC
 from mutagen.id3 import TALB, TCOM, TIT2, TPE1, TPOS, TRCK, TSSE, TXXX
 from mutagen.mp3 import MP3
 from mutagen.mp4 import MP4, MP4FreeForm
 
+from bookbot.cli import cli
 from bookbot.config.manager import ConfigManager
 from bookbot.core.discovery import AudioFileScanner
 from bookbot.core.models import TrackStatus
@@ -96,6 +99,28 @@ def _scan_single_file(tmp_path: Path, filename: str) -> str | None:
     return audiobook_sets[0].narrator_guess
 
 
+class _FakeUrlFrame:
+    def __init__(self, url: str) -> None:
+        self.url = url
+
+
+def _fake_asin_mutagen_file(file_path: Path) -> dict[str, object]:
+    if file_path.name == "The Divorce - Freida McFadden.m4b":
+        return {
+            "\xa9alb": ["The Divorce"],
+            "\xa9ART": ["Freida McFadden"],
+            "asin": ["B0GL9665Q1"],
+            "----:com.pilabor.tone:AUDIBLE_ASIN": [b"B0GL9665Q1"],
+        }
+    if file_path.name == "Can't Hurt Me....mp3":
+        return {
+            "TALB": "Can't Hurt Me",
+            "TPE1": "David Goggins",
+            "WOAS": _FakeUrlFrame("https://www.audible.com/pd/B07KKPGDZF"),
+        }
+    raise AssertionError(f"Unexpected path for fake mutagen tags: {file_path}")
+
+
 @pytest.mark.requires_ffmpeg
 def test_extract_audio_tags_normalizes_id3_frames(tmp_path: Path) -> None:
     mp3_path = tmp_path / "01 - tagged.mp3"
@@ -108,6 +133,89 @@ def test_extract_audio_tags_normalizes_id3_frames(tmp_path: Path) -> None:
     assert tags.artist == "The Artist"
     assert tags.track == 3
     assert tags.disc == 1
+
+
+def test_scan_directory_extracts_asin_guess_from_mp4_audible_asin_tags(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    file_path = tmp_path / "The Divorce - Freida McFadden.m4b"
+    file_path.touch()
+
+    monkeypatch.setattr(
+        "bookbot.core.discovery.MutagenFile", _fake_asin_mutagen_file
+    )
+    monkeypatch.setattr(
+        AudioFileScanner,
+        "_extract_audio_properties",
+        lambda self, _: (8_000.0, None, None, None),
+    )
+
+    audiobook_sets = AudioFileScanner().scan_directory(tmp_path)
+
+    assert len(audiobook_sets) == 1
+    assert audiobook_sets[0].asin_guess == "B0GL9665Q1"
+
+
+def test_scan_directory_extracts_asin_guess_from_woas_audible_url(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    file_path = tmp_path / "Can't Hurt Me....mp3"
+    file_path.touch()
+
+    monkeypatch.setattr(
+        "bookbot.core.discovery.MutagenFile", _fake_asin_mutagen_file
+    )
+    monkeypatch.setattr(
+        AudioFileScanner,
+        "_extract_audio_properties",
+        lambda self, _: (8_000.0, None, None, None),
+    )
+
+    audiobook_sets = AudioFileScanner().scan_directory(tmp_path)
+
+    assert len(audiobook_sets) == 1
+    assert audiobook_sets[0].asin_guess == "B07KKPGDZF"
+
+
+def test_scan_cli_plan_json_includes_asin_guess_from_embedded_tags(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    m4b_path = tmp_path / "The Divorce - Freida McFadden.m4b"
+    mp3_path = tmp_path / "Can't Hurt Me....mp3"
+    m4b_path.touch()
+    mp3_path.touch()
+
+    monkeypatch.setattr(
+        "bookbot.core.discovery.MutagenFile", _fake_asin_mutagen_file
+    )
+    monkeypatch.setattr(
+        AudioFileScanner,
+        "_extract_audio_properties",
+        lambda self, _: (8_000.0, None, None, None),
+    )
+
+    plan_path = tmp_path / "scan-plan.json"
+    result = CliRunner().invoke(
+        cli,
+        [
+            "--config-dir",
+            str(tmp_path / "config"),
+            "scan",
+            str(tmp_path),
+            "--plan",
+            str(plan_path),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "ASIN: B0GL9665Q1" in result.output
+    assert "ASIN: B07KKPGDZF" in result.output
+
+    plan_data = json.loads(plan_path.read_text())
+    assert {entry["asin_guess"] for entry in plan_data["audiobook_sets"]} == {
+        "B0GL9665Q1",
+        "B07KKPGDZF",
+    }
 
 
 @pytest.mark.requires_ffmpeg
