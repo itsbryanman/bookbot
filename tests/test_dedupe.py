@@ -314,6 +314,28 @@ class TestStagedHashing:
             ".bookbot-quarantine" not in op.source.parts for op in plan.operations
         )
 
+    def test_finds_duplicate_cover_images_within_one_book_root(
+        self, tmp_path: Path
+    ) -> None:
+        lib = tmp_path / "lib"
+        book_dir = lib / "Donald J. Sobol - Encyclopedia Brown"
+        book_dir.mkdir(parents=True)
+        cover_a = book_dir / "EB 01 - cover-a.jpg"
+        cover_b = book_dir / "EB 01 - cover-b.jpg"
+        cover_a.write_bytes(b"same-cover")
+        cover_b.write_bytes(b"same-cover")
+
+        engine = DedupeEngine(lib)
+        groups = engine.analyze_files()
+
+        assert len(groups) == 1
+        assert groups[0].paths == [cover_a, cover_b]
+
+        plan = engine.build_plan(file_groups=groups)
+
+        assert len(plan.operations) == 1
+        assert plan.operations[0].source == cover_b
+
 
 # ── Plan quarantine and undo ──
 

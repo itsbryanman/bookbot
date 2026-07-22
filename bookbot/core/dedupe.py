@@ -35,7 +35,7 @@ from .discovery import (
     is_within_quarantine_tree,
     iter_files_excluding_quarantine,
 )
-from .health import COVER_NAMES, IMAGE_EXTENSIONS
+from .health import AUDIO_EXTENSIONS, COVER_NAMES, IMAGE_EXTENSIONS, SIDECAR_EXTENSIONS
 from .matching import AdvancedMatcher
 from .models import AudiobookSet, AudioFormat, OperationRecord
 from .operations import TransactionManager
@@ -339,21 +339,20 @@ class DedupeEngine:
         return len(parents) == 1
 
     def analyze_files(
-        self, audio_extensions: set[str] | None = None,
+        self, dedupe_extensions: set[str] | None = None,
     ) -> list[FileGroup]:
         """Find byte-duplicate files under library_root using staged hashing."""
-        if audio_extensions is None:
-            audio_extensions = {
-                ".mp3", ".m4a", ".m4b", ".flac",
-                ".ogg", ".opus", ".aac", ".wav",
-            }
+        if dedupe_extensions is None:
+            dedupe_extensions = (
+                AUDIO_EXTENSIONS | IMAGE_EXTENSIONS | SIDECAR_EXTENSIONS
+            )
 
         # Stage 1: group by exact size
         size_groups: dict[int, list[Path]] = defaultdict(list)
         for f in iter_files_excluding_quarantine(self.library_root):
             if not f.is_file():
                 continue
-            if f.suffix.lower() not in audio_extensions:
+            if f.suffix.lower() not in dedupe_extensions:
                 continue
             if f.name.startswith("."):
                 continue
@@ -398,10 +397,16 @@ class DedupeEngine:
         # Build FileGroups
         result: list[FileGroup] = []
         for _fhash, paths in full_groups.items():
-            if len(paths) > 1:
+            scoped_groups: dict[tuple[str, ...], list[Path]] = defaultdict(list)
+            for path in paths:
+                scoped_groups[self._file_dedupe_scope(path)].append(path)
+
+            for scoped_paths in scoped_groups.values():
+                if len(scoped_paths) <= 1:
+                    continue
                 fg = FileGroup(
-                    size=paths[0].stat().st_size,
-                    paths=sorted(paths),
+                    size=scoped_paths[0].stat().st_size,
+                    paths=sorted(scoped_paths),
                 )
                 result.append(fg)
 
@@ -532,6 +537,14 @@ class DedupeEngine:
         )
 
     # ── Scoring helpers ──
+
+    def _file_dedupe_scope(self, path: Path) -> tuple[str, ...]:
+        """Keep non-audio duplicate detection scoped to one logical book root."""
+        if path.suffix.lower() in AUDIO_EXTENSIONS:
+            return ("audio",)
+
+        logical_root = self.scanner._group_root_for_file(path)
+        return ("non-audio", str(logical_root))
 
     def _edition_key(self, ab_set: AudiobookSet) -> str:
         author = self.matcher.normalize_author(ab_set.author_guess or "")
