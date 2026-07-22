@@ -1047,9 +1047,11 @@ def history(ctx: click.Context, days: int) -> None:
     for transaction in transactions:
         status = transaction.get("status", "completed")
         undo_info = "" if transaction["can_undo"] else " (cannot undo)"
+        transaction_type = transaction.get("transaction_type", "rename")
         click.echo(
             f"  {transaction['id'][:8]}... - "
             f"{transaction['timestamp']} - "
+            f"{transaction_type} - "
             f"{transaction['operation_count']} operations - "
             f"{status}{undo_info}"
         )
@@ -2727,7 +2729,8 @@ def dedupe(
                 err=True,
             )
             sys.exit(1)
-        engine.execute_plan(plan)
+        config_manager = ctx.obj["config_manager"]
+        engine.execute_plan(plan, config_manager)
         click.echo(
             f"Done. {len(plan.operations)} files quarantined to "
             f"{plan.quarantine_root}"

@@ -29,9 +29,11 @@ from pathlib import Path
 
 from rapidfuzz import fuzz
 
+from ..config.manager import ConfigManager
 from .health import COVER_NAMES, IMAGE_EXTENSIONS
 from .matching import AdvancedMatcher
 from .models import AudiobookSet, AudioFormat, OperationRecord
+from .operations import TransactionManager
 
 # Format rank: higher is better
 FORMAT_RANK: dict[AudioFormat, int] = {
@@ -140,6 +142,10 @@ class DedupePlan:
                     operation_type="rename",
                     old_path=op.source,
                     new_path=op.destination,
+                    metadata={
+                        "transaction_type": "dedupe",
+                        "quarantine_reason": op.reason,
+                    },
                 )
             )
         return records
@@ -374,7 +380,7 @@ class DedupeEngine:
 
         return plan
 
-    def execute_plan(self, plan: DedupePlan) -> None:
+    def execute_plan(self, plan: DedupePlan, config_manager: ConfigManager) -> None:
         """Execute a quarantine plan (move files)."""
         if plan.has_conflicts():
             raise ValueError(
@@ -385,23 +391,28 @@ class DedupeEngine:
             op.destination.parent.mkdir(parents=True, exist_ok=True)
             op.source.rename(op.destination)
 
-        # Save transaction log for undo compatibility
-        self._save_transaction_log(plan)
+        # Save the authoritative transaction log where undo/history expect it.
+        self._save_transaction_log(plan, config_manager)
 
-    def _save_transaction_log(self, plan: DedupePlan) -> None:
-        """Save as a transaction log that the existing undo command can read."""
-        log_dir = self.library_root / ".bookbot-quarantine" / plan.plan_id
-        log_dir.mkdir(parents=True, exist_ok=True)
-        log_file = log_dir / f"transaction_{plan.plan_id}.json"
-
+    def _save_transaction_log(
+        self, plan: DedupePlan, config_manager: ConfigManager
+    ) -> None:
+        """Save a standard transaction log plus a provenance copy in quarantine."""
+        log_file = (
+            self.library_root
+            / ".bookbot-quarantine"
+            / plan.plan_id
+            / f"transaction_{plan.plan_id}.json"
+        )
         records = plan.to_transaction_records()
-        log_data = {
-            "transaction_id": plan.plan_id,
-            "timestamp": plan.created_at,
-            "operations": [r.model_dump(mode="json") for r in records],
-        }
-        with open(log_file, "w", encoding="utf-8") as f:
-            json.dump(log_data, f, indent=2, default=str)
+        manager = TransactionManager(config_manager)
+        manager.record_transaction(
+            plan.plan_id,
+            records,
+            transaction_type="dedupe",
+            timestamp=plan.created_at,
+            copy_to=[log_file],
+        )
 
     # ── Scoring helpers ──
 

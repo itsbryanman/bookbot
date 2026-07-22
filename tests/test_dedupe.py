@@ -1,18 +1,29 @@
 """Tests for Phase 4: deduplication engine and quarantine workflow."""
 
-import json
+from datetime import datetime
 from pathlib import Path
 
 import pytest
+from click.testing import CliRunner
 
-from bookbot.core.dedupe import DedupeEngine, DedupePlan, QuarantineOp
+from bookbot.cli import cli
+from bookbot.core.dedupe import (
+    DedupeCandidate,
+    DedupeEngine,
+    DedupePlan,
+    EditionGroup,
+    FileGroup,
+    QuarantineOp,
+)
 from bookbot.core.models import (
     AudiobookSet,
     AudioFormat,
+    OperationRecord,
     ProviderIdentity,
     Track,
     TrackStatus,
 )
+from bookbot.core.operations import TransactionManager
 
 # ── Helpers ──
 
@@ -125,6 +136,34 @@ class TestEditionClustering:
         groups = engine.analyze_editions([ab1, ab2])
 
         assert len(groups) == 0
+
+    def test_segmented_sibling_disc_folders_are_not_grouped_as_editions(
+        self, tmp_path: Path
+    ) -> None:
+        parent = tmp_path / "On Combat"
+        parent.mkdir()
+
+        segments = []
+        for disc_number in range(1, 5):
+            disc_dir = parent / f"On Combat Disc {disc_number}"
+            disc_dir.mkdir()
+            segments.append(
+                _make_audiobook(
+                    disc_dir,
+                    "On Combat",
+                    "Dave Grossman",
+                    duration=3600.0,
+                )
+            )
+
+        engine = DedupeEngine(tmp_path)
+        groups = engine.analyze_editions(segments)
+
+        assert groups == []
+        assert any(
+            "uncollapsed disc folders" in warning
+            for warning in engine.analysis_warnings
+        )
 
 
 # ── Edition scoring / keeper selection ──
@@ -250,8 +289,10 @@ class TestStagedHashing:
 
 
 class TestPlanAndUndo:
-    def test_quarantine_and_restore(self, tmp_path: Path) -> None:
-        """Plan quarantines files; undo restores them to original paths."""
+    def test_quarantine_and_restore(
+        self, tmp_path: Path, config_manager
+    ) -> None:
+        """Plan quarantines files; undo restores them via the shared log dir."""
         d1 = tmp_path / "lib" / "a"
         d2 = tmp_path / "lib" / "b"
         d1.mkdir(parents=True)
@@ -269,9 +310,13 @@ class TestPlanAndUndo:
 
         plan = engine.build_plan(file_groups=groups)
         assert len(plan.operations) == 1
+        original_bytes = {
+            f1: f1.read_bytes(),
+            f2: f2.read_bytes(),
+        }
 
         # Execute
-        engine.execute_plan(plan)
+        engine.execute_plan(plan, config_manager)
 
         # One file should be quarantined
         quarantined = plan.operations[0]
@@ -283,26 +328,72 @@ class TestPlanAndUndo:
         assert keeper is not None
         assert keeper.exists()
 
-        # Undo: read transaction log and reverse
-        log_dir = tmp_path / "lib" / ".bookbot-quarantine" / plan.plan_id
-        log_file = log_dir / f"transaction_{plan.plan_id}.json"
+        log_file = config_manager.get_log_dir() / f"transaction_{plan.plan_id}.json"
+        provenance_copy = (
+            Path(plan.quarantine_root) / f"transaction_{plan.plan_id}.json"
+        )
         assert log_file.exists()
+        assert provenance_copy.exists()
 
-        log_data = json.loads(log_file.read_text())
-        for op in reversed(log_data["operations"]):
-            old = Path(op["old_path"])
-            new = Path(op["new_path"])
-            if new.exists():
-                old.parent.mkdir(parents=True, exist_ok=True)
-                new.rename(old)
+        history = TransactionManager(config_manager).list_transactions(days=365)
+        transaction = next(item for item in history if item["id"] == plan.plan_id)
+        assert transaction["transaction_type"] == "dedupe"
 
-        # Both files should be back
+        manager = TransactionManager(config_manager)
+        assert manager.undo_transaction(plan.plan_id) is True
+
+        # Both files should be back byte-identically.
         assert f1.exists()
         assert f2.exists()
-        assert f1.read_bytes() == content
-        assert f2.read_bytes() == content
+        assert f1.read_bytes() == original_bytes[f1]
+        assert f2.read_bytes() == original_bytes[f2]
+        assert not Path(plan.quarantine_root).exists()
+        assert log_file.with_suffix(".undone").exists()
 
-    def test_apply_refused_if_conflicts(self, tmp_path: Path) -> None:
+    def test_undo_falls_back_to_legacy_quarantine_log(
+        self,
+        tmp_path: Path,
+        config_manager,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """Undo can recover old dedupe logs that only exist in quarantine."""
+        lib = tmp_path / "lib"
+        d1 = lib / "a"
+        d2 = lib / "b"
+        d1.mkdir(parents=True)
+        d2.mkdir(parents=True)
+
+        f1 = d1 / "track.mp3"
+        f2 = d2 / "track.mp3"
+        f1.write_bytes(b"same")
+        f2.write_bytes(b"same")
+
+        engine = DedupeEngine(lib)
+        plan = engine.build_plan(file_groups=engine.analyze_files())
+        engine.execute_plan(plan, config_manager)
+
+        standard_log = config_manager.get_log_dir() / f"transaction_{plan.plan_id}.json"
+        legacy_log = Path(plan.quarantine_root) / f"transaction_{plan.plan_id}.json"
+        assert standard_log.exists()
+        assert legacy_log.exists()
+
+        standard_log.unlink()
+        monkeypatch.chdir(lib)
+
+        manager = TransactionManager(config_manager)
+        assert manager.undo_transaction(plan.plan_id) is True
+
+        captured = capsys.readouterr()
+        assert "Notice: using legacy dedupe transaction log" in captured.out
+        assert standard_log.with_suffix(".undone").exists()
+        assert f1.exists()
+        assert f2.exists()
+        assert not Path(plan.quarantine_root).exists()
+
+    def test_apply_refused_if_conflicts(
+        self, tmp_path: Path, config_manager
+    ) -> None:
         """Execution should fail if destinations already exist."""
         d1 = tmp_path / "lib" / "a"
         d1.mkdir(parents=True)
@@ -326,7 +417,7 @@ class TestPlanAndUndo:
 
         assert plan.has_conflicts()
         with pytest.raises(ValueError, match="conflicts"):
-            engine.execute_plan(plan)
+            engine.execute_plan(plan, config_manager)
 
     def test_dry_run_touches_no_files(self, tmp_path: Path) -> None:
         """Dry-run (just building the plan) should not modify any files."""
@@ -348,3 +439,100 @@ class TestPlanAndUndo:
         # Both files still exist
         assert (d1 / "track.mp3").exists()
         assert (d2 / "track.mp3").exists()
+
+    def test_overlapping_edition_and_file_groups_do_not_double_quarantine(
+        self, tmp_path: Path, config_manager
+    ) -> None:
+        lib = tmp_path / "lib"
+        keeper_dir = lib / "keeper"
+        duplicate_dir = lib / "duplicate"
+        keeper_dir.mkdir(parents=True)
+        duplicate_dir.mkdir()
+
+        keeper_ab = _make_audiobook(keeper_dir, "The Stand", "Stephen King")
+        duplicate_ab = _make_audiobook(
+            duplicate_dir,
+            "The Stand (Unabridged)",
+            "Stephen King",
+        )
+        duplicate_ab.tracks[0].src_path.write_bytes(keeper_ab.tracks[0].src_path.read_bytes())
+
+        edition_group = EditionGroup(
+            members=[
+                DedupeCandidate(audiobook_set=keeper_ab, is_keeper=True),
+                DedupeCandidate(
+                    audiobook_set=duplicate_ab,
+                    quarantine_reason="lower ranked duplicate",
+                ),
+            ],
+            keeper=DedupeCandidate(audiobook_set=keeper_ab, is_keeper=True),
+        )
+        file_group = FileGroup(
+            size=keeper_ab.tracks[0].file_size,
+            paths=[
+                keeper_ab.tracks[0].src_path,
+                duplicate_ab.tracks[0].src_path,
+            ],
+        )
+
+        engine = DedupeEngine(lib)
+        plan = engine.build_plan(
+            edition_groups=[edition_group],
+            file_groups=[file_group],
+            keeper_edition_paths={keeper_ab.source_path},
+        )
+
+        duplicate_ops = [
+            op for op in plan.operations if op.source == duplicate_ab.tracks[0].src_path
+        ]
+        assert len(duplicate_ops) == 1
+
+        engine.execute_plan(plan, config_manager)
+        assert duplicate_ab.tracks[0].src_path.exists() is False
+
+
+def test_history_lists_rename_and_dedupe_transaction_types(
+    tmp_path: Path, config_manager
+) -> None:
+    runner = CliRunner()
+    manager = TransactionManager(config_manager)
+    rename_id = "rename-history-test"
+    dedupe_id = "dedupe-history-test"
+
+    manager.record_transaction(
+        rename_id,
+        [
+            OperationRecord(
+                operation_id=rename_id,
+                timestamp=datetime(2026, 7, 20, 12, 0, 0),
+                operation_type="rename",
+                old_path=tmp_path / "before.mp3",
+                new_path=tmp_path / "after.mp3",
+            )
+        ],
+        transaction_type="rename",
+        timestamp="2026-07-20T12:00:00",
+    )
+    manager.record_transaction(
+        dedupe_id,
+        [
+            OperationRecord(
+                operation_id=dedupe_id,
+                timestamp=datetime(2026, 7, 21, 12, 0, 0),
+                operation_type="rename",
+                old_path=tmp_path / "copy.mp3",
+                new_path=tmp_path / ".bookbot-quarantine" / dedupe_id / "copy.mp3",
+            )
+        ],
+        transaction_type="dedupe",
+        timestamp="2026-07-21T12:00:00",
+    )
+
+    result = runner.invoke(
+        cli,
+        ["--config-dir", str(config_manager.config_dir), "history", "--days", "365"],
+    )
+
+    assert result.exit_code == 0
+    assert f"{rename_id[:8]}... - 2026-07-20T12:00:00 - rename -" in result.output
+    assert f"{dedupe_id[:8]}... - 2026-07-21T12:00:00 - dedupe -" in result.output

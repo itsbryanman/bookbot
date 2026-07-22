@@ -105,7 +105,11 @@ class TransactionManager:
                 transaction_log.append(record)
 
             # Save transaction log for undo
-            self._save_transaction_log(transaction_id, transaction_log)
+            self.record_transaction(
+                transaction_id,
+                transaction_log,
+                transaction_type="rename",
+            )
 
             # Update plan status
             plan.dry_run = False
@@ -143,35 +147,72 @@ class TransactionManager:
                 # Best effort rollback
                 pass
 
-    def _save_transaction_log(
-        self, transaction_id: str, records: list[OperationRecord]
-    ) -> None:
-        """Save transaction log for undo functionality."""
-        log_file = self.log_dir / f"transaction_{transaction_id}.json"
+    def record_transaction(
+        self,
+        transaction_id: str,
+        records: list[OperationRecord],
+        *,
+        transaction_type: str,
+        timestamp: str | None = None,
+        copy_to: list[Path] | None = None,
+    ) -> Path | None:
+        """Persist a transaction in the standard log directory and optional copies."""
+        log_data = self._build_transaction_log_data(
+            transaction_id,
+            records,
+            transaction_type=transaction_type,
+            timestamp=timestamp,
+        )
+        primary_log = self._transaction_log_path(transaction_id)
 
-        log_data = {
+        if not self._write_transaction_log(primary_log, log_data):
+            return None
+
+        for copy_path in copy_to or []:
+            self._write_transaction_log(copy_path, log_data)
+
+        return primary_log
+
+    def _build_transaction_log_data(
+        self,
+        transaction_id: str,
+        records: list[OperationRecord],
+        *,
+        transaction_type: str,
+        timestamp: str | None = None,
+    ) -> dict[str, Any]:
+        """Build a JSON-serializable transaction payload."""
+        return {
             "transaction_id": transaction_id,
-            "timestamp": datetime.now().isoformat(),
-            "operations": [record.model_dump() for record in records],
+            "transaction_type": transaction_type,
+            "timestamp": timestamp or datetime.now().isoformat(),
+            "operations": [record.model_dump(mode="json") for record in records],
         }
 
+    def _transaction_log_path(self, transaction_id: str) -> Path:
+        """Return the canonical path for a transaction log."""
+        return self.log_dir / f"transaction_{transaction_id}.json"
+
+    def _write_transaction_log(self, log_file: Path, log_data: dict[str, Any]) -> bool:
+        """Write a transaction log, warning instead of raising on failure."""
         try:
+            log_file.parent.mkdir(parents=True, exist_ok=True)
             with open(log_file, "w", encoding="utf-8") as f:
                 json.dump(log_data, f, indent=2, default=str)
         except OSError as e:
             print(f"Warning: Failed to save transaction log: {e}")
+            return False
+        return True
 
     def undo_transaction(self, transaction_id: str) -> bool:
         """Undo a previous transaction."""
-        log_file = self.log_dir / f"transaction_{transaction_id}.json"
-
-        if not log_file.exists():
+        transaction_log = self._load_transaction_log(transaction_id)
+        if transaction_log is None:
             return False
 
-        try:
-            with open(log_file, encoding="utf-8") as f:
-                log_data = json.load(f)
+        log_file, log_data, legacy_log = transaction_log
 
+        try:
             records = [OperationRecord(**op) for op in log_data["operations"]]
 
             # Reverse the operations
@@ -184,12 +225,57 @@ class TransactionManager:
             # Mark transaction as undone
             undo_file = log_file.with_suffix(".undone")
             log_file.rename(undo_file)
+            self._cleanup_dedupe_log_copies(
+                transaction_id,
+                log_data,
+                keep_path=undo_file,
+            )
+            if legacy_log is not None and legacy_log.exists():
+                legacy_log.unlink()
+                self._cleanup_empty_directories(legacy_log.parent)
 
             return True
 
         except (OSError, json.JSONDecodeError) as e:
             print(f"Failed to undo transaction {transaction_id}: {e}")
             return False
+
+    def _load_transaction_log(
+        self, transaction_id: str
+    ) -> tuple[Path, dict[str, Any], Path | None] | None:
+        """Load a transaction log, migrating legacy dedupe logs when needed."""
+        log_file = self._transaction_log_path(transaction_id)
+        if log_file.exists():
+            try:
+                with open(log_file, encoding="utf-8") as f:
+                    return log_file, json.load(f), None
+            except (OSError, json.JSONDecodeError):
+                return None
+
+        legacy_log = self._find_legacy_dedupe_transaction_log(transaction_id)
+        if legacy_log is None:
+            return None
+
+        try:
+            with open(legacy_log, encoding="utf-8") as f:
+                log_data = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            return None
+
+        log_data.setdefault("transaction_id", transaction_id)
+        log_data.setdefault(
+            "transaction_type",
+            self._infer_transaction_type(log_data, fallback_path=legacy_log),
+        )
+        print(
+            "Notice: using legacy dedupe transaction log from "
+            f"{legacy_log} because no standard log entry was found."
+        )
+
+        if self._write_transaction_log(log_file, log_data):
+            return log_file, log_data, legacy_log
+
+        return legacy_log, log_data, None
 
     def _undo_rename(self, record: OperationRecord) -> None:
         """Undo a rename operation."""
@@ -204,6 +290,62 @@ class TransactionManager:
                 # Restore original path
                 record.old_path.parent.mkdir(parents=True, exist_ok=True)
                 record.new_path.rename(record.old_path)
+                self._cleanup_empty_directories(record.new_path.parent)
+
+    def _cleanup_empty_directories(self, start_dir: Path) -> None:
+        """Best-effort cleanup of empty directories left behind after undo."""
+        current = start_dir
+        while current != current.parent:
+            try:
+                current.rmdir()
+            except OSError:
+                break
+            current = current.parent
+
+    def _cleanup_dedupe_log_copies(
+        self, transaction_id: str, log_data: dict[str, Any], keep_path: Path
+    ) -> None:
+        """Remove quarantine-side transaction copies after dedupe undo."""
+        if self._infer_transaction_type(log_data) != "dedupe":
+            return
+
+        operations = log_data.get("operations", [])
+        new_paths = [
+            Path(str(operation["new_path"]))
+            for operation in operations
+            if isinstance(operation, dict) and operation.get("new_path")
+        ]
+        if not new_paths:
+            return
+
+        quarantine_root = self._dedupe_quarantine_root(new_paths)
+        if quarantine_root is None:
+            return
+
+        for candidate in (
+            quarantine_root / f"transaction_{transaction_id}.json",
+            quarantine_root / f"transaction_{transaction_id}.undone",
+        ):
+            if candidate == keep_path:
+                continue
+            try:
+                if candidate.exists():
+                    candidate.unlink()
+                    self._cleanup_empty_directories(candidate.parent)
+            except OSError:
+                continue
+
+    def _dedupe_quarantine_root(self, new_paths: list[Path]) -> Path | None:
+        """Extract the per-plan quarantine root from dedupe destination paths."""
+        for path in new_paths:
+            parts = path.parts
+            if ".bookbot-quarantine" not in parts:
+                continue
+            marker_index = parts.index(".bookbot-quarantine")
+            if marker_index + 1 >= len(parts):
+                continue
+            return Path(*parts[: marker_index + 2])
+        return None
 
     def _undo_retag(self, record: OperationRecord) -> None:
         """Undo a retag operation."""
@@ -238,6 +380,9 @@ class TransactionManager:
                     {
                         "id": log_data["transaction_id"],
                         "timestamp": log_data["timestamp"],
+                        "transaction_type": self._infer_transaction_type(
+                            log_data, fallback_path=log_file
+                        ),
                         "operation_count": len(log_data["operations"]),
                         "can_undo": True,
                     }
@@ -255,6 +400,9 @@ class TransactionManager:
                     {
                         "id": log_data["transaction_id"],
                         "timestamp": log_data["timestamp"],
+                        "transaction_type": self._infer_transaction_type(
+                            log_data, fallback_path=undo_file
+                        ),
                         "operation_count": len(log_data["operations"]),
                         "can_undo": False,
                         "status": "undone",
@@ -264,6 +412,47 @@ class TransactionManager:
                 continue
 
         return sorted(transactions, key=lambda x: x["timestamp"], reverse=True)
+
+    def _infer_transaction_type(
+        self, log_data: dict[str, Any], fallback_path: Path | None = None
+    ) -> str:
+        """Infer a human-meaningful transaction type for history output."""
+        transaction_type = log_data.get("transaction_type")
+        if isinstance(transaction_type, str) and transaction_type:
+            return transaction_type
+
+        operations = log_data.get("operations", [])
+        new_paths = [
+            str(operation.get("new_path", ""))
+            for operation in operations
+            if isinstance(operation, dict)
+        ]
+        if any(".bookbot-quarantine" in path for path in new_paths):
+            return "dedupe"
+        if fallback_path and ".bookbot-quarantine" in str(fallback_path):
+            return "dedupe"
+        return "rename"
+
+    def _find_legacy_dedupe_transaction_log(self, transaction_id: str) -> Path | None:
+        """Search likely library roots for pre-migration dedupe transaction logs."""
+        filename = f"transaction_{transaction_id}.json"
+        seen_roots: set[Path] = set()
+
+        for root in [Path.cwd(), *Path.cwd().parents]:
+            if root in seen_roots:
+                continue
+            seen_roots.add(root)
+
+            quarantine_root = root / ".bookbot-quarantine"
+            direct_match = quarantine_root / transaction_id / filename
+            if direct_match.exists():
+                return direct_match
+
+            matches = sorted(quarantine_root.glob(f"*/{filename}"))
+            if matches:
+                return matches[0]
+
+        return None
 
     def cleanup_old_transactions(self, days: int = 30) -> int:
         """Clean up transaction logs older than specified days."""
