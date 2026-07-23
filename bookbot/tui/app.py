@@ -318,6 +318,10 @@ class BookBotApp(App):
         self.last_transaction_id: str | None = None
         self.warning_filter_enabled = False
         self._provider_closed = False
+        # Two-press apply confirmation: first `a` arms, second `a` applies,
+        # any other action disarms. Prevents single-keystroke destructive
+        # applies in the TUI.
+        self._apply_armed = False
 
     def compose(self) -> ComposeResult:
         """Create child widgets for the app."""
@@ -638,6 +642,7 @@ class BookBotApp(App):
 
     def action_help(self) -> None:
         """Show help dialog."""
+        self._disarm_apply()
         self.update_status("Mission control shortcuts loaded")
         self.update_warning_panel(
             "Shortcuts: s scan, m match, p preview plan, a apply selected, "
@@ -646,22 +651,72 @@ class BookBotApp(App):
 
     def action_scan(self) -> None:
         """Start or restart scanning."""
+        self._disarm_apply()
         self.post_message(self.StartScan())
 
     async def action_match(self) -> None:
         """Trigger metadata matching."""
+        self._disarm_apply()
         await self.find_matches()
 
     def action_preview_plan(self) -> None:
         """Show the rename preview."""
+        self._disarm_apply()
         self.show_preview()
 
     async def action_apply_selected(self) -> None:
-        """Apply the current plan."""
+        """Apply the current plan (press twice: arm, then confirm)."""
+        if not self._apply_armed:
+            self._apply_armed = True
+            operation_count = self._pending_operation_count()
+            count_text = (
+                f"{operation_count} operation(s)"
+                if operation_count is not None
+                else "the current plan"
+            )
+            self.update_status(f"Press a again to apply {count_text}")
+            self.update_warning_panel(
+                f"Confirm apply: press a again to apply {count_text}. "
+                "Any other action cancels."
+            )
+            return
+
+        self._apply_armed = False
         await self.apply_changes()
+
+    def _pending_operation_count(self) -> int | None:
+        """Best-effort count of operations the apply would perform."""
+        try:
+            preview_screen = self.query_one("#preview_screen", PreviewScreen)
+            config = self.config_manager.load_config()
+            if not preview_screen.audiobook_sets:
+                return None
+            common_root = Path(
+                os.path.commonpath(
+                    [
+                        str(book.source_path)
+                        for book in preview_screen.audiobook_sets
+                    ]
+                )
+            )
+            plan = PlanBuilder(config).create_plan(
+                common_root,
+                preview_screen.audiobook_sets,
+                source_roots=preview_screen.source_roots or [common_root],
+            )
+            return len(plan.operations)
+        except Exception:
+            return None
+
+    def _disarm_apply(self) -> None:
+        """Cancel a pending apply confirmation."""
+        if self._apply_armed:
+            self._apply_armed = False
+            self.update_status("Apply cancelled")
 
     async def action_undo(self) -> None:
         """Undo the most recent transaction."""
+        self._disarm_apply()
         manager = TransactionManager(self.config_manager)
         transaction_id = self.last_transaction_id
         if transaction_id is None:
@@ -683,6 +738,7 @@ class BookBotApp(App):
 
     def action_diff(self) -> None:
         """Show the current plan diff in the warning panel."""
+        self._disarm_apply()
         root = self._library_root()
         if root is None:
             self.update_status("No scanned library to diff")
@@ -698,6 +754,7 @@ class BookBotApp(App):
 
     def action_filter_warnings(self) -> None:
         """Toggle warning-focused summary in the bottom pane."""
+        self._disarm_apply()
         self.warning_filter_enabled = not self.warning_filter_enabled
         if not self.audiobook_sets:
             self.update_warning_panel("No scan results available yet.")
