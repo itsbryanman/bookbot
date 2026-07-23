@@ -101,7 +101,8 @@ class TransactionManager:
 
                 # Move to final location
                 operation.temp_path.rename(operation.new_path)
-                operation.track.src_path = operation.new_path
+                if operation.track is not None:
+                    operation.track.src_path = operation.new_path
                 transaction_log.append(record)
 
             # Save transaction log for undo
@@ -117,8 +118,11 @@ class TransactionManager:
 
             return True
 
-        except (OSError, ValueError) as e:
-            # Rollback on failure
+        except Exception as e:
+            # Rollback on ANY failure. Catching only OSError/ValueError let
+            # unexpected exceptions (e.g. AttributeError) escape mid-apply,
+            # stranding .tmp_ files and leaving the library half-renamed with
+            # no recorded transaction to undo.
             self._rollback_operations(temp_operations, transaction_log)
             raise RuntimeError(f"Failed to execute rename plan: {e}") from e
 
