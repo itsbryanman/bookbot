@@ -3,8 +3,13 @@
 import shutil
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import click
+
+if TYPE_CHECKING:
+    from .abs.client import AudiobookshelfClient
+    from .core.models import AudiobookSet
 
 from . import __version__
 from .config.manager import ConfigManager
@@ -467,19 +472,28 @@ def convert(
 
     # Check if conversion is enabled in config
     if not config.conversion.enabled:
-        click.echo(
-            "Warning:M4B conversion is currently disabled in your configuration.", err=True
-        )
-        click.echo("")
-        if click.confirm("Would you like to enable it now?", default=True):
-            config.conversion.enabled = True
-            config_manager.save_config(config)
-            click.echo("Done:Conversion enabled and saved to config.")
+        if dry_run:
+            # A dry run never converts anything, so it must not gate on the
+            # conversion toggle or prompt interactively (script-unfriendly).
+            click.echo(
+                "Note: M4B conversion is disabled in your configuration; "
+                "showing the plan anyway (dry run).",
+                err=True,
+            )
         else:
-            click.echo("\nTo enable conversion manually, edit:", err=True)
-            click.echo(f"  {config_manager.config_file}", err=True)
-            click.echo("\nSet: [conversion] enabled = true", err=True)
-            sys.exit(1)
+            click.echo(
+                "Warning:M4B conversion is currently disabled in your configuration.", err=True
+            )
+            click.echo("")
+            if click.confirm("Would you like to enable it now?", default=True):
+                config.conversion.enabled = True
+                config_manager.save_config(config)
+                click.echo("Done:Conversion enabled and saved to config.")
+            else:
+                click.echo("\nTo enable conversion manually, edit:", err=True)
+                click.echo(f"  {config_manager.config_file}", err=True)
+                click.echo("\nSet: [conversion] enabled = true", err=True)
+                sys.exit(1)
 
     try:
         # Import conversion module
@@ -556,6 +570,11 @@ def undo(ctx: click.Context, transaction_id: str) -> None:
             click.echo(f"Transaction {transaction_id} undone successfully")
         else:
             click.echo(f"Failed to undo transaction {transaction_id}", err=True)
+            click.echo(
+                "Run 'bookbot history' to list recent transactions and their "
+                "IDs, or 'bookbot history --days 30' for older ones.",
+                err=True,
+            )
             sys.exit(1)
     except Exception as e:
         click.echo(f"Error undoing transaction: {e}", err=True)

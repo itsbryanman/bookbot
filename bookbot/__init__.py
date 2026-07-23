@@ -1,6 +1,6 @@
 """BookBot - A cross-platform TUI audiobook renamer and organizer."""
 
-__version__ = "0.3.0"
+__version__ = "1.0.0"
 __author__ = "itsbryanman"
 __email__ = "itsbryanman@users.noreply.github.com"
 

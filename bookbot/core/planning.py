@@ -265,9 +265,20 @@ def save_plan(plan: RenamePlan, path: Path) -> None:
 
 def load_plan(path: Path) -> RenamePlan:
     """Load a rename plan from disk."""
-    with open(path, encoding="utf-8") as handle:
-        data = json.load(handle)
-    plan = RenamePlan(**data)
+    try:
+        with open(path, encoding="utf-8") as handle:
+            data = json.load(handle)
+    except json.JSONDecodeError as e:
+        raise ValueError(
+            f"{path} is not a valid BookBot plan file (invalid JSON: {e}). "
+            "Plans are created with 'bookbot scan <folder> --plan <file>'."
+        ) from e
+    try:
+        plan = RenamePlan(**data)
+    except Exception as e:
+        raise ValueError(
+            f"{path} is not a valid BookBot plan file: {e}"
+        ) from e
     plan.validate_plan()
     return plan
 
