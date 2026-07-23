@@ -229,6 +229,10 @@ class TemplateEngine:
 
     def _format_author_last_first(self, author: str) -> str:
         """Format author name as 'Last, First'."""
+        # Already in "Last, First" form (e.g. re-scanning our own output):
+        # pass through unchanged instead of re-flipping into "J., Sobol, Donald".
+        if "," in author:
+            return author.strip()
         # Simple heuristic: assume last word is surname
         parts = author.strip().split()
         if len(parts) <= 1:
