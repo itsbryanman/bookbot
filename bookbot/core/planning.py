@@ -17,6 +17,99 @@ class PlanBuilder:
 
     TRACK_SAFE_FILE_TEMPLATE = "{DiscPad}{TrackPad} - {TrackTitle}"
 
+    # Non-audio companions that should travel with a book when its audio
+    # moves. Leaving these behind orphans covers/metadata on every apply.
+    SIDECAR_EXTENSIONS = {
+        ".jpg",
+        ".jpeg",
+        ".png",
+        ".gif",
+        ".webp",
+        ".opf",
+        ".nfo",
+        ".cue",
+        ".json",
+        ".m3u",
+        ".m3u8",
+    }
+    _AUDIO_EXTENSIONS = {
+        ".mp3",
+        ".m4a",
+        ".m4b",
+        ".flac",
+        ".ogg",
+        ".opus",
+        ".aac",
+        ".wav",
+    }
+
+    def _companion_operations(
+        self, audiobook_set: AudiobookSet, destination_folder: Path
+    ) -> list[RenameOperation]:
+        """Plan moves for sidecars (covers, .opf, .nfo, ...) with their book.
+
+        A folder's companions move only when every audio file in that folder
+        belongs to this set, so sidecars of unrelated books sharing a folder
+        are never claimed. First basename claim wins on collision (e.g. one
+        cover.jpg per disc folder).
+        """
+        track_paths = {
+            track.src_path.resolve(strict=False) for track in audiobook_set.tracks
+        }
+        folders: list[Path] = []
+        seen: set[Path] = set()
+        for track in audiobook_set.tracks:
+            parent = track.src_path.parent
+            if parent not in seen:
+                seen.add(parent)
+                folders.append(parent)
+        source_root = audiobook_set.source_path
+        if source_root.is_dir() and source_root not in seen:
+            folders.append(source_root)
+
+        operations: list[RenameOperation] = []
+        claimed_names: set[str] = set()
+        for folder in folders:
+            if not folder.is_dir():
+                continue
+            try:
+                entries = sorted(folder.iterdir())
+            except OSError:
+                continue
+
+            folder_audio = [
+                entry
+                for entry in entries
+                if entry.is_file()
+                and entry.suffix.lower() in self._AUDIO_EXTENSIONS
+            ]
+            if any(
+                entry.resolve(strict=False) not in track_paths
+                for entry in folder_audio
+            ):
+                # Folder is shared with audio outside this set; don't claim
+                # its sidecars.
+                continue
+
+            for entry in entries:
+                if not entry.is_file():
+                    continue
+                if entry.suffix.lower() not in self.SIDECAR_EXTENSIONS:
+                    continue
+                name_key = entry.name.lower()
+                if name_key in claimed_names:
+                    continue
+                new_path = destination_folder / entry.name
+                if new_path.resolve(strict=False) == entry.resolve(strict=False):
+                    claimed_names.add(name_key)
+                    continue
+                claimed_names.add(name_key)
+                operations.append(
+                    RenameOperation(old_path=entry, new_path=new_path)
+                )
+
+        return operations
+
     def __init__(self, config: Config):
         self.config = config
         self.template_engine = TemplateEngine(
@@ -96,6 +189,7 @@ class PlanBuilder:
                 )
             )
 
+            set_moved = False
             for track in audiobook_set.tracks:
                 filename = self.template_engine.generate_filename(
                     track,
@@ -109,12 +203,18 @@ class PlanBuilder:
                     strict=False
                 ):
                     continue
+                set_moved = True
                 operations.append(
                     RenameOperation(
                         old_path=track.src_path,
                         new_path=new_path,
                         track=track,
                     )
+                )
+
+            if set_moved:
+                operations.extend(
+                    self._companion_operations(audiobook_set, destination_folder)
                 )
 
         plan = RenamePlan(

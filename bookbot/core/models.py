@@ -264,7 +264,9 @@ class RenameOperation(BaseModel):
     old_path: Path
     new_path: Path
     temp_path: Path | None = None
-    track: Track
+    # None for companion/sidecar files (covers, .opf, .nfo, ...) that travel
+    # with a book's audio; only audio operations carry a Track.
+    track: Track | None = None
 
     @field_validator("old_path", "new_path", "temp_path", mode="before")
     def validate_paths(cls, v: str | Path | None) -> Path | None:
