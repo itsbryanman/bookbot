@@ -112,6 +112,11 @@ class TransactionManager:
                 transaction_type="rename",
             )
 
+            # Prune source folders the apply just emptied. Without this the
+            # old layout coexists with the new one (visible on multi-disc
+            # books, where every disc folder is left behind empty).
+            self._prune_emptied_source_dirs(plan)
+
             # Update plan status
             plan.dry_run = False
             plan.applied_transaction_id = transaction_id
@@ -296,10 +301,49 @@ class TransactionManager:
                 record.new_path.rename(record.old_path)
                 self._cleanup_empty_directories(record.new_path.parent)
 
-    def _cleanup_empty_directories(self, start_dir: Path) -> None:
-        """Best-effort cleanup of empty directories left behind after undo."""
+    def _prune_emptied_source_dirs(self, plan: RenamePlan) -> None:
+        """Remove source directories left empty by an applied plan.
+
+        Only directories that are genuinely empty are removed, only inside
+        the plan's own source root, and never the root itself. Undo recreates
+        them via `old_path.parent.mkdir(parents=True)`.
+        """
+        root = plan.source_path.resolve(strict=False)
+        source_dirs = {
+            operation.old_path.parent for operation in plan.operations
+        }
+        # Deepest first so parents become empty before they're considered.
+        for directory in sorted(
+            source_dirs, key=lambda path: len(path.parts), reverse=True
+        ):
+            resolved = directory.resolve(strict=False)
+            if resolved == root or root not in resolved.parents:
+                continue
+            if not directory.is_dir():
+                continue
+            try:
+                if any(directory.iterdir()):
+                    continue
+            except OSError:
+                continue
+            self._cleanup_empty_directories(directory, stop_at=root)
+
+    def _cleanup_empty_directories(
+        self, start_dir: Path, stop_at: Path | None = None
+    ) -> None:
+        """Best-effort cleanup of empty directories.
+
+        `stop_at` is an exclusive boundary: it and everything above it are
+        never removed, so pruning can't escape the library root.
+        """
+        boundary = stop_at.resolve(strict=False) if stop_at is not None else None
         current = start_dir
         while current != current.parent:
+            resolved = current.resolve(strict=False)
+            if boundary is not None and (
+                resolved == boundary or boundary not in resolved.parents
+            ):
+                break
             try:
                 current.rmdir()
             except OSError:

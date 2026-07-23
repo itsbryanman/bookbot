@@ -16,6 +16,65 @@ NS_OPF = "http://www.idpf.org/2007/opf"
 NS_DC = "http://purl.org/dc/elements/1.1/"
 
 
+def _coerce_scalar(value: Any) -> str | None:
+    """Reduce a loosely-typed sidecar JSON value to a clean string or None.
+
+    Real-world metadata.json files (Audiobookshelf, BookLore, Calibre
+    exports) are not strictly typed: `series` may be `[]`, a bare string, or
+    a list of objects like `[{"name": "...", "sequence": "1"}]`; `narrator`
+    may be a list; `isbn` may be a number. Every one of those shapes used to
+    raise past the reader's except clause and abort the whole command.
+    """
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, str):
+        return value.strip() or None
+    if isinstance(value, (int, float)):
+        return str(value)
+    if isinstance(value, dict):
+        for key in ("name", "title", "value", "series"):
+            nested = _coerce_scalar(value.get(key))
+            if nested is not None:
+                return nested
+        return None
+    if isinstance(value, (list, tuple)):
+        for item in value:
+            nested = _coerce_scalar(item)
+            if nested is not None:
+                return nested
+        return None
+    return None
+
+
+def _coerce_str_list(value: Any) -> list[str]:
+    """Reduce a sidecar JSON value to a list of clean strings."""
+    if value is None:
+        return []
+    if isinstance(value, (list, tuple)):
+        results = []
+        for item in value:
+            coerced = _coerce_scalar(item)
+            if coerced is not None:
+                results.append(coerced)
+        return results
+    coerced = _coerce_scalar(value)
+    return [coerced] if coerced is not None else []
+
+
+def _coerce_int(value: Any) -> int | None:
+    """Reduce a sidecar JSON value to an int, tolerating strings like '2013'."""
+    coerced = _coerce_scalar(value)
+    if coerced is None:
+        return None
+    match = re.search(r"-?\d+", coerced)
+    if match is None:
+        return None
+    try:
+        return int(match.group())
+    except ValueError:
+        return None
+
+
 class SidecarManager:
     """Reads and writes sidecar metadata files."""
 
@@ -118,6 +177,11 @@ class SidecarManager:
         except (ET.ParseError, OSError) as e:
             logger.warning(f"Failed to parse OPF file {path}: {e}")
             return None
+        except Exception as e:
+            # A malformed sidecar must degrade to "no metadata", never abort
+            # the surrounding command.
+            logger.warning(f"Ignoring unusable OPF file {path}: {e}")
+            return None
 
     def write_opf(self, path: Path, identity: ProviderIdentity) -> None:
         """Write metadata as OPF/XML (Calibre/ABS format)."""
@@ -200,17 +264,20 @@ class SidecarManager:
         """Parse a BookLore-style .metadata.json file."""
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(data, dict):
+                logger.warning(
+                    f"Ignoring metadata JSON {path}: expected an object at the "
+                    "top level"
+                )
+                return None
 
-            title = data.get("title", "")
+            title = _coerce_scalar(data.get("title"))
             if not title:
                 return None
 
-            authors = data.get("authors", [])
-            if isinstance(authors, str):
-                authors = [authors]
+            authors = _coerce_str_list(data.get("authors"))
 
-            year = data.get("year")
-            isbn = data.get("isbn", "")
+            isbn = _coerce_scalar(data.get("isbn"))
             isbn_13 = None
             isbn_10 = None
             if isbn:
@@ -220,26 +287,33 @@ class SidecarManager:
                 elif len(clean) == 10:
                     isbn_10 = clean
 
+            cover_url = _coerce_scalar(data.get("coverUrl"))
+
             return ProviderIdentity(
                 provider="sidecar_json",
                 external_id=str(path),
                 title=title,
                 authors=authors,
-                series_name=data.get("series"),
-                series_index=data.get("seriesIndex"),
-                year=year,
-                language=data.get("language"),
-                narrator=data.get("narrator"),
-                publisher=data.get("publisher"),
+                series_name=_coerce_scalar(data.get("series")),
+                series_index=_coerce_scalar(data.get("seriesIndex")),
+                year=_coerce_int(data.get("year")),
+                language=_coerce_scalar(data.get("language")),
+                narrator=_coerce_scalar(data.get("narrator")),
+                publisher=_coerce_scalar(data.get("publisher")),
                 isbn_10=isbn_10,
                 isbn_13=isbn_13,
-                asin=data.get("asin"),
-                description=data.get("description"),
-                cover_urls=[data["coverUrl"]] if data.get("coverUrl") else [],
+                asin=_coerce_scalar(data.get("asin")),
+                description=_coerce_scalar(data.get("description")),
+                cover_urls=[cover_url] if cover_url else [],
             )
 
         except (json.JSONDecodeError, OSError) as e:
             logger.warning(f"Failed to parse metadata JSON {path}: {e}")
+            return None
+        except Exception as e:
+            # A malformed sidecar must degrade to "no metadata", never abort
+            # the surrounding command.
+            logger.warning(f"Ignoring unusable metadata JSON {path}: {e}")
             return None
 
     def write_metadata_json(self, path: Path, identity: ProviderIdentity) -> None:

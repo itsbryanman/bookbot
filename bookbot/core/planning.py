@@ -96,19 +96,46 @@ class PlanBuilder:
                     continue
                 if entry.suffix.lower() not in self.SIDECAR_EXTENSIONS:
                     continue
-                name_key = entry.name.lower()
-                if name_key in claimed_names:
-                    continue
-                new_path = destination_folder / entry.name
+
+                target_name = entry.name
+                if target_name.lower() in claimed_names:
+                    # Multi-disc books routinely carry one cover.jpg per disc
+                    # folder. Skipping the collision used to strand those
+                    # files, leaving the old source tree half-populated
+                    # alongside the new one. Disambiguate with the source
+                    # folder name so every companion moves and the source
+                    # folder can be pruned.
+                    target_name = self._disambiguated_name(
+                        entry, folder, claimed_names
+                    )
+                    if target_name is None:
+                        continue
+
+                new_path = destination_folder / target_name
+                claimed_names.add(target_name.lower())
                 if new_path.resolve(strict=False) == entry.resolve(strict=False):
-                    claimed_names.add(name_key)
                     continue
-                claimed_names.add(name_key)
                 operations.append(
                     RenameOperation(old_path=entry, new_path=new_path)
                 )
 
         return operations
+
+    @staticmethod
+    def _disambiguated_name(
+        entry: Path, folder: Path, claimed_names: set[str]
+    ) -> str | None:
+        """Build a collision-free companion filename from its source folder."""
+        candidates = [f"{folder.name} - {entry.name}"]
+        stem = entry.stem
+        suffix = entry.suffix
+        candidates.extend(
+            f"{stem} ({index}){suffix}" for index in range(2, 100)
+        )
+        for candidate in candidates:
+            if candidate.lower() not in claimed_names:
+                return candidate
+        return None
 
     def __init__(self, config: Config):
         self.config = config
