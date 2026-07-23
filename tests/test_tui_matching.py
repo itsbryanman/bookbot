@@ -450,3 +450,49 @@ async def test_bookbot_app_closes_provider_on_direct_exit(tmp_path: Path) -> Non
         await pilot.pause()
 
     assert provider.close_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_apply_requires_two_presses(tmp_path: Path) -> None:
+    """First `a` arms the apply; a second press is required to run it."""
+    app = BookBotApp(ConfigManager(tmp_path / "config"), [])
+    applied = []
+
+    async def fake_apply() -> None:
+        applied.append(True)
+
+    app.apply_changes = fake_apply  # type: ignore[method-assign]
+
+    async with app.run_test() as pilot:
+        await pilot.pause(0)
+        await app.action_apply_selected()
+        assert app._apply_armed is True
+        assert applied == []
+
+        await app.action_apply_selected()
+        assert app._apply_armed is False
+        assert applied == [True]
+
+
+@pytest.mark.asyncio
+async def test_other_action_disarms_apply(tmp_path: Path) -> None:
+    """Any non-apply action cancels a pending apply confirmation."""
+    app = BookBotApp(ConfigManager(tmp_path / "config"), [])
+    applied = []
+
+    async def fake_apply() -> None:
+        applied.append(True)
+
+    app.apply_changes = fake_apply  # type: ignore[method-assign]
+
+    async with app.run_test() as pilot:
+        await pilot.pause(0)
+        await app.action_apply_selected()
+        assert app._apply_armed is True
+
+        app.action_help()
+        assert app._apply_armed is False
+
+        await app.action_apply_selected()
+        assert applied == []  # re-armed, not applied
+        assert app._apply_armed is True
