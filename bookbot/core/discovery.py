@@ -22,6 +22,12 @@ _NFO_NARRATOR_RE = re.compile(
     re.IGNORECASE,
 )
 _IMPLAUSIBLE_AUTHOR_RE = re.compile(r"^[A-Z]{1,4}\s*\d+$")
+# "Last, First" shaped folder names (bookbot's own {AuthorLastFirst} output).
+# Digits are rejected on either side so series artifacts like
+# "05, Encyclopedia Brown" never read as authors.
+_LAST_FIRST_AUTHOR_RE = re.compile(
+    r"^[^\d,]{2,}?,\s+[^\d,]{2,}$"
+)
 _PERSONAL_NAME_TOKEN_RE = re.compile(
     r"^(?:[A-Z][A-Za-z'`-]*|[A-Z](?:\.[A-Z])+\.?|[A-Z]\.)$"
 )
@@ -894,9 +900,19 @@ class AudioFileScanner:
             if track.existing_tags.albumartist:
                 albumartists.add(str(track.existing_tags.albumartist))
 
+        parent_author = self._parent_author_guess(source_path.parent)
+        # Inside an Author/Title layout (e.g. bookbot's own output), the
+        # folder name *is* the title; preferring a stray album tag over it
+        # makes a just-organized library propose fresh moves on rescan.
+        in_author_title_layout = parent_author is not None and bool(
+            _LAST_FIRST_AUTHOR_RE.fullmatch(
+                self._clean_metadata_name(source_path.parent.name)
+            )
+        )
+
         title_guess = (
             folder_name
-            if prefer_folder_title
+            if prefer_folder_title or in_author_title_layout
             else albums.pop() if len(albums) == 1 else folder_name
         )
         author_guess = (
@@ -904,7 +920,7 @@ class AudioFileScanner:
             if len(albumartists) == 1
             else artists.pop()
             if len(artists) == 1
-            else self._parent_author_guess(source_path.parent)
+            else parent_author
         )
 
         return title_guess, author_guess, None, None
@@ -1028,10 +1044,20 @@ class AudioFileScanner:
 
     def _parent_author_guess(self, parent_path: Path) -> str | None:
         """Extract a plausible author from a parent folder name."""
-        _, parent_author = self._author_title_guess(
-            self._clean_metadata_name(parent_path.name)
-        )
-        return parent_author
+        cleaned = self._clean_metadata_name(parent_path.name)
+        _, parent_author = self._author_title_guess(cleaned)
+        if parent_author is not None:
+            return parent_author
+
+        # A parent folder that IS an author name in "Last, First" form is
+        # exactly what bookbot's own {AuthorLastFirst}/{Title} output looks
+        # like; without accepting it, rescanning an organized library loses
+        # the author and proposes moves into "Unknown Author".
+        if _LAST_FIRST_AUTHOR_RE.fullmatch(cleaned) and not (
+            self._is_implausible_author_guess(cleaned)
+        ):
+            return cleaned
+        return None
 
     def _is_implausible_author_guess(self, author_guess: str) -> bool:
         """Reject short codes and heavily numeric prefixes as author guesses."""
