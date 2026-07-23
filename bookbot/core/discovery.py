@@ -116,6 +116,27 @@ class AudioFileScanner:
     )
     STANDALONE_BOOK_MIN_DURATION = 60 * 60
 
+    def _album_disc_split(self, album: str | None) -> tuple[str | None, int | None]:
+        """Split an album tag like 'On Combat Disc 3' into (stem, disc_number).
+
+        Per-disc album tags are common in CD rips and survive bookbot's own
+        apply (which renames files but never rewrites tags). Treating each
+        per-disc album as a distinct book makes a just-applied library
+        re-fragment on the next scan, so the disc suffix must be recognized
+        as disc evidence rather than book identity.
+        """
+        if album is None:
+            return None, None
+        match = self.SUFFIX_DISC_PATTERN.match(album.strip())
+        if match is None:
+            return album, None
+        try:
+            number = int(match.group("num"))
+        except ValueError:
+            return album, None
+        stem = match.group("stem").strip()
+        return (stem or album), number
+
     def __init__(self, recursive: bool = True, max_depth: int = 5):
         self.recursive = recursive
         self.max_depth = max_depth
@@ -223,7 +244,8 @@ class AudioFileScanner:
                 tags = self._extract_audio_tags(file_path)
             except Exception:
                 tags = AudioTags()
-            album_key = self._normalize_grouping_text(tags.album)
+            album_stem, _ = self._album_disc_split(tags.album)
+            album_key = self._normalize_grouping_text(album_stem)
             if album_key is None:
                 untagged_files.append(file_path)
                 continue
@@ -753,6 +775,13 @@ class AudioFileScanner:
         from_tags = self._normalize_numeric_tag(tags.disc)
         if from_tags is not None:
             return from_tags
+
+        # Per-disc album tags ("On Combat Disc 3") are disc evidence too;
+        # without this, merged multi-disc folders lose disc identity after
+        # apply and track indices collide on rescan.
+        _, album_disc = self._album_disc_split(tags.album)
+        if album_disc is not None:
+            return album_disc
 
         exact_filename_match = self._exact_disc_folder_match(file_path.stem)
         if exact_filename_match is not None:
