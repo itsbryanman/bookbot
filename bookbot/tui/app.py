@@ -280,6 +280,40 @@ class BookBotApp(App):
         color: $error;
         text-style: bold;
     }
+
+    CandidateDetailScreen, ManualSearchScreen {
+        align: center middle;
+    }
+
+    .candidate-modal {
+        width: 90%;
+        height: 85%;
+        background: $surface;
+        border: thick $accent;
+        padding: 1 2;
+    }
+
+    .candidate-columns {
+        height: 1fr;
+        margin-top: 1;
+    }
+
+    #candidate_table {
+        height: 12;
+        margin-bottom: 1;
+    }
+
+    #candidate_status {
+        color: $warning;
+        margin-bottom: 1;
+    }
+
+    #candidate_local, #candidate_detail {
+        width: 1fr;
+        height: 1fr;
+        border: solid $surface-lighten-1;
+        padding: 0 1;
+    }
     """
 
     BINDINGS = [
@@ -288,6 +322,7 @@ class BookBotApp(App):
         Binding("f1", "help", "Help", show=False),
         Binding("s", "scan", "Scan", show=True),
         Binding("m", "match", "Match", show=True),
+        Binding("c", "choose_candidate", "Choose", show=True),
         Binding("p", "preview_plan", "Preview", show=True),
         Binding("a", "apply_selected", "Apply", show=True),
         Binding("u", "undo", "Undo", show=True),
@@ -583,19 +618,32 @@ class BookBotApp(App):
         preview_screen = self.query_one("#preview_screen", PreviewScreen)
         preview_screen.source_roots = self.source_folders
         preview_screen.set_audiobook_sets(self.audiobook_sets)
+        plan = preview_screen.last_plan
 
         # Enable apply button
         apply_button = self.query_one("#apply_changes", Button)
-        apply_button.disabled = False
+        apply_button.disabled = bool(
+            plan is None or not (plan.operations or plan.planned_sidecars)
+        )
 
         # Switch to mission control tab
         tabbed_content = self.query_one(TabbedContent)
         tabbed_content.active = "mission"
 
-        self.update_status("Review changes and apply when ready")
-        self.update_warning_panel(
-            "Preview updated. Press d to inspect the diff or a to apply the plan."
-        )
+        skipped_count = len(plan.skipped) if plan is not None else 0
+        if skipped_count:
+            self.update_status(
+                f"Preview ready - {skipped_count} book(s) still need review"
+            )
+            self.update_warning_panel(
+                f"Preview updated. {skipped_count} book(s) were skipped because "
+                "they still need review. Press d to inspect the diff."
+            )
+        else:
+            self.update_status("Review changes and apply when ready")
+            self.update_warning_panel(
+                "Preview updated. Press d to inspect the diff or a to apply the plan."
+            )
 
     async def apply_changes(self) -> None:
         """Apply the changes."""
@@ -659,6 +707,12 @@ class BookBotApp(App):
         self._disarm_apply()
         await self.find_matches()
 
+    async def action_choose_candidate(self) -> None:
+        """Open the candidate picker for the focused match row."""
+        self._disarm_apply()
+        match_screen = self.query_one("#match_screen", MatchReviewScreen)
+        await match_screen.open_focused_candidate_picker()
+
     def action_preview_plan(self) -> None:
         """Show the rename preview."""
         self._disarm_apply()
@@ -704,7 +758,7 @@ class BookBotApp(App):
                 preview_screen.audiobook_sets,
                 source_roots=preview_screen.source_roots or [common_root],
             )
-            return len(plan.operations)
+            return len(plan.operations) + len(plan.planned_sidecars)
         except Exception:
             return None
 

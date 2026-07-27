@@ -61,6 +61,76 @@ class _MockProviderB(MetadataProvider):
         return None
 
 
+class _AudnexusLikeProvider(MetadataProvider):
+    def __init__(self) -> None:
+        super().__init__("audnexus")
+
+    async def search(
+        self, *, title=None, author=None, series=None,
+        isbn=None, year=None, language=None, limit=10,
+    ) -> list[ProviderIdentity]:
+        return [
+            ProviderIdentity(
+                provider="audnexus",
+                external_id="audnexus-1",
+                title="The Way of Kings",
+                authors=["Brandon Sanderson"],
+                asin="B003P2WO5E",
+                narrator="Michael Kramer, Kate Reading",
+                runtime_minutes=2734,
+            ),
+        ]
+
+    async def get_by_id(self, external_id: str) -> ProviderIdentity | None:
+        return None
+
+
+class _OpenLibraryLikeProvider(MetadataProvider):
+    def __init__(self) -> None:
+        super().__init__("openlibrary")
+
+    async def search(
+        self, *, title=None, author=None, series=None,
+        isbn=None, year=None, language=None, limit=10,
+    ) -> list[ProviderIdentity]:
+        return [
+            ProviderIdentity(
+                provider="openlibrary",
+                external_id="openlibrary-1",
+                title="The Way of Kings",
+                authors=["Brandon Sanderson"],
+                isbn_13="9780765326355",
+                year=2010,
+            ),
+        ]
+
+    async def get_by_id(self, external_id: str) -> ProviderIdentity | None:
+        return None
+
+
+class _AudibleLikeProvider(MetadataProvider):
+    def __init__(self) -> None:
+        super().__init__("audible")
+
+    async def search(
+        self, *, title=None, author=None, series=None,
+        isbn=None, year=None, language=None, limit=10,
+    ) -> list[ProviderIdentity]:
+        return [
+            ProviderIdentity(
+                provider="audible",
+                external_id="audible-1",
+                title="The Way of Kings",
+                authors=["Brandon Sanderson"],
+                asin="B003P2WO5E",
+                narrator="Audible Narrator",
+            ),
+        ]
+
+    async def get_by_id(self, external_id: str) -> ProviderIdentity | None:
+        return None
+
+
 class _FailingProvider(MetadataProvider):
     def __init__(self) -> None:
         super().__init__("FailingProvider")
@@ -153,6 +223,55 @@ class TestCorroborationBoost:
         # Confidence should be higher than the max individual score
         # (individual max is about 0.8 for title+author only)
         assert c.confidence >= 0.8
+
+    def test_merges_audio_and_print_candidates_across_identifier_types(self) -> None:
+        manager = _create_manager_with_providers(
+            [_AudnexusLikeProvider(), _OpenLibraryLikeProvider()]
+        )
+
+        with patch.object(
+            manager, "get_enabled_providers",
+            return_value=list(manager.providers.values()),
+        ):
+            candidates = asyncio.run(
+                manager.find_matches_merged(
+                    _make_audiobook(
+                        title="The Way of Kings",
+                        author="Brandon Sanderson",
+                        total_duration=2731 * 60.0,
+                    )
+                )
+            )
+
+        assert len(candidates) == 1
+        candidate = candidates[0]
+        assert candidate.identity.asin == "B003P2WO5E"
+        assert candidate.identity.isbn_13 == "9780765326355"
+        assert "Corroborated by 2 providers" in candidate.match_reasons
+        assert (
+            "Corroborated across audio + print providers"
+            in candidate.match_reasons
+        )
+
+    def test_highest_priority_provider_keeps_surviving_identity(self) -> None:
+        manager = _create_manager_with_providers(
+            [_AudnexusLikeProvider(), _AudibleLikeProvider(), _OpenLibraryLikeProvider()]
+        )
+
+        with patch.object(
+            manager, "get_enabled_providers",
+            return_value=list(manager.providers.values()),
+        ):
+            candidates = asyncio.run(
+                manager.find_matches_merged(
+                    _make_audiobook(
+                        title="The Way of Kings",
+                        author="Brandon Sanderson",
+                    )
+                )
+            )
+
+        assert candidates[0].identity.provider == "audnexus"
 
 
 # ── Duration cross-check ──

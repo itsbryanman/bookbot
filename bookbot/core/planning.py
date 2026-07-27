@@ -8,6 +8,7 @@ from datetime import datetime
 from pathlib import Path
 
 from ..config.models import Config
+from ..io.sidecar import sidecar_output_paths
 from .models import AudiobookSet, RenameOperation, RenamePlan
 from .templates import TemplateEngine
 
@@ -145,6 +146,22 @@ class PlanBuilder:
             max_path_length=config.max_path_length,
         )
 
+    def _planned_sidecar_paths(
+        self,
+        audiobook_set: AudiobookSet,
+        destination_folder: Path,
+    ) -> list[Path]:
+        """Return the sidecar files the apply step should create."""
+        if audiobook_set.chosen_identity is None:
+            return []
+        return list(
+            sidecar_output_paths(
+                destination_folder,
+                audiobook_set.chosen_identity,
+                self.config.output,
+            ).values()
+        )
+
     def create_plan(
         self,
         library_root: Path,
@@ -198,10 +215,39 @@ class PlanBuilder:
         source_roots: list[Path],
     ) -> RenamePlan:
         operations: list[RenameOperation] = []
+        planned_sidecars: list[Path] = []
         root = library_root.resolve(strict=False)
         resolved_source_roots = [path.resolve(strict=False) for path in source_roots]
+        skipped: list[dict[str, str]] = []
 
         for audiobook_set in audiobook_sets:
+            if audiobook_set.review_skipped:
+                skipped.append(
+                    {
+                        "source_path": str(audiobook_set.source_path),
+                        "reason": audiobook_set.review_reason or "Skipped by reviewer",
+                    }
+                )
+                continue
+            if (
+                audiobook_set.chosen_identity is None
+                and (
+                    audiobook_set.needs_review
+                    or bool(audiobook_set.provider_candidates)
+                    or audiobook_set.review_reason is not None
+                )
+            ):
+                skipped.append(
+                    {
+                        "source_path": str(audiobook_set.source_path),
+                        "reason": (
+                            audiobook_set.review_reason
+                            or "No reviewed metadata match selected"
+                        ),
+                    }
+                )
+                continue
+
             destination_root = self._destination_root(
                 audiobook_set.source_path.resolve(strict=False),
                 root,
@@ -244,6 +290,10 @@ class PlanBuilder:
                     self._companion_operations(audiobook_set, destination_folder)
                 )
 
+            planned_sidecars.extend(
+                self._planned_sidecar_paths(audiobook_set, destination_folder)
+            )
+
         plan = RenamePlan(
             plan_id=self._plan_id(root, operations, profile_name),
             created_at=datetime.now(),
@@ -252,6 +302,8 @@ class PlanBuilder:
             operations=operations,
             audiobook_sets=audiobook_sets,
             dry_run=True,
+            skipped=skipped,
+            planned_sidecars=planned_sidecars,
         )
         plan.validate_plan()
         return plan
@@ -320,6 +372,8 @@ def format_plan_summary(plan: RenamePlan, include_operations: bool = True) -> st
         (
             f"Books: {len(plan.audiobook_sets)} | "
             f"Operations: {len(plan.operations)} | "
+            f"Sidecars: {len(plan.planned_sidecars)} | "
+            f"Skipped: {len(plan.skipped)} | "
             f"Conflicts: {len(plan.conflicts)} | "
             f"Warnings: {len(plan.warnings)}"
         ),
@@ -334,6 +388,19 @@ def format_plan_summary(plan: RenamePlan, include_operations: bool = True) -> st
         lines.append("")
         lines.append("Conflicts:")
         lines.extend(f"  - {conflict}" for conflict in plan.conflicts)
+
+    if plan.skipped:
+        lines.append("")
+        lines.append("Skipped:")
+        lines.extend(
+            f"  - {item['source_path']}: {item['reason']}"
+            for item in plan.skipped
+        )
+
+    if plan.planned_sidecars:
+        lines.append("")
+        lines.append("Sidecar Writes:")
+        lines.extend(f"  - {path}" for path in plan.planned_sidecars)
 
     if include_operations and plan.operations:
         lines.append("")

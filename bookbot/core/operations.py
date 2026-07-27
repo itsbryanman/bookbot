@@ -1,15 +1,21 @@
 """Atomic file operations for safe renaming and undo functionality."""
 
 import json
+import os
 import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+from urllib.request import Request, urlopen
 
 from mutagen import MutagenError
 
 from ..config.manager import ConfigManager
+from ..core.logging import get_logger
+from ..io.sidecar import SidecarManager, sidecar_output_paths
 from .models import AudioTags, OperationRecord, RenameOperation, RenamePlan, Track
+
+logger = get_logger("operations")
 
 
 class TransactionManager:
@@ -18,6 +24,120 @@ class TransactionManager:
     def __init__(self, config_manager: ConfigManager):
         self.config_manager = config_manager
         self.log_dir = config_manager.get_log_dir()
+        self.sidecar_manager = SidecarManager()
+
+    def _destination_folder_for_set(self, audiobook_set) -> Path:  # type: ignore[no-untyped-def]
+        """Infer the current destination folder for one audiobook set."""
+        parents = [track.src_path.parent for track in audiobook_set.tracks]
+        if not parents:
+            return audiobook_set.source_path
+        try:
+            return Path(os.path.commonpath([str(parent) for parent in parents]))
+        except ValueError:
+            return parents[0]
+
+    @staticmethod
+    def _next_backup_path(path: Path) -> Path:
+        """Return a non-destructive backup path for an existing sidecar."""
+        candidate = path.with_name(f"{path.name}.bak")
+        if not candidate.exists():
+            return candidate
+        for index in range(2, 100):
+            candidate = path.with_name(f"{path.name}.bak{index}")
+            if not candidate.exists():
+                return candidate
+        raise FileExistsError(f"Unable to allocate backup path for {path}")
+
+    def _download_cover_bytes(self, url: str, timeout: float) -> bytes:
+        """Fetch remote cover art bytes with the configured timeout."""
+        request = Request(url, headers={"User-Agent": "BookBot/1.0"})
+        with urlopen(request, timeout=timeout) as response:
+            return response.read()
+
+    def _write_sidecar_record(
+        self,
+        transaction_id: str,
+        target_path: Path,
+        *,
+        backup_path: Path | None,
+        sidecar_kind: str,
+    ) -> OperationRecord:
+        """Create an undo record for a newly written sidecar file."""
+        metadata: dict[str, Any] = {"sidecar_kind": sidecar_kind}
+        if backup_path is not None:
+            metadata["backup_path"] = str(backup_path)
+        return OperationRecord(
+            operation_id=transaction_id,
+            timestamp=datetime.now(),
+            operation_type="sidecar",
+            old_path=backup_path,
+            new_path=target_path,
+            new_content_hash=self._calculate_file_hash(target_path),
+            metadata=metadata,
+        )
+
+    def _write_sidecar_outputs(
+        self,
+        plan: RenamePlan,
+        transaction_id: str,
+        transaction_log: list[OperationRecord],
+    ) -> None:
+        """Write configured post-apply sidecars for reviewed audiobook sets."""
+        config = self.config_manager.load_config()
+        timeout = max(1.0, float(config.providers.request_timeout or 15))
+
+        for audiobook_set in plan.audiobook_sets:
+            identity = audiobook_set.chosen_identity
+            if identity is None:
+                continue
+
+            destination_folder = self._destination_folder_for_set(audiobook_set)
+            destination_folder.mkdir(parents=True, exist_ok=True)
+            targets = sidecar_output_paths(destination_folder, identity, config.output)
+
+            for sidecar_kind, target_path in targets.items():
+                backup_path: Path | None = None
+                if target_path.exists():
+                    backup_path = self._next_backup_path(target_path)
+                    target_path.rename(backup_path)
+
+                try:
+                    if sidecar_kind == "metadata_json":
+                        self.sidecar_manager.write_metadata_json(target_path, identity)
+                    elif sidecar_kind == "metadata_opf":
+                        self.sidecar_manager.write_opf(target_path, identity)
+                    elif sidecar_kind == "nfo":
+                        self.sidecar_manager.write_nfo(target_path, identity)
+                    elif sidecar_kind == "cover":
+                        cover_bytes = self._download_cover_bytes(
+                            identity.cover_urls[0],
+                            timeout,
+                        )
+                        target_path.write_bytes(cover_bytes)
+                    else:
+                        raise ValueError(f"Unknown sidecar kind: {sidecar_kind}")
+                except Exception as exc:
+                    if target_path.exists():
+                        target_path.unlink()
+                    if backup_path is not None and backup_path.exists():
+                        backup_path.rename(target_path)
+                    if sidecar_kind == "cover":
+                        logger.warning(
+                            "Failed to fetch cover art sidecar",
+                            path=str(target_path),
+                            error=str(exc),
+                        )
+                        continue
+                    raise
+
+                transaction_log.append(
+                    self._write_sidecar_record(
+                        transaction_id,
+                        target_path,
+                        backup_path=backup_path,
+                        sidecar_kind=sidecar_kind,
+                    )
+                )
 
     def create_rename_plan(self, operations: list[RenameOperation]) -> RenamePlan:
         """Create a rename plan with validation."""
@@ -43,13 +163,16 @@ class TransactionManager:
 
         if plan.conflicts:
             raise ValueError(f"Cannot execute plan with conflicts: {plan.conflicts}")
+        if not plan.operations and not plan.planned_sidecars:
+            plan.dry_run = False
+            return True
 
         transaction_id = str(uuid.uuid4())
-        transaction_log = []
+        transaction_log: list[OperationRecord] = []
+        temp_operations: list[RenameOperation] = []
 
         try:
             # Phase 1: Create temporary names to avoid conflicts
-            temp_operations = []
             for operation in plan.operations:
                 temp_path = self._get_temp_path(operation.old_path)
                 operation.temp_path = temp_path
@@ -105,17 +228,29 @@ class TransactionManager:
                     operation.track.src_path = operation.new_path
                 transaction_log.append(record)
 
+            # Phase 3: Write sidecars in the destination folders.
+            self._write_sidecar_outputs(plan, transaction_id, transaction_log)
+
             # Save transaction log for undo
             self.record_transaction(
                 transaction_id,
                 transaction_log,
-                transaction_type="rename",
+                transaction_type=(
+                    "sidecar"
+                    if not plan.operations
+                    and any(
+                        record.operation_type == "sidecar"
+                        for record in transaction_log
+                    )
+                    else "rename"
+                ),
             )
 
             # Prune source folders the apply just emptied. Without this the
             # old layout coexists with the new one (visible on multi-disc
             # books, where every disc folder is left behind empty).
-            self._prune_emptied_source_dirs(plan)
+            if plan.operations:
+                self._prune_emptied_source_dirs(plan)
 
             # Update plan status
             plan.dry_run = False
@@ -145,13 +280,22 @@ class TransactionManager:
         completed_records: list[OperationRecord],
     ) -> None:
         """Rollback completed operations in reverse order."""
+        _ = operations
         for record in reversed(completed_records):
             try:
-                if record.new_path and record.new_path.exists():
+                if record.operation_type == "sidecar":
+                    self._undo_sidecar(record)
+                    continue
+                if (
+                    record.operation_type == "rename"
+                    and record.new_path
+                    and record.new_path.exists()
+                ):
                     if record.old_path:
+                        record.old_path.parent.mkdir(parents=True, exist_ok=True)
                         record.new_path.rename(record.old_path)
                     else:
-                        record.new_path.unlink()  # Remove if no original path
+                        record.new_path.unlink()
             except OSError:
                 # Best effort rollback
                 pass
@@ -228,6 +372,8 @@ class TransactionManager:
             for record in reversed(records):
                 if record.operation_type == "rename":
                     self._undo_rename(record)
+                elif record.operation_type == "sidecar":
+                    self._undo_sidecar(record)
                 elif record.operation_type == "retag":
                     self._undo_retag(record)
 
@@ -300,6 +446,21 @@ class TransactionManager:
                 record.old_path.parent.mkdir(parents=True, exist_ok=True)
                 record.new_path.rename(record.old_path)
                 self._cleanup_empty_directories(record.new_path.parent)
+
+    def _undo_sidecar(self, record: OperationRecord) -> None:
+        """Undo a sidecar write, restoring any displaced file backup."""
+        if record.new_path and record.new_path.exists():
+            record.new_path.unlink()
+
+        backup_value = record.metadata.get("backup_path")
+        backup_path = Path(str(backup_value)) if backup_value else None
+        if backup_path is not None and backup_path.exists() and record.new_path:
+            record.new_path.parent.mkdir(parents=True, exist_ok=True)
+            backup_path.rename(record.new_path)
+            self._cleanup_empty_directories(backup_path.parent)
+
+        if record.new_path is not None:
+            self._cleanup_empty_directories(record.new_path.parent)
 
     def _prune_emptied_source_dirs(self, plan: RenamePlan) -> None:
         """Remove source directories left empty by an applied plan.

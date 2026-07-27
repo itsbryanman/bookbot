@@ -3,21 +3,31 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime
+import json
 from pathlib import Path
 
 import pytest
 from click.testing import CliRunner
+from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.widgets import DataTable, Label, Static, TabbedContent
 
 from bookbot.cli import cli
 from bookbot.config.manager import ConfigManager
 from bookbot.core.models import (
+    AudioFormat,
     AudiobookSet,
     MatchCandidate,
     MatchConfidence,
     ProviderIdentity,
+    RenameOperation,
+    Track,
+    TrackStatus,
+    ReviewFlag,
+    ReviewFlagKind,
 )
+from bookbot.core.planning import PlanBuilder
 from bookbot.providers.base import MetadataProvider
 from bookbot.providers.manager import ProviderManager
 from bookbot.tui.app import BookBotApp
@@ -109,6 +119,26 @@ def _make_audiobook(title: str) -> AudiobookSet:
     )
 
 
+def _make_tracked_audiobook(source_path: Path, title: str) -> AudiobookSet:
+    track_path = source_path / "01.mp3"
+    source_path.mkdir(parents=True, exist_ok=True)
+    track_path.touch()
+    track = Track(
+        src_path=track_path,
+        disc=1,
+        track_index=1,
+        file_size=0,
+        audio_format=AudioFormat.MP3,
+        status=TrackStatus.VALID,
+    )
+    return AudiobookSet(
+        source_path=source_path,
+        raw_title_guess=title,
+        total_tracks=1,
+        tracks=[track],
+    )
+
+
 def _make_candidate(
     title: str, author: str, confidence: float = 0.91
 ) -> MatchCandidate:
@@ -123,6 +153,17 @@ def _make_candidate(
         confidence_level=MatchConfidence.HIGH,
         match_reasons=["stub"],
     )
+
+
+def _row_values(table: DataTable, index: int) -> list[str]:
+    row = table.get_row_at(index)
+    values = []
+    for value in row:
+        if isinstance(value, Text):
+            values.append(value.plain)
+        else:
+            values.append(str(value))
+    return values
 
 
 @pytest.mark.asyncio
@@ -154,17 +195,19 @@ async def test_match_review_screen_reports_failures_as_unmatched_rows(
             unmatched_count=2,
             failed_count=2,
         )
-        assert table.get_row_at(0) == [
+        assert _row_values(table, 0) == [
             "Book One",
             "No matches",
             "0.00",
+            "[none]",
             "Manual",
             "",
         ]
-        assert table.get_row_at(1) == [
+        assert _row_values(table, 1) == [
             "Book Two",
             "No matches",
             "0.00",
+            "[none]",
             "Manual",
             "",
         ]
@@ -213,17 +256,19 @@ async def test_match_review_screen_reports_mixed_success_and_failure_counts(
             unmatched_count=1,
             failed_count=1,
         )
-        assert table.get_row_at(0) == [
+        assert _row_values(table, 0) == [
             "Matched Book",
             "Found Match - Author Name",
             "0.91",
+            "[none]",
             "Accept",
             "stub",
         ]
-        assert table.get_row_at(1) == [
+        assert _row_values(table, 1) == [
             "Broken Book",
             "No matches",
             "0.00",
+            "[none]",
             "Manual",
             "",
         ]
@@ -266,10 +311,11 @@ async def test_match_review_screen_times_out_provider_manager_requests(
             unmatched_count=1,
             failed_count=1,
         )
-        assert table.get_row_at(0) == [
+        assert _row_values(table, 0) == [
             "Timed Out Book",
             "No matches",
             "0.00",
+            "[none]",
             "Manual",
             "",
         ]
@@ -348,6 +394,109 @@ async def test_bookbot_app_reports_partial_match_status(
         assert "Some providers failed" in app.query_one(
             "#warnings_panel", Static
         ).content
+
+
+@pytest.mark.asyncio
+async def test_match_review_screen_requires_manual_review_for_warn_flags(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    books = [_make_audiobook("Flagged Book")]
+    provider = BehaviorProvider(
+        {
+            "Flagged Book": [
+                MatchCandidate(
+                    identity=ProviderIdentity(
+                        provider="behavior",
+                        external_id="flagged-book",
+                        title="Found Match",
+                        authors=["Author Name"],
+                    ),
+                    confidence=0.97,
+                    confidence_level=MatchConfidence.HIGH,
+                    match_reasons=["stub"],
+                    review_flags=[
+                        ReviewFlag(
+                            kind=ReviewFlagKind.RUNTIME_MISMATCH,
+                            severity="warn",
+                            message="Local runtime differs materially",
+                        )
+                    ],
+                )
+            ]
+        }
+    )
+
+    monkeypatch.setattr(
+        "bookbot.tui.screens.logger.warning",
+        lambda *args, **kwargs: None,
+    )
+
+    app = MatchHarness(ConfigManager(tmp_path / "config"), provider)
+    async with app.run_test():
+        screen = app.query_one(MatchReviewScreen)
+        summary = await screen.find_matches(books)
+
+        table = screen.query_one("#matches_table", DataTable)
+        assert summary.matched_count == 1
+        assert _row_values(table, 0) == [
+            "Flagged Book",
+            "Found Match - Author Name",
+            "0.97",
+            "WARN",
+            "Review",
+            "stub",
+        ]
+        assert books[0].chosen_identity is None
+        assert books[0].needs_review is True
+        assert "Local runtime differs materially" in (books[0].review_reason or "")
+
+
+@pytest.mark.asyncio
+async def test_match_review_screen_manual_candidate_selection_clears_review_and_plans(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_manager = ConfigManager(tmp_path / "config")
+    book = _make_tracked_audiobook(tmp_path / "rough-book", "Rough Book")
+    provider = BehaviorProvider(
+        {
+            "Rough Book": [
+                _make_candidate("Wrong Match", "Wrong Author", confidence=0.72),
+                _make_candidate("Clean Title", "Author Name", confidence=0.95),
+            ]
+        }
+    )
+
+    app = MatchHarness(config_manager, provider)
+    async with app.run_test():
+        screen = app.query_one(MatchReviewScreen)
+        summary = await screen.find_matches([book])
+
+        assert summary.matched_count == 1
+        assert book.needs_review is True
+        assert book.chosen_identity is None
+
+        async def fake_push_screen(_screen, wait_for_dismiss=False):  # type: ignore[no-untyped-def]
+            assert wait_for_dismiss is True
+            return 1
+
+        monkeypatch.setattr(app, "push_screen", fake_push_screen)
+        await screen.open_candidate_picker(0)
+
+        assert book.needs_review is False
+        assert book.chosen_identity is not None
+        assert book.chosen_identity.title == "Clean Title"
+
+        decisions_path = config_manager.config_dir / "review-decisions.json"
+        saved = json.loads(decisions_path.read_text(encoding="utf-8"))
+        assert len(saved) == 1
+
+        plan = PlanBuilder(config_manager.load_config()).create_plan(
+            tmp_path,
+            [book],
+            source_roots=[tmp_path],
+        )
+        assert plan.skipped == []
+        assert plan.operations
 
 
 def test_tui_cli_allows_manual_launch_without_folder_args(

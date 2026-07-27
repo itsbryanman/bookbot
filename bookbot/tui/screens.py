@@ -7,9 +7,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from rich.text import Text
 from textual.app import ComposeResult
+from textual.binding import Binding
 from textual.containers import Container, Horizontal
 from textual.message import Message
+from textual.screen import ModalScreen
 from textual.widgets import (
     Button,
     Checkbox,
@@ -24,9 +27,20 @@ from textual.widgets import (
 from ..config.manager import ConfigManager
 from ..core.exceptions import MetadataError
 from ..core.logging import get_logger
+from ..core.matching import AdvancedMatcher
 from ..core.models import AudiobookSet, MatchCandidate
 from ..core.operations import TransactionManager
 from ..core.planning import PlanBuilder
+from ..core.review import (
+    accept_candidate_for_set,
+    detect_review_flags,
+    mark_set_needs_review,
+    review_reason,
+    skip_set_from_plans,
+    worst_flag_severity,
+)
+from ..core.review_store import ReviewDecisionStore
+from ..io.sidecar import SidecarManager
 from ..providers.base import MetadataProvider
 from ..providers.manager import ProviderManager
 
@@ -220,6 +234,10 @@ class MatchReviewScreen(Static):
         self.config_manager = config_manager
         self.provider = provider
         self.audiobook_sets: list[AudiobookSet] = []
+        self.review_store = ReviewDecisionStore(config_manager)
+        self.sidecar_manager = SidecarManager()
+        self._row_states: list[str] = []
+        self._row_errors: list[str | None] = []
 
     def compose(self) -> ComposeResult:
         yield Label("Metadata Matches", classes="section-title")
@@ -229,6 +247,98 @@ class MatchReviewScreen(Static):
     def _format_reasons(candidate: MatchCandidate) -> str:
         """Render match reasons compactly for table display."""
         return "; ".join(candidate.match_reasons)
+
+    @staticmethod
+    def _flag_cell(candidate: MatchCandidate) -> Text:
+        """Render the strongest review severity in the flags column."""
+        severity = worst_flag_severity(candidate.review_flags)
+        if severity is None:
+            return Text("[none]", style="green")
+        count = len(candidate.review_flags)
+        style = {"info": "cyan", "warn": "yellow", "block": "bold red"}[severity]
+        suffix = f" ({count})" if count > 1 else ""
+        return Text(f"{severity.upper()}{suffix}", style=style)
+
+    @staticmethod
+    def _title_cell(audiobook_set: AudiobookSet) -> Text:
+        """Highlight books that still need review or were skipped."""
+        style = "green"
+        if audiobook_set.needs_review:
+            style = "bold yellow"
+        elif audiobook_set.review_skipped:
+            style = "yellow"
+        return Text(audiobook_set.raw_title_guess or "Unknown", style=style)
+
+    @staticmethod
+    def _best_match_cell(
+        audiobook_set: AudiobookSet,
+        candidates: list[MatchCandidate],
+        error: str | None,
+    ) -> Text:
+        """Render the best current candidate or an error state."""
+        if error:
+            return Text("No matches", style="red")
+        if not candidates:
+            return Text("No matches", style="dim")
+        best_match = candidates[0]
+        style = "yellow" if audiobook_set.needs_review else "green"
+        return Text(
+            f"{best_match.identity.title} - {', '.join(best_match.identity.authors)}",
+            style=style,
+        )
+
+    @staticmethod
+    def _action_cell(audiobook_set: AudiobookSet, state: str) -> Text:
+        """Render the current review state for a row."""
+        if state in {"error", "unmatched"}:
+            return Text("Manual", style="yellow")
+        if audiobook_set.review_skipped:
+            return Text("Skipped", style="yellow")
+        if audiobook_set.needs_review:
+            return Text("Review", style="bold yellow")
+        if state == "accepted_saved":
+            return Text("Saved", style="cyan")
+        if state == "accepted_auto":
+            return Text("Accept", style="green")
+        return Text("Accept", style="green")
+
+    def _render_table(self) -> None:
+        """Refresh the matches table from current state."""
+        table = self.query_one("#matches_table", DataTable)
+        table.clear(columns=True)
+        table.cursor_type = "row"
+        table.add_columns(
+            "Audiobook",
+            "Best Match",
+            "Confidence",
+            "Flags",
+            "Action",
+            "Reasons",
+        )
+
+        for index, audiobook_set in enumerate(self.audiobook_sets):
+            candidates = audiobook_set.provider_candidates
+            error = self._row_errors[index] if index < len(self._row_errors) else None
+            state = self._row_states[index] if index < len(self._row_states) else ""
+
+            if candidates:
+                best_match = candidates[0]
+                confidence = f"{best_match.confidence:.2f}"
+                flags = self._flag_cell(best_match)
+                reasons = self._format_reasons(best_match)
+            else:
+                confidence = "0.00"
+                flags = Text("[none]", style="dim")
+                reasons = ""
+
+            table.add_row(
+                self._title_cell(audiobook_set),
+                self._best_match_cell(audiobook_set, candidates, error),
+                confidence,
+                flags,
+                self._action_cell(audiobook_set, state),
+                reasons,
+            )
 
     def _request_timeout_seconds(self) -> float:
         """Return the configured timeout for a single provider match request."""
@@ -253,22 +363,232 @@ class MatchReviewScreen(Static):
                 recoverable=True,
             ) from exc
 
+    async def _rerun_matches_for_set(
+        self, audiobook_set: AudiobookSet
+    ) -> list[MatchCandidate]:
+        """Re-run provider matching for just one audiobook set."""
+        if isinstance(self.provider, ProviderManager):
+            return await self.provider.find_matches_merged(audiobook_set)
+        return await self._find_matches_with_timeout(audiobook_set)
+
+    def _primary_provider(self) -> MetadataProvider | None:
+        """Return the current primary provider for manual searches."""
+        if isinstance(self.provider, ProviderManager):
+            return self.provider.get_primary_provider()
+        return self.provider
+
+    async def _manual_search_candidates(
+        self,
+        audiobook_set: AudiobookSet,
+        *,
+        title: str | None,
+        author: str | None,
+        identifier: str | None,
+    ) -> list[MatchCandidate]:
+        """Search the primary provider directly using manual input."""
+        primary = self._primary_provider()
+        if primary is None:
+            raise MetadataError("No metadata providers are enabled", recoverable=True)
+
+        search_title = title or audiobook_set.raw_title_guess
+        search_author = author or audiobook_set.author_guess
+        identities = []
+
+        if identifier:
+            cleaned = identifier.strip()
+            if cleaned and len(cleaned) == 10 and cleaned.isalnum():
+                identity = await primary.get_by_id(cleaned)
+                if identity is not None:
+                    identities = [identity]
+            if not identities:
+                identities = await primary.search(
+                    title=search_title,
+                    author=search_author,
+                    isbn=cleaned,
+                    language=audiobook_set.language_guess,
+                    limit=10,
+                )
+        else:
+            identities = await primary.search(
+                title=search_title,
+                author=search_author,
+                series=audiobook_set.series_guess,
+                language=audiobook_set.language_guess,
+                limit=10,
+            )
+
+        if not identities:
+            return []
+
+        candidates = primary._score_identities(audiobook_set, identities)
+        if not isinstance(self.provider, ProviderManager):
+            return candidates
+
+        matcher = AdvancedMatcher()
+        adjusted: list[MatchCandidate] = []
+        for candidate in candidates:
+            candidate = self.provider._apply_duration_check(
+                candidate,
+                audiobook_set.total_duration,
+            )
+            candidate.review_flags = detect_review_flags(
+                audiobook_set, candidate, matcher
+            )
+            adjusted.append(candidate)
+        return adjusted
+
+    @staticmethod
+    def _distinct_track_values(
+        audiobook_set: AudiobookSet,
+        field_name: str,
+    ) -> list[str]:
+        """Collect distinct non-empty embedded tag values for one field."""
+        values: list[str] = []
+        seen: set[str] = set()
+        for track in audiobook_set.tracks:
+            value = getattr(track.existing_tags, field_name, None)
+            if not value:
+                continue
+            normalized = str(value).strip()
+            if not normalized:
+                continue
+            key = normalized.casefold()
+            if key in seen:
+                continue
+            seen.add(key)
+            values.append(normalized)
+        return values
+
+    def _local_evidence_text(self, audiobook_set: AudiobookSet) -> str:
+        """Render the local evidence shown beside a provider candidate."""
+        lines = [
+            f"Folder: {audiobook_set.source_path.name}",
+            f"Source: {audiobook_set.source_path}",
+            f"Tracks: {audiobook_set.total_tracks}",
+            (
+                f"Runtime: {audiobook_set.total_duration / 60.0:.1f} min"
+                if audiobook_set.total_duration
+                else "Runtime: [none]"
+            ),
+            f"Title Guess: {audiobook_set.raw_title_guess or '[none]'}",
+            f"Author Guess: {audiobook_set.author_guess or '[none]'}",
+            f"Narrator Guess: {audiobook_set.narrator_guess or '[none]'}",
+            f"ASIN Guess: {audiobook_set.asin_guess or '[none]'}",
+            f"ISBN Guess: {audiobook_set.isbn_guess or '[none]'}",
+            "",
+            "Embedded Tags:",
+        ]
+
+        tag_fields = [
+            ("title", "Title"),
+            ("artist", "Artist"),
+            ("albumartist", "Album Artist"),
+            ("album", "Album"),
+            ("narrator", "Narrator"),
+            ("series", "Series"),
+            ("isbn", "ISBN"),
+            ("asin", "ASIN"),
+        ]
+        found_tags = False
+        for field_name, label in tag_fields:
+            values = self._distinct_track_values(audiobook_set, field_name)
+            if not values:
+                continue
+            found_tags = True
+            lines.append(f"  {label}: {' | '.join(values)}")
+        if not found_tags:
+            lines.append("  [none]")
+
+        sidecar = self.sidecar_manager.auto_detect_sidecar(audiobook_set.source_path)
+        lines.extend(["", "Sidecar Evidence:"])
+        if sidecar is None:
+            lines.append("  [none]")
+        else:
+            lines.append(f"  Title: {sidecar.title}")
+            lines.append(
+                f"  Author: {', '.join(sidecar.authors) if sidecar.authors else '[none]'}"
+            )
+            lines.append(f"  Narrator: {sidecar.narrator or '[none]'}")
+            lines.append(
+                f"  IDs: ASIN {sidecar.asin or '[none]'} | "
+                f"ISBN {sidecar.isbn_13 or sidecar.isbn_10 or '[none]'}"
+            )
+            lines.append(
+                f"  Series: {sidecar.series_name or '[none]'}"
+                + (
+                    f" #{sidecar.series_index}"
+                    if sidecar.series_name and sidecar.series_index
+                    else ""
+                )
+            )
+
+        return "\n".join(lines)
+
+    async def open_candidate_picker(self, row_index: int) -> None:
+        """Open the manual candidate picker for one review row."""
+        if row_index < 0 or row_index >= len(self.audiobook_sets):
+            return
+
+        audiobook_set = self.audiobook_sets[row_index]
+        screen = CandidateDetailScreen(
+            audiobook_set,
+            list(audiobook_set.provider_candidates),
+            local_evidence=self._local_evidence_text(audiobook_set),
+            rerun_matches=lambda: self._rerun_matches_for_set(audiobook_set),
+            manual_search=lambda query: self._manual_search_candidates(
+                audiobook_set,
+                title=query.get("title"),
+                author=query.get("author"),
+                identifier=query.get("identifier"),
+            ),
+        )
+        result = await self.app.push_screen(screen, wait_for_dismiss=True)
+
+        if result is None:
+            return
+
+        audiobook_set.provider_candidates = list(screen.candidates)
+        if result == -1:
+            skip_set_from_plans(audiobook_set)
+            self.review_store.set_skip(audiobook_set)
+            self._row_states[row_index] = "skipped"
+            self._row_errors[row_index] = None
+        elif 0 <= result < len(screen.candidates):
+            selected = screen.candidates[result]
+            accept_candidate_for_set(audiobook_set, selected)
+            self.review_store.set_accept(
+                audiobook_set,
+                selected,
+                candidate_index=result + 1,
+            )
+            self._row_states[row_index] = "accepted_saved"
+            self._row_errors[row_index] = None
+        else:
+            return
+
+        self._render_table()
+
+    async def open_focused_candidate_picker(self) -> None:
+        """Open the picker for the currently highlighted match row."""
+        table = self.query_one("#matches_table", DataTable)
+        await self.open_candidate_picker(table.cursor_row)
+
+    async def on_data_table_row_selected(
+        self, event: DataTable.RowSelected
+    ) -> None:
+        """Open the picker when a match row is selected."""
+        if event.data_table.id != "matches_table":
+            return
+        await self.open_candidate_picker(event.cursor_row)
+
     async def find_matches(self, audiobook_sets: list[AudiobookSet]) -> MatchSummary:
         """Find matches for audiobook sets using merged multi-provider results."""
         self.audiobook_sets = audiobook_sets
-
-        table = self.query_one("#matches_table", DataTable)
-        table.clear(columns=True)
-        table.add_columns(
-            "Audiobook",
-            "Best Match",
-            "Confidence",
-            "Action",
-            "Reasons",
-        )
+        self._row_states = []
+        self._row_errors = []
         summary = MatchSummary()
+        matching = self.config_manager.load_config().matching
 
-        # Use ProviderManager.find_matches_merged when available
         if isinstance(self.provider, ProviderManager):
             match_tasks = [
                 self.provider.find_matches_merged(a) for a in audiobook_sets
@@ -280,11 +600,20 @@ class MatchReviewScreen(Static):
         results = await asyncio.gather(*match_tasks, return_exceptions=True)
 
         for audiobook_set, result in zip(audiobook_sets, results, strict=False):
-            audiobook_set.provider_candidates = []
-            audiobook_set.chosen_identity = None
-            candidates: list[MatchCandidate] = []
+            state = "unmatched"
+            error_text: str | None = None
+
             if isinstance(result, BaseException):
                 summary.failed_count += 1
+                summary.unmatched_count += 1
+                audiobook_set.provider_candidates = []
+                saved = self.review_store.apply_saved_decision(audiobook_set, [])
+                if saved is not None and saved[0] == "skip":
+                    state = "skipped"
+                else:
+                    mark_set_needs_review(audiobook_set, str(result))
+                    state = "error"
+                error_text = str(result)
                 logger.warning(
                     "Metadata provider failed during TUI matching",
                     title_guess=(
@@ -294,34 +623,315 @@ class MatchReviewScreen(Static):
                 )
             else:
                 candidates = result
+                if candidates:
+                    summary.matched_count += 1
+                    state, _selected = self.review_store.resolve_match_state(
+                        audiobook_set,
+                        candidates,
+                        matching,
+                    )
+                else:
+                    summary.unmatched_count += 1
+                    mark_set_needs_review(audiobook_set, "No matches found")
+                    state = "unmatched"
 
-            if candidates:
-                best_match = candidates[0]
-                audiobook_set.provider_candidates = candidates
-                audiobook_set.chosen_identity = best_match.identity
-                summary.matched_count += 1
+            self._row_states.append(state)
+            self._row_errors.append(error_text)
 
-                table.add_row(
-                    audiobook_set.raw_title_guess or "Unknown",
-                    (
-                        f"{best_match.identity.title} - "
-                        f"{', '.join(best_match.identity.authors)}"
-                    ),
-                    f"{best_match.confidence:.2f}",
-                    "Accept" if best_match.confidence > 0.85 else "Review",
-                    self._format_reasons(best_match),
-                )
-            else:
-                summary.unmatched_count += 1
-                table.add_row(
-                    audiobook_set.raw_title_guess or "Unknown",
-                    "No matches",
-                    "0.00",
-                    "Manual",
-                    "",
-                )
-
+        self._render_table()
         return summary
+
+
+class ManualSearchScreen(ModalScreen[dict[str, str] | None]):
+    """Prompt for a manual provider query."""
+
+    BINDINGS = [
+        Binding("escape", "cancel", "Cancel", show=True),
+        Binding("enter", "submit", "Search", show=False),
+    ]
+
+    def __init__(self, audiobook_set: AudiobookSet) -> None:
+        super().__init__()
+        self.audiobook_set = audiobook_set
+
+    def compose(self) -> ComposeResult:
+        with Container(classes="candidate-modal"):
+            yield Label("Manual Search", classes="section-title")
+            yield Label(str(self.audiobook_set.source_path))
+            with Horizontal():
+                yield Label("Title")
+                yield Input(
+                    value=self.audiobook_set.raw_title_guess or "",
+                    id="manual_title",
+                )
+            with Horizontal():
+                yield Label("Author")
+                yield Input(
+                    value=self.audiobook_set.author_guess or "",
+                    id="manual_author",
+                )
+            with Horizontal():
+                yield Label("ASIN / ISBN")
+                yield Input(
+                    value=(
+                        self.audiobook_set.asin_guess
+                        or self.audiobook_set.isbn_guess
+                        or ""
+                    ),
+                    id="manual_identifier",
+                )
+            with Horizontal():
+                yield Button("Search", id="manual_search_submit", variant="primary")
+                yield Button("Cancel", id="manual_search_cancel")
+
+    def on_mount(self) -> None:
+        """Focus the title input on open."""
+        self.query_one("#manual_title", Input).focus()
+
+    async def on_button_pressed(self, event: Button.Pressed) -> None:
+        """Handle search/cancel buttons."""
+        if event.button.id == "manual_search_submit":
+            self.action_submit()
+        elif event.button.id == "manual_search_cancel":
+            self.action_cancel()
+
+    def action_submit(self) -> None:
+        """Dismiss the modal with the requested search query."""
+        self.dismiss(
+            {
+                "title": self.query_one("#manual_title", Input).value.strip(),
+                "author": self.query_one("#manual_author", Input).value.strip(),
+                "identifier": self.query_one("#manual_identifier", Input).value.strip(),
+            }
+        )
+
+    def action_cancel(self) -> None:
+        """Dismiss without changing the current review state."""
+        self.dismiss(None)
+
+
+class CandidateDetailScreen(ModalScreen[int | None]):
+    """Manual candidate picker for review-required matches."""
+
+    BINDINGS = [
+        Binding("escape", "cancel", "Close", show=True),
+        Binding("enter", "accept_selected", "Choose", show=True),
+        Binding("r", "rerun_match", "Rerun", show=True),
+        Binding("/", "manual_search", "Search", show=True),
+        Binding("s", "skip_set", "Skip", show=True),
+    ]
+
+    def __init__(
+        self,
+        audiobook_set: AudiobookSet,
+        candidates: list[MatchCandidate],
+        *,
+        local_evidence: str,
+        rerun_matches: Any,
+        manual_search: Any,
+    ) -> None:
+        super().__init__()
+        self.audiobook_set = audiobook_set
+        self.candidates = list(candidates)
+        self.local_evidence = local_evidence
+        self._rerun_matches = rerun_matches
+        self._manual_search = manual_search
+        self.status_message = (
+            "Highlight a candidate, press Enter to accept, or s to skip."
+        )
+
+    def compose(self) -> ComposeResult:
+        with Container(classes="candidate-modal"):
+            yield Label("Review Candidates", classes="section-title")
+            yield Label(str(self.audiobook_set.source_path))
+            yield DataTable(id="candidate_table")
+            yield Static(self.status_message, id="candidate_status")
+            with Horizontal(classes="candidate-columns"):
+                yield Static(self.local_evidence, id="candidate_local")
+                yield Static("", id="candidate_detail")
+
+    def on_mount(self) -> None:
+        """Populate the candidate table and show the first candidate."""
+        table = self.query_one("#candidate_table", DataTable)
+        table.cursor_type = "row"
+        table.add_columns("#", "Title", "Author", "Confidence", "Flags")
+        self._refresh_candidates()
+        table.focus()
+
+    def _refresh_candidates(self) -> None:
+        """Render the current candidate list and detail pane."""
+        table = self.query_one("#candidate_table", DataTable)
+        table.clear(columns=False)
+
+        if not self.candidates:
+            table.add_row("-", "No candidates", "", "", "")
+            self.query_one("#candidate_detail", Static).update(
+                "No candidates yet. Press / for manual search or r to rerun."
+            )
+            self.query_one("#candidate_status", Static).update(self.status_message)
+            return
+
+        for index, candidate in enumerate(self.candidates, start=1):
+            authors = ", ".join(candidate.identity.authors) or "Unknown author"
+            severity = worst_flag_severity(candidate.review_flags)
+            flags = severity.upper() if severity else "[none]"
+            table.add_row(
+                str(index),
+                candidate.identity.title,
+                authors,
+                f"{candidate.confidence:.2f}",
+                flags,
+            )
+
+        table.move_cursor(row=0)
+        self._update_candidate_detail(0)
+        self.query_one("#candidate_status", Static).update(self.status_message)
+
+    @staticmethod
+    def _provider_labels(candidate: MatchCandidate) -> list[str]:
+        """Extract merged provider labels for a candidate."""
+        providers = candidate.identity.raw_data.get(
+            "providers", [candidate.identity.provider]
+        )
+        if isinstance(providers, list):
+            return [str(provider) for provider in providers]
+        return [str(providers)]
+
+    def _candidate_detail_text(self, candidate: MatchCandidate) -> str:
+        """Render one candidate with full details and review flags."""
+        identity = candidate.identity
+        runtime_text = (
+            f"{identity.runtime_minutes} min"
+            if identity.runtime_minutes is not None
+            else "[none]"
+        )
+        ids: list[str] = []
+        if identity.asin:
+            ids.append(f"ASIN {identity.asin}")
+        if identity.isbn_13:
+            ids.append(f"ISBN-13 {identity.isbn_13}")
+        elif identity.isbn_10:
+            ids.append(f"ISBN-10 {identity.isbn_10}")
+
+        lines = [
+            f"Title: {identity.title}",
+            f"Author: {', '.join(identity.authors) or '[none]'}",
+            f"Narrator: {identity.narrator or '[none]'}",
+            f"IDs: {' | '.join(ids) if ids else '[none]'}",
+            f"Runtime: {runtime_text}",
+            (
+                f"Series: {identity.series_name}"
+                + (f" #{identity.series_index}" if identity.series_index else "")
+                if identity.series_name
+                else "Series: [none]"
+            ),
+            f"Year: {identity.year or '[none]'}",
+            f"Providers: {', '.join(self._provider_labels(candidate))}",
+            f"Confidence: {candidate.confidence:.2f} ({candidate.confidence_level.value})",
+            f"Reasons: {'; '.join(candidate.match_reasons) or '[none]'}",
+            "Review Flags:",
+        ]
+        if not candidate.review_flags:
+            lines.append("  [none]")
+        else:
+            for flag in candidate.review_flags:
+                detail_parts = [flag.message]
+                if flag.local_value is not None:
+                    detail_parts.append(f"local={flag.local_value}")
+                if flag.provider_value is not None:
+                    detail_parts.append(f"provider={flag.provider_value}")
+                lines.append(
+                    f"  {flag.severity.upper()} {flag.kind.value}: "
+                    + " | ".join(detail_parts)
+                )
+        return "\n".join(lines)
+
+    def _selected_index(self) -> int | None:
+        """Return the highlighted candidate index, if any."""
+        if not self.candidates:
+            return None
+        table = self.query_one("#candidate_table", DataTable)
+        if table.cursor_row < 0 or table.cursor_row >= len(self.candidates):
+            return None
+        return table.cursor_row
+
+    def _update_candidate_detail(self, index: int | None) -> None:
+        """Refresh the right-hand detail pane from the selected candidate."""
+        detail = self.query_one("#candidate_detail", Static)
+        if index is None or index < 0 or index >= len(self.candidates):
+            detail.update("No candidate selected.")
+            return
+        detail.update(self._candidate_detail_text(self.candidates[index]))
+
+    async def on_data_table_row_highlighted(
+        self, event: DataTable.RowHighlighted
+    ) -> None:
+        """Update details as the highlighted candidate changes."""
+        if event.data_table.id != "candidate_table":
+            return
+        self._update_candidate_detail(event.cursor_row)
+
+    async def on_data_table_row_selected(
+        self, event: DataTable.RowSelected
+    ) -> None:
+        """Accept the selected candidate on row activation."""
+        if event.data_table.id != "candidate_table":
+            return
+        self.action_accept_selected()
+
+    def action_accept_selected(self) -> None:
+        """Choose the highlighted candidate."""
+        selected_index = self._selected_index()
+        if selected_index is None:
+            self.status_message = "No candidate is selected yet."
+            self.query_one("#candidate_status", Static).update(self.status_message)
+            return
+        self.dismiss(selected_index)
+
+    def action_skip_set(self) -> None:
+        """Skip the current audiobook set from future plans."""
+        self.dismiss(-1)
+
+    def action_cancel(self) -> None:
+        """Close the modal without changing the match selection."""
+        self.dismiss(None)
+
+    async def action_rerun_match(self) -> None:
+        """Re-run provider matching for this set only."""
+        self.status_message = "Refreshing candidates..."
+        self.query_one("#candidate_status", Static).update(self.status_message)
+        try:
+            self.candidates = await self._rerun_matches()
+            self.status_message = (
+                "Candidates refreshed."
+                if self.candidates
+                else "No candidates returned. Try manual search."
+            )
+        except Exception as exc:
+            self.status_message = f"Refresh failed: {exc}"
+        self._refresh_candidates()
+
+    async def action_manual_search(self) -> None:
+        """Prompt for a manual search and replace the candidate list."""
+        query = await self.app.push_screen(
+            ManualSearchScreen(self.audiobook_set),
+            wait_for_dismiss=True,
+        )
+        if query is None:
+            return
+
+        self.status_message = "Searching primary provider..."
+        self.query_one("#candidate_status", Static).update(self.status_message)
+        try:
+            self.candidates = await self._manual_search(query)
+            self.status_message = (
+                "Manual search returned candidates."
+                if self.candidates
+                else "Manual search returned no candidates."
+            )
+        except Exception as exc:
+            self.status_message = f"Manual search failed: {exc}"
+        self._refresh_candidates()
 
 
 class PreviewScreen(Static):
@@ -332,6 +942,7 @@ class PreviewScreen(Static):
         self.config_manager = config_manager
         self.audiobook_sets: list[AudiobookSet] = []
         self.last_transaction_id: str | None = None
+        self.last_plan = None
         self.source_roots: list[Path] = []
 
     def compose(self) -> ComposeResult:
@@ -377,6 +988,7 @@ class PreviewScreen(Static):
             audiobook_sets,
             source_roots=self.source_roots or [common_root],
         )
+        self.last_plan = plan
         operations_by_source = {
             operation.old_path: operation for operation in plan.operations
         }
@@ -385,13 +997,27 @@ class PreviewScreen(Static):
             for track in audiobook_set.tracks:
                 current_name = track.src_path.name
                 operation = operations_by_source.get(track.src_path)
-                proposed_name = (
-                    self._format_preview_path(operation.new_path, common_root)
-                    if operation is not None
-                    else self._format_preview_path(track.src_path, common_root)
-                )
-                status = "✓ Ready" if operation is not None else "→ No change"
+                if operation is not None:
+                    proposed_name = self._format_preview_path(
+                        operation.new_path, common_root
+                    )
+                    status = "✓ Ready"
+                elif audiobook_set.chosen_identity is None and audiobook_set.review_reason:
+                    proposed_name = audiobook_set.review_reason
+                    status = "Review required"
+                else:
+                    proposed_name = self._format_preview_path(
+                        track.src_path, common_root
+                    )
+                    status = "→ No change"
                 table.add_row(current_name, proposed_name, status)
+
+        for sidecar_path in plan.planned_sidecars:
+            table.add_row(
+                sidecar_path.name,
+                self._format_preview_path(sidecar_path, common_root),
+                "✎ Sidecar",
+            )
 
     async def apply_changes(self) -> bool:
         """Apply the previewed changes."""
@@ -413,7 +1039,19 @@ class PreviewScreen(Static):
                 self.audiobook_sets,
                 source_roots=self.source_roots or [common_root],
             )
-            if not plan.operations:
+            self.last_plan = plan
+            has_pending_changes = bool(plan.operations or plan.planned_sidecars)
+            if not has_pending_changes and plan.skipped:
+                table = self.query_one("#preview_table", DataTable)
+                table.clear(columns=True)
+                table.add_columns("Operation", "Result", "Details")
+                table.add_row(
+                    "Apply Changes",
+                    "Blocked",
+                    f"{len(plan.skipped)} book(s) still need review",
+                )
+                return False
+            if not has_pending_changes:
                 return True
             if plan.conflicts:
                 raise ValueError("; ".join(plan.conflicts))
@@ -425,10 +1063,13 @@ class PreviewScreen(Static):
 
             # Update table to show completion
             table = self.query_one("#preview_table", DataTable)
-            table.clear()
+            table.clear(columns=True)
             table.add_columns("Operation", "Result", "Transaction ID")
             table.add_row(
-                f"Renamed {len(plan.operations)} files",
+                (
+                    f"Applied {len(plan.operations)} rename(s), "
+                    f"{len(plan.planned_sidecars)} sidecar write(s)"
+                ),
                 "✓ Success",
                 transaction_id[:8] + "...",
             )
@@ -438,7 +1079,7 @@ class PreviewScreen(Static):
         except Exception as e:
             # Show error in table
             table = self.query_one("#preview_table", DataTable)
-            table.clear()
+            table.clear(columns=True)
             table.add_columns("Operation", "Result", "Error")
             table.add_row("Apply Changes", "Failed", str(e))
             return False

@@ -89,6 +89,22 @@ class TestJSONRoundTrip:
 
 
 class TestNFO:
+    def test_write_and_read_nfo(self, manager, sample_identity):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "audiobook.nfo"
+            manager.write_nfo(path, sample_identity)
+
+            result = manager.read_nfo(path)
+            assert result is not None
+            assert result.title == sample_identity.title
+            assert result.authors == sample_identity.authors
+            assert result.narrator == sample_identity.narrator
+            assert result.language == sample_identity.language
+            assert result.series_name == sample_identity.series_name
+            assert result.series_index == sample_identity.series_index
+            assert result.isbn_13 == sample_identity.isbn_13
+            assert result.asin == sample_identity.asin
+
     def test_read_key_value(self, manager):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "audiobook.nfo"

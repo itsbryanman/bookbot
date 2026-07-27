@@ -1,6 +1,7 @@
 """Provider manager for handling multiple metadata sources."""
 
 import asyncio
+from collections.abc import Iterable
 
 from ..config.manager import ConfigManager
 from ..core.exceptions import MetadataError
@@ -12,6 +13,7 @@ from ..core.models import (
     MatchConfidence,
     ProviderIdentity,
 )
+from ..core.review import apply_ambiguous_top2_flag, detect_review_flags
 from ..io.cache import CacheManager
 from .audible import AudibleProvider
 from .audnexus import AudnexusProvider
@@ -27,6 +29,9 @@ logger = get_logger("provider_manager")
 class ProviderManager:
     """Manages multiple metadata providers."""
 
+    AUDIO_PROVIDERS = frozenset({"audible", "audnexus", "librivox"})
+    PRINT_PROVIDERS = frozenset({"openlibrary", "googlebooks", "hardcover"})
+
     def __init__(self, config_manager: ConfigManager):
         self.config_manager = config_manager
         self.cache_manager = CacheManager(config_manager)
@@ -34,15 +39,15 @@ class ProviderManager:
         self._initialize_providers()
 
     def _initialize_providers(self) -> None:
-        """Initialize providers with Open Library FIRST (always enabled)."""
+        """Initialize enabled providers from the current config."""
         config = self.config_manager.load_config()
         provider_config = config.providers
 
-        # ALWAYS initialize Open Library first - no API key needed
-        self.providers["openlibrary"] = OpenLibraryProvider(
-            cache_manager=self.cache_manager
-        )
-        logger.info("Initialized Open Library provider (default, always enabled)")
+        if provider_config.openlibrary.enabled:
+            self.providers["openlibrary"] = OpenLibraryProvider(
+                cache_manager=self.cache_manager
+            )
+            logger.info("Initialized Open Library provider")
 
         # Audnexus - no API key needed, enabled by default
         if provider_config.audnexus.enabled:
@@ -86,18 +91,20 @@ class ProviderManager:
             logger.info("Initialized Hardcover provider")
 
     def get_enabled_providers(self) -> list[MetadataProvider]:
-        """Get providers with Open Library ALWAYS first."""
-        # Open Library is always first
-        enabled = [self.providers["openlibrary"]]
-
+        """Get enabled providers in effective priority order."""
         config = self.config_manager.load_config()
+        enabled: list[MetadataProvider] = []
+        seen: set[str] = set()
 
-        # Add others based on priority order in config
         for provider_name in config.providers.priority_order:
-            if provider_name == "openlibrary":
-                continue  # Already added
             if provider_name in self.providers:
                 enabled.append(self.providers[provider_name])
+                seen.add(provider_name)
+
+        for provider_name, provider in self.providers.items():
+            if provider_name in seen:
+                continue
+            enabled.append(provider)
 
         return enabled
 
@@ -105,10 +112,10 @@ class ProviderManager:
         """Get a specific provider by name."""
         return self.providers.get(name.lower())
 
-    def get_primary_provider(self) -> MetadataProvider:
+    def get_primary_provider(self) -> MetadataProvider | None:
         """Get the primary (highest priority) provider."""
         enabled = self.get_enabled_providers()
-        return enabled[0] if enabled else self.providers["openlibrary"]
+        return enabled[0] if enabled else None
 
     def _request_timeout_seconds(self) -> float:
         """Return the configured per-provider request timeout."""
@@ -201,28 +208,28 @@ class ProviderManager:
                 )
             return []
 
-        # Group candidates
         matcher = AdvancedMatcher()
         groups: dict[str, list[tuple[int, MatchCandidate]]] = {}
 
         for priority, candidate in all_candidates:
             key = self._group_key(candidate.identity, matcher)
-            if key not in groups:
-                groups[key] = []
-            groups[key].append((priority, candidate))
+            groups.setdefault(key, []).append((priority, candidate))
 
-        # Merge each group
         merged: list[MatchCandidate] = []
-        for group_members in groups.values():
-            surviving = self._merge_group(group_members)
-            # Duration cross-check
+        for group_members, group_reasons in self._merge_related_groups(
+            list(groups.values()), matcher
+        ):
+            surviving = self._merge_group(group_members, extra_reasons=group_reasons)
             surviving = self._apply_duration_check(
                 surviving, audiobook_set.total_duration
             )
+            surviving.review_flags = detect_review_flags(
+                audiobook_set, surviving, matcher
+            )
             merged.append(surviving)
 
-        # Sort by confidence descending
         merged.sort(key=lambda c: c.confidence, reverse=True)
+        merged = apply_ambiguous_top2_flag(merged)
         return merged[:limit]
 
     @staticmethod
@@ -240,30 +247,80 @@ class ProviderManager:
         norm_title = matcher.normalize_title(identity.title)
         return f"fuzzy:{norm_author}|{norm_title}"
 
+    def _merge_related_groups(
+        self,
+        groups: list[list[tuple[int, MatchCandidate]]],
+        matcher: AdvancedMatcher,
+    ) -> list[tuple[list[tuple[int, MatchCandidate]], list[str]]]:
+        """Merge exact-key groups that clearly describe the same book."""
+        pending = [list(group) for group in groups]
+        merge_reasons: list[list[str]] = [[] for _ in pending]
+        changed = True
+
+        while changed:
+            changed = False
+            i = 0
+            while i < len(pending):
+                left_identity = self._merge_group(
+                    pending[i], extra_reasons=merge_reasons[i]
+                ).identity
+                j = i + 1
+                while j < len(pending):
+                    right_identity = self._merge_group(
+                        pending[j], extra_reasons=merge_reasons[j]
+                    ).identity
+                    if self._identities_can_merge(
+                        left_identity, right_identity, matcher
+                    ):
+                        pending[i].extend(pending.pop(j))
+                        reason = (
+                            "Corroborated across audio + print providers"
+                            if self._is_audio_print_corroboration(
+                                left_identity, right_identity
+                            )
+                            else None
+                        )
+                        merged_reasons = merge_reasons.pop(j)
+                        if reason:
+                            merge_reasons[i].append(reason)
+                        merge_reasons[i].extend(merged_reasons)
+                        changed = True
+                        left_identity = self._merge_group(
+                            pending[i], extra_reasons=merge_reasons[i]
+                        ).identity
+                        continue
+                    j += 1
+                i += 1
+
+        return list(zip(pending, merge_reasons, strict=False))
+
     def _merge_group(
-        self, members: list[tuple[int, MatchCandidate]]
+        self,
+        members: list[tuple[int, MatchCandidate]],
+        extra_reasons: list[str] | None = None,
     ) -> MatchCandidate:
         """Merge a group of candidates into a single surviving candidate.
 
         Keeps the identity from the highest-priority provider (lowest index),
         backfills None fields from other members, and applies corroboration boost.
         """
-        # Sort by priority (lowest index = highest priority)
         members.sort(key=lambda m: m[0])
-        best_priority, best_candidate = members[0]
+        _best_priority, best_candidate = members[0]
         surviving_identity = best_candidate.identity.model_copy()
 
-        # Collect distinct provider names
-        provider_names: set[str] = set()
-        max_confidence = best_candidate.confidence
+        provider_names: list[str] = []
+        provider_seen: set[str] = set()
+        confidence = best_candidate.confidence
         all_reasons: list[str] = list(best_candidate.match_reasons)
+        if extra_reasons:
+            all_reasons.extend(extra_reasons)
 
         for _priority, candidate in members:
-            provider_names.add(candidate.identity.provider)
-            if candidate.confidence > max_confidence:
-                max_confidence = candidate.confidence
+            provider_name = candidate.identity.provider
+            if provider_name not in provider_seen:
+                provider_seen.add(provider_name)
+                provider_names.append(provider_name)
 
-            # Backfill None fields from lower-priority candidates
             ident = candidate.identity
             if not surviving_identity.narrator and ident.narrator:
                 surviving_identity.narrator = ident.narrator
@@ -284,19 +341,16 @@ class ProviderManager:
             if not surviving_identity.runtime_minutes and ident.runtime_minutes:
                 surviving_identity.runtime_minutes = ident.runtime_minutes
 
-        # Corroboration boost
-        n_providers = len(provider_names)
-        confidence = max_confidence
+        n_providers = len(provider_names or [surviving_identity.provider])
         if n_providers >= 2:
             confidence = min(1.0, confidence + 0.07 * (n_providers - 1))
             all_reasons.append(f"Corroborated by {n_providers} providers")
 
         surviving_identity.raw_data = dict(surviving_identity.raw_data)
-        surviving_identity.raw_data["providers"] = sorted(
-            provider_names or {surviving_identity.provider}
+        surviving_identity.raw_data["providers"] = (
+            provider_names or [surviving_identity.provider]
         )
 
-        # Deduplicate reasons while preserving order
         seen: set[str] = set()
         unique_reasons: list[str] = []
         for r in all_reasons:
@@ -316,6 +370,66 @@ class ProviderManager:
             confidence_level=level,
             match_reasons=unique_reasons,
         )
+
+    @classmethod
+    def _identities_can_merge(
+        cls,
+        left: ProviderIdentity,
+        right: ProviderIdentity,
+        matcher: AdvancedMatcher,
+    ) -> bool:
+        """Check whether two exact-key groups corroborate the same title."""
+        if cls._identifiers_conflict(left, right):
+            return False
+        if matcher.match_title(left.title, right.title) < 0.92:
+            return False
+        if cls._author_similarity(left, right, matcher) < 0.85:
+            return False
+        return True
+
+    @staticmethod
+    def _author_similarity(
+        left: ProviderIdentity,
+        right: ProviderIdentity,
+        matcher: AdvancedMatcher,
+    ) -> float:
+        if not left.authors or not right.authors:
+            return 0.0
+        return max(
+            matcher.match_author(left_author, right_author)
+            for left_author in left.authors
+            for right_author in right.authors
+        )
+
+    @staticmethod
+    def _identifiers_conflict(
+        left: ProviderIdentity, right: ProviderIdentity
+    ) -> bool:
+        return (
+            bool(left.isbn_13 and right.isbn_13 and left.isbn_13 != right.isbn_13)
+            or bool(left.asin and right.asin and left.asin != right.asin)
+        )
+
+    @classmethod
+    def _is_audio_print_corroboration(
+        cls, left: ProviderIdentity, right: ProviderIdentity
+    ) -> bool:
+        left_providers = cls._provider_names(left)
+        right_providers = cls._provider_names(right)
+        return (
+            bool(left_providers & cls.AUDIO_PROVIDERS)
+            and bool(right_providers & cls.PRINT_PROVIDERS)
+        ) or (
+            bool(left_providers & cls.PRINT_PROVIDERS)
+            and bool(right_providers & cls.AUDIO_PROVIDERS)
+        )
+
+    @staticmethod
+    def _provider_names(identity: ProviderIdentity) -> set[str]:
+        providers = identity.raw_data.get("providers")
+        if isinstance(providers, Iterable) and not isinstance(providers, str):
+            return {str(provider).lower() for provider in providers}
+        return {identity.provider.lower()}
 
     @staticmethod
     def _apply_duration_check(

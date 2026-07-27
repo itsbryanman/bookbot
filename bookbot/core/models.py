@@ -8,7 +8,7 @@ import sys
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, ValidationInfo, field_validator
 from pydantic_core import PydanticUndefined
@@ -45,6 +45,28 @@ class MatchConfidence(str, Enum):
     HIGH = "high"  # >0.85 - auto-select
     MEDIUM = "medium"  # 0.65-0.85 - needs confirmation
     LOW = "low"  # <0.65 - manual pick required
+
+
+class ReviewFlagKind(str, Enum):
+    """Kinds of review flags attached to match candidates."""
+
+    NARRATOR_AS_AUTHOR = "narrator_as_author"
+    AUTHOR_AS_NARRATOR = "author_as_narrator"
+    AUTHOR_CONFLICT = "author_conflict"
+    TITLE_CONFLICT = "title_conflict"
+    RUNTIME_MISMATCH = "runtime_mismatch"
+    AMBIGUOUS_TOP2 = "ambiguous_top2"
+    ABRIDGED_SUSPECT = "abridged_suspect"
+
+
+class ReviewFlag(BaseModel):
+    """A visible review warning or blocker attached to a match."""
+
+    kind: ReviewFlagKind
+    severity: Literal["info", "warn", "block"]
+    message: str
+    local_value: str | None = None
+    provider_value: str | None = None
 
 
 class AudioTags(BaseModel):
@@ -143,6 +165,7 @@ class MatchCandidate(BaseModel):
     confidence: float = Field(ge=0.0, le=1.0)
     confidence_level: MatchConfidence
     match_reasons: list[str] = Field(default_factory=list)
+    review_flags: list[ReviewFlag] = Field(default_factory=list)
 
     @field_validator("confidence_level", mode="before")
     @classmethod
@@ -180,6 +203,9 @@ class AudiobookSet(BaseModel):
     tracks: list[Track] = Field(default_factory=list)
     provider_candidates: list[MatchCandidate] = Field(default_factory=list)
     chosen_identity: ProviderIdentity | None = None
+    needs_review: bool = False
+    review_skipped: bool = False
+    review_reason: str | None = None
 
     # Validation warnings
     warnings: list[str] = Field(default_factory=list)
@@ -238,7 +264,7 @@ class OperationRecord(BaseModel):
 
     operation_id: str
     timestamp: datetime
-    operation_type: str  # 'rename', 'retag', 'convert'
+    operation_type: str  # 'rename', 'retag', 'convert', 'sidecar'
 
     # File operations
     old_path: Path | None = None
@@ -284,6 +310,8 @@ class RenamePlan(BaseModel):
     audiobook_sets: list[AudiobookSet] = Field(default_factory=list)
     dry_run: bool = True
     applied_transaction_id: str | None = None
+    skipped: list[dict[str, str]] = Field(default_factory=list)
+    planned_sidecars: list[Path] = Field(default_factory=list)
 
     # Plan validation
     conflicts: list[str] = Field(default_factory=list)
@@ -301,7 +329,7 @@ class RenamePlan(BaseModel):
         source_root = self.source_path.resolve(strict=False)
         forbidden_chars = set('<>:"\\|?*')
 
-        if not self.operations:
+        if not self.operations and not self.planned_sidecars:
             self.warnings.append("Plan contains no file operations")
 
         # Check for path conflicts

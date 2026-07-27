@@ -1,9 +1,12 @@
 """Command-line interface for BookBot."""
 
+import asyncio
+import json
+import math
 import shutil
 import sys
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import click
 
@@ -109,6 +112,276 @@ def _show_plan(path: Path, include_operations: bool = True) -> None:
     """Print a stored plan in review format."""
     plan = load_plan(path)
     click.echo(format_plan_summary(plan, include_operations=include_operations))
+
+
+def _normalize_provider_name(name: str) -> str:
+    """Normalize provider display names to stable CLI ids."""
+    normalized = name.strip().lower().replace(" ", "")
+    return {
+        "openlibrary": "openlibrary",
+        "googlebooks": "googlebooks",
+        "librivox": "librivox",
+        "audible": "audible",
+        "audnexus": "audnexus",
+        "hardcover": "hardcover",
+    }.get(normalized, normalized)
+
+
+def _provider_labels(candidate: Any) -> list[str]:
+    """Return normalized provider ids for a candidate."""
+    providers = candidate.identity.raw_data.get(
+        "providers", [candidate.identity.provider]
+    )
+    if isinstance(providers, list):
+        values = providers
+    else:
+        values = [providers]
+    return [_normalize_provider_name(str(provider)) for provider in values]
+
+
+def _matching_request_timeout(config_manager: ConfigManager) -> float:
+    """Return the configured metadata request timeout."""
+    return max(
+        1.0,
+        float(config_manager.load_config().providers.request_timeout or 15),
+    )
+
+
+async def _inspect_matches(
+    provider: Any,
+    audiobook_sets: list[Any],
+    *,
+    limit: int,
+    request_timeout: float,
+) -> list[tuple[Any, list[Any], BaseException | None]]:
+    """Run provider-backed matching across a queue of audiobook sets."""
+    results = []
+    try:
+        for audiobook_set in audiobook_sets:
+            try:
+                if hasattr(provider, "find_matches_merged"):
+                    candidates = await provider.find_matches_merged(
+                        audiobook_set,
+                        limit=limit,
+                    )
+                else:
+                    candidates = await asyncio.wait_for(
+                        provider.find_matches(
+                            audiobook_set,
+                            limit=limit,
+                        ),
+                        timeout=request_timeout,
+                    )
+            except BaseException as exc:
+                results.append((audiobook_set, [], exc))
+            else:
+                results.append((audiobook_set, candidates, None))
+        return results
+    finally:
+        if hasattr(provider, "close_all"):
+            await provider.close_all()
+        elif hasattr(provider, "close"):
+            await provider.close()
+
+
+def _run_review_session(
+    config_manager: ConfigManager,
+    folder: Path,
+    *,
+    limit: int,
+) -> tuple[list[Any], list[tuple[Any, list[Any], BaseException | None, str | None, Any | None]]]:
+    """Scan a folder, fetch candidates, and apply saved review decisions."""
+    from .core.review import mark_set_needs_review
+    from .core.review_store import ReviewDecisionStore
+
+    scanner = AudioFileScanner(recursive=True, max_depth=5)
+    audiobook_sets = scanner.scan_directory(folder)
+    if not audiobook_sets:
+        return [], []
+
+    provider = _build_matching_provider(config_manager)
+    request_timeout = _matching_request_timeout(config_manager)
+    raw_results = asyncio.run(
+        _inspect_matches(
+            provider,
+            audiobook_sets,
+            limit=limit,
+            request_timeout=request_timeout,
+        )
+    )
+
+    store = ReviewDecisionStore(config_manager)
+    matching = config_manager.load_config().matching
+    resolved_results = []
+    for audiobook_set, candidates, error in raw_results:
+        if error is not None:
+            audiobook_set.provider_candidates = []
+            audiobook_set.chosen_identity = None
+            audiobook_set.needs_review = False
+            audiobook_set.review_skipped = False
+            audiobook_set.review_reason = None
+            saved = store.apply_saved_decision(audiobook_set, [])
+            if saved is not None and saved[0] == "skip":
+                resolved_results.append(
+                    (audiobook_set, candidates, error, "skipped", None)
+                )
+            else:
+                mark_set_needs_review(audiobook_set, str(error))
+                resolved_results.append(
+                    (audiobook_set, candidates, error, "error", None)
+                )
+            continue
+
+        state, selected_candidate = store.resolve_match_state(
+            audiobook_set,
+            candidates,
+            matching,
+        )
+        resolved_results.append(
+            (audiobook_set, candidates, None, state, selected_candidate)
+        )
+
+    return audiobook_sets, resolved_results
+
+
+def _candidate_payload(audiobook_set: Any, candidate: Any, index: int) -> dict[str, Any]:
+    """Convert a candidate into structured CLI output."""
+    from .core.review import review_reason
+
+    identity = candidate.identity
+    local_minutes = (
+        audiobook_set.total_duration / 60.0 if audiobook_set.total_duration else None
+    )
+    runtime_delta_pct = None
+    if local_minutes and identity.runtime_minutes:
+        runtime_delta_pct = math.fabs(local_minutes - identity.runtime_minutes) / float(
+            identity.runtime_minutes
+        )
+    return {
+        "index": index,
+        "confidence": round(candidate.confidence, 4),
+        "confidence_level": candidate.confidence_level.value,
+        "title": identity.title,
+        "authors": identity.authors,
+        "narrator": identity.narrator,
+        "asin": identity.asin,
+        "isbn_10": identity.isbn_10,
+        "isbn_13": identity.isbn_13,
+        "runtime_minutes": identity.runtime_minutes,
+        "local_runtime_minutes": round(local_minutes, 1)
+        if local_minutes is not None
+        else None,
+        "runtime_delta_pct": round(runtime_delta_pct, 4)
+        if runtime_delta_pct is not None
+        else None,
+        "series_name": identity.series_name,
+        "series_index": identity.series_index,
+        "year": identity.year,
+        "providers": _provider_labels(candidate),
+        "reasons": candidate.match_reasons,
+        "review": review_reason(candidate.review_flags),
+        "review_flags": [
+            {
+                "kind": flag.kind.value,
+                "severity": flag.severity,
+                "message": flag.message,
+                "local_value": flag.local_value,
+                "provider_value": flag.provider_value,
+            }
+            for flag in candidate.review_flags
+        ],
+    }
+
+
+def _format_review_flag_lines(candidate: Any) -> list[str]:
+    """Render detailed review flag lines for a candidate."""
+    if not candidate.review_flags:
+        return ["Review Flags: [none]"]
+    lines = ["Review Flags:"]
+    for flag in candidate.review_flags:
+        detail_parts = [flag.message]
+        if flag.local_value is not None:
+            detail_parts.append(f"local={flag.local_value}")
+        if flag.provider_value is not None:
+            detail_parts.append(f"provider={flag.provider_value}")
+        lines.append(f"  - {flag.severity.upper()} {flag.kind.value}: " + " | ".join(detail_parts))
+    return lines
+
+
+def _format_candidate_block(
+    audiobook_set: Any,
+    candidate: Any,
+    index: int,
+    *,
+    include_flag_details: bool = False,
+) -> list[str]:
+    """Render a candidate in the human-readable CLI layout."""
+    payload = _candidate_payload(audiobook_set, candidate, index)
+    authors = ", ".join(payload["authors"]) or "Unknown author"
+    ids = []
+    if payload["asin"]:
+        ids.append(f"ASIN {payload['asin']}")
+    if payload["isbn_13"]:
+        ids.append(f"ISBN-13 {payload['isbn_13']}")
+    elif payload["isbn_10"]:
+        ids.append(f"ISBN-10 {payload['isbn_10']}")
+    ids_text = " | ".join(ids) if ids else "[none]"
+
+    if payload["runtime_minutes"] is not None:
+        runtime_text = f"{payload['runtime_minutes']} min"
+        if payload["local_runtime_minutes"] is not None and payload["runtime_delta_pct"] is not None:
+            runtime_text += (
+                f" (local {payload['local_runtime_minutes']:.0f} min, "
+                f"delta {payload['runtime_delta_pct'] * 100.0:.1f}%)"
+            )
+    else:
+        runtime_text = "[none]"
+
+    if payload["series_name"]:
+        series_text = payload["series_name"]
+        if payload["series_index"]:
+            series_text += f" #{payload['series_index']}"
+        if payload["year"]:
+            series_text += f" ({payload['year']})"
+    elif payload["year"]:
+        series_text = f"[none] ({payload['year']})"
+    else:
+        series_text = "[none]"
+
+    lines = [
+        (
+            f"  {index}. [{candidate.confidence:.2f} "
+            f"{candidate.confidence_level.value.upper()}] "
+            f"{payload['title']} - {authors}"
+        ),
+        f"     Narrator:  {payload['narrator'] or '[none]'}",
+        f"     IDs:       {ids_text}",
+        f"     Runtime:   {runtime_text}",
+        f"     Series:    {series_text}",
+        f"     Providers: {', '.join(payload['providers'])}",
+        f"     Reasons:   {'; '.join(payload['reasons']) or 'No reasons provided'}",
+        f"     Review:    {payload['review'] or '[none]'}",
+    ]
+    if include_flag_details:
+        lines.extend(f"     {line}" for line in _format_review_flag_lines(candidate))
+    return lines
+
+
+def _local_guess_payload(audiobook_set: Any) -> dict[str, Any]:
+    """Render the local evidence summary for a review queue entry."""
+    return {
+        "source_path": str(audiobook_set.source_path),
+        "title_guess": audiobook_set.raw_title_guess,
+        "author_guess": audiobook_set.author_guess,
+        "series_guess": audiobook_set.series_guess,
+        "narrator_guess": audiobook_set.narrator_guess,
+        "asin_guess": audiobook_set.asin_guess,
+        "isbn_guess": audiobook_set.isbn_guess,
+        "track_count": audiobook_set.total_tracks,
+        "runtime_minutes": round(audiobook_set.total_duration / 60.0, 1)
+        if audiobook_set.total_duration
+        else None,
+    }
 
 
 @cli.command()
@@ -286,123 +559,292 @@ def tui(
 @cli.command("match")
 @click.argument("folder", type=click.Path(exists=True, file_okay=False, path_type=Path))
 @click.option("--limit", type=int, default=5, show_default=True)
+@click.option("--show-all", is_flag=True, help="Show every returned candidate")
+@click.option("--json", "as_json", is_flag=True, help="Emit structured JSON")
 @click.pass_context
-def match(ctx: click.Context, folder: Path, limit: int) -> None:
+def match(
+    ctx: click.Context,
+    folder: Path,
+    limit: int,
+    show_all: bool,
+    as_json: bool,
+) -> None:
     """Inspect merged metadata matches and the reasons behind them."""
-    import asyncio
-
-    from .core.exceptions import MetadataError
-
     config_manager = ctx.obj["config_manager"]
-    request_timeout = max(
-        1.0,
-        float(config_manager.load_config().providers.request_timeout or 15),
+    fetch_limit = max(limit, 50) if show_all else limit
+    audiobook_sets, sessions = _run_review_session(
+        config_manager,
+        folder,
+        limit=fetch_limit,
     )
-    scanner = AudioFileScanner(recursive=True, max_depth=5)
-    audiobook_sets = scanner.scan_directory(folder)
 
     if not audiobook_sets:
-        click.echo("No audiobooks found in the specified directory.")
+        if as_json:
+            click.echo("[]")
+        else:
+            click.echo("No audiobooks found in the specified directory.")
         return
 
-    provider = _build_matching_provider(config_manager)
-
-    def format_failure(error: BaseException) -> str:
-        if isinstance(error, MetadataError):
-            provider_errors = error.details.get("provider_errors")
-            if isinstance(provider_errors, list) and provider_errors:
-                detail_text = "; ".join(
-                    (
-                        f"{item.get('provider', 'provider')}: "
-                        f"{item.get('error', 'unavailable')}"
-                    )
-                    for item in provider_errors
-                    if isinstance(item, dict)
-                )
-                return (
-                    "Provider unavailable - no matches "
-                    f"(network error: {detail_text})"
-                )
-
-            if error.details.get("kind") == "timeout":
-                timeout = error.details.get("timeout", request_timeout)
-                return (
-                    "Provider unavailable - no matches "
-                    f"(network error: request timed out after {timeout:.0f}s)"
-                )
-
-        if isinstance(error, (asyncio.TimeoutError, TimeoutError)):
-            return (
-                "Provider unavailable - no matches "
-                f"(network error: request timed out after {request_timeout:.0f}s)"
-            )
-
-        return f"Provider unavailable - no matches (network error: {error})"
-
-    async def inspect_matches() -> list[tuple]:
-        try:
-            results = []
-            for audiobook_set in audiobook_sets:
-                try:
-                    if hasattr(provider, "find_matches_merged"):
-                        candidates = await provider.find_matches_merged(
-                            audiobook_set,
-                            limit=limit,
-                        )
-                    else:
-                        candidates = await asyncio.wait_for(
-                            provider.find_matches(
-                                audiobook_set,
-                                limit=limit,
-                            ),
-                            timeout=request_timeout,
-                        )
-                except BaseException as exc:
-                    results.append((audiobook_set, [], exc))
-                else:
-                    results.append((audiobook_set, candidates, None))
-            return results
-        finally:
-            if hasattr(provider, "close_all"):
-                await provider.close_all()
-            elif hasattr(provider, "close"):
-                await provider.close()
-
+    results_payload: list[dict[str, Any]] = []
     had_failures = False
-    for audiobook_set, candidates, error in asyncio.run(inspect_matches()):
+    for audiobook_set, candidates, error, state, selected_candidate in sessions:
+        if error is not None:
+            had_failures = True
+            error_text = f"Provider unavailable - no matches (network error: {error})"
+            if as_json:
+                results_payload.append(
+                    {
+                        "source_path": str(audiobook_set.source_path),
+                        "query": (
+                            audiobook_set.raw_title_guess
+                            or audiobook_set.source_path.name
+                        ),
+                        "state": state,
+                        "error": error_text,
+                        "candidates": [],
+                    }
+                )
+            else:
+                click.echo("")
+                click.echo(f"Set: {audiobook_set.source_path}")
+                click.echo(
+                    "Query: "
+                    f"{audiobook_set.raw_title_guess or audiobook_set.source_path.name}"
+                )
+                click.echo(f"  {error_text}")
+            continue
+
+        if not candidates:
+            if as_json:
+                results_payload.append(
+                    {
+                        "source_path": str(audiobook_set.source_path),
+                        "query": (
+                            audiobook_set.raw_title_guess
+                            or audiobook_set.source_path.name
+                        ),
+                        "state": state,
+                        "error": None,
+                        "candidates": [],
+                    }
+                )
+            else:
+                click.echo("")
+                click.echo(f"Set: {audiobook_set.source_path}")
+                click.echo(
+                    "Query: "
+                    f"{audiobook_set.raw_title_guess or audiobook_set.source_path.name}"
+                )
+                click.echo("  No matches found.")
+            continue
+
+        visible_candidates = candidates if show_all else candidates[:limit]
+        if as_json:
+            results_payload.append(
+                {
+                    "source_path": str(audiobook_set.source_path),
+                    "query": (
+                        audiobook_set.raw_title_guess or audiobook_set.source_path.name
+                    ),
+                    "state": state,
+                    "needs_review": audiobook_set.needs_review,
+                    "review_skipped": audiobook_set.review_skipped,
+                    "review_reason": audiobook_set.review_reason,
+                    "error": None,
+                    "candidates": [
+                        _candidate_payload(audiobook_set, candidate, index)
+                        for index, candidate in enumerate(visible_candidates, start=1)
+                    ],
+                }
+            )
+            continue
+
         click.echo("")
         click.echo(f"Set: {audiobook_set.source_path}")
         click.echo(
             f"Query: {audiobook_set.raw_title_guess or audiobook_set.source_path.name}"
         )
+        if audiobook_set.review_skipped:
+            click.echo("Decision: Skipped by reviewer")
+        elif state == "accepted_saved" and selected_candidate is not None:
+            click.echo("Decision: Accepted from saved review decision")
+        elif audiobook_set.needs_review and audiobook_set.review_reason:
+            click.echo(f"Decision: {audiobook_set.review_reason}")
 
-        if error is not None:
-            had_failures = True
-            click.echo(f"  {format_failure(error)}")
-            continue
+        for index, candidate in enumerate(visible_candidates, 1):
+            for line in _format_candidate_block(audiobook_set, candidate, index):
+                click.echo(line)
 
-        if not candidates:
-            click.echo("  No matches found.")
-            continue
-
-        for index, candidate in enumerate(candidates, 1):
-            authors = ", ".join(candidate.identity.authors) or "Unknown author"
-            providers = candidate.identity.raw_data.get(
-                "providers",
-                [candidate.identity.provider],
-            )
-            provider_text = ", ".join(str(name) for name in providers)
-            reasons = "; ".join(candidate.match_reasons) or "No reasons provided"
-
-            click.echo(
-                f"  {index}. {candidate.confidence:.2f} - "
-                f"{candidate.identity.title} - {authors}"
-            )
-            click.echo(f"     Providers: {provider_text}")
-            click.echo(f"     Reasons: {reasons}")
+    if as_json:
+        click.echo(json.dumps(results_payload, indent=2))
+        if had_failures:
+            sys.exit(1)
+        return
 
     if had_failures:
         sys.exit(1)
+
+
+@cli.command("review-queue")
+@click.argument("folder", type=click.Path(exists=True, file_okay=False, path_type=Path))
+@click.option("--limit", type=int, default=10, show_default=True)
+@click.option("--json", "as_json", is_flag=True, help="Emit structured JSON")
+@click.pass_context
+def review_queue(
+    ctx: click.Context,
+    folder: Path,
+    limit: int,
+    as_json: bool,
+) -> None:
+    """List audiobook sets that still require manual review."""
+    config_manager = ctx.obj["config_manager"]
+    audiobook_sets, sessions = _run_review_session(
+        config_manager,
+        folder,
+        limit=max(limit, 10),
+    )
+
+    if not audiobook_sets:
+        if as_json:
+            click.echo("[]")
+        else:
+            click.echo("No audiobooks found in the specified directory.")
+        return
+
+    pending = [
+        (index, audiobook_set, candidates, error)
+        for index, (audiobook_set, candidates, error, _state, _selected) in enumerate(
+            sessions, start=1
+        )
+        if audiobook_set.needs_review
+    ]
+
+    if as_json:
+        payload = [
+            {
+                "set_index": set_index,
+                "local": _local_guess_payload(audiobook_set),
+                "review_reason": audiobook_set.review_reason,
+                "error": str(error) if error is not None else None,
+                "candidates": [
+                    _candidate_payload(audiobook_set, candidate, candidate_index)
+                    for candidate_index, candidate in enumerate(
+                        candidates[:limit], start=1
+                    )
+                ],
+            }
+            for set_index, audiobook_set, candidates, error in pending
+        ]
+        click.echo(json.dumps(payload, indent=2))
+        return
+
+    if not pending:
+        click.echo("Review queue is empty.")
+        return
+
+    click.echo(f"Review queue: {len(pending)} set(s) still need review")
+    for set_index, audiobook_set, candidates, error in pending:
+        local = _local_guess_payload(audiobook_set)
+        click.echo("")
+        click.echo(f"{set_index}. {local['source_path']}")
+        click.echo(
+            "   Local: "
+            f"title={local['title_guess'] or '[none]'} | "
+            f"author={local['author_guess'] or '[none]'} | "
+            f"narrator={local['narrator_guess'] or '[none]'} | "
+            f"asin={local['asin_guess'] or '[none]'} | "
+            f"isbn={local['isbn_guess'] or '[none]'}"
+        )
+        click.echo(
+            "   Evidence: "
+            f"{local['track_count']} track(s), "
+            f"{local['runtime_minutes'] if local['runtime_minutes'] is not None else '[none]'} min"
+        )
+        click.echo(f"   Review: {audiobook_set.review_reason or 'Review required'}")
+        if error is not None:
+            click.echo(f"   Error: {error}")
+            continue
+        for candidate_index, candidate in enumerate(candidates[:limit], start=1):
+            for line in _format_candidate_block(
+                audiobook_set,
+                candidate,
+                candidate_index,
+                include_flag_details=True,
+            ):
+                click.echo(line)
+
+
+@cli.command("accept")
+@click.argument("folder", type=click.Path(exists=True, file_okay=False, path_type=Path))
+@click.option("--set", "set_index", type=int, required=True, help="Review queue set index")
+@click.option("--candidate", "candidate_index", type=int, help="Candidate index to accept")
+@click.option("--skip", "skip_set", is_flag=True, help="Skip the set from future plans")
+@click.pass_context
+def accept(
+    ctx: click.Context,
+    folder: Path,
+    set_index: int,
+    candidate_index: int | None,
+    skip_set: bool,
+) -> None:
+    """Persist a manual review decision for one queued set."""
+    from .core.review_store import ReviewDecisionStore
+
+    if skip_set == (candidate_index is not None):
+        click.echo("Error: choose exactly one of --candidate or --skip", err=True)
+        sys.exit(1)
+
+    config_manager = ctx.obj["config_manager"]
+    _audiobook_sets, sessions = _run_review_session(
+        config_manager,
+        folder,
+        limit=25,
+    )
+    pending = [
+        (index, audiobook_set, candidates)
+        for index, (audiobook_set, candidates, _error, _state, _selected) in enumerate(
+            sessions, start=1
+        )
+        if audiobook_set.needs_review
+    ]
+
+    if not pending:
+        click.echo("Review queue is empty.")
+        return
+
+    selected_entry = next(
+        (entry for entry in pending if entry[0] == set_index),
+        None,
+    )
+    if selected_entry is None:
+        click.echo(f"Error: review queue set {set_index} not found", err=True)
+        sys.exit(1)
+
+    _queue_index, audiobook_set, candidates = selected_entry
+    store = ReviewDecisionStore(config_manager)
+
+    if skip_set:
+        store.set_skip(audiobook_set)
+        click.echo(f"Skipped set {set_index}: {audiobook_set.source_path}")
+        return
+
+    if candidate_index is None or candidate_index < 1 or candidate_index > len(candidates):
+        click.echo(
+            f"Error: candidate index must be between 1 and {len(candidates)}",
+            err=True,
+        )
+        sys.exit(1)
+
+    candidate = candidates[candidate_index - 1]
+    store.set_accept(
+        audiobook_set,
+        candidate,
+        candidate_index=candidate_index,
+    )
+    click.echo(
+        f"Accepted candidate {candidate_index} for set {set_index}: "
+        f"{candidate.identity.title} [{audiobook_set.source_path}]"
+    )
 
 
 @cli.command()
@@ -853,19 +1295,39 @@ def provider_list(ctx: click.Context) -> None:
         provider_manager = ProviderManager(config_manager)
 
         providers_info = provider_manager.list_providers()
+        enabled_providers = provider_manager.get_enabled_providers()
+        effective_order = [
+            _normalize_provider_name(provider.name) for provider in enabled_providers
+        ]
+        primary_provider = provider_manager.get_primary_provider()
+        primary_name = (
+            _normalize_provider_name(primary_provider.name)
+            if primary_provider is not None
+            else None
+        )
 
+        click.echo("Effective priority order:")
+        if effective_order:
+            for index, provider_name in enumerate(effective_order, start=1):
+                primary_suffix = " [primary]" if provider_name == primary_name else ""
+                click.echo(f"  {index}. {provider_name}{primary_suffix}")
+        else:
+            click.echo("  (none enabled)")
+
+        click.echo("")
         click.echo("Available metadata providers:")
         click.echo("")
 
         for provider_id, info in providers_info.items():
             status_icon = "[OK]" if info["status"] == "enabled" else "[X]"
-            click.echo(f"{status_icon} {info['name']} ({provider_id})")
+            primary_suffix = " [primary]" if provider_id == primary_name else ""
+            click.echo(f"{status_icon} {info['name']} ({provider_id}){primary_suffix}")
             click.echo(f"   Description: {info['description']}")
             click.echo(f"   Requires API Key: {info['requires_api_key']}")
 
             if provider_id == "googlebooks" and info.get("api_key_provided") is False:
                 click.echo("   Warning:API key not configured - provider disabled")
-            elif provider_id == "audible" and "marketplace" in info:
+            if "marketplace" in info:
                 click.echo(f"   Marketplace: {info['marketplace']}")
 
             click.echo("")
@@ -904,12 +1366,11 @@ def provider_enable(ctx: click.Context, provider_name: str) -> None:
             sys.exit(1)
         config.providers.hardcover.enabled = True
     elif provider_name == "openlibrary":
-        click.echo("OpenLibrary is always enabled as the default provider")
-        return
+        config.providers.openlibrary.enabled = True
     else:
         click.echo(f"Error: Unknown provider '{provider_name}'")
         click.echo(
-            "Available providers: googlebooks, librivox, audible, audnexus, hardcover"
+            "Available providers: googlebooks, librivox, audible, audnexus, hardcover, openlibrary"
         )
         sys.exit(1)
 
@@ -927,10 +1388,7 @@ def provider_disable(ctx: click.Context, provider_name: str) -> None:
 
     provider_name = provider_name.lower()
 
-    if provider_name == "openlibrary":
-        click.echo("Error: OpenLibrary cannot be disabled (it's the default provider)")
-        sys.exit(1)
-    elif provider_name == "googlebooks":
+    if provider_name == "googlebooks":
         config.providers.google_books.enabled = False
     elif provider_name == "librivox":
         config.providers.librivox.enabled = False
@@ -940,6 +1398,8 @@ def provider_disable(ctx: click.Context, provider_name: str) -> None:
         config.providers.audnexus.enabled = False
     elif provider_name == "hardcover":
         config.providers.hardcover.enabled = False
+    elif provider_name == "openlibrary":
+        config.providers.openlibrary.enabled = False
     else:
         click.echo(f"Error: Unknown provider '{provider_name}'")
         sys.exit(1)
@@ -976,19 +1436,35 @@ def provider_set_key(ctx: click.Context, provider_name: str, api_key: str) -> No
 
 
 @provider.command("set-marketplace")
+@click.option(
+    "--provider",
+    "provider_name",
+    type=click.Choice(["audible", "audnexus", "all"]),
+    default="all",
+    show_default=True,
+)
 @click.argument(
     "marketplace",
     type=click.Choice(["US", "UK", "CA", "AU", "FR", "DE", "IT", "ES", "JP", "IN"]),
 )
 @click.pass_context
-def provider_set_marketplace(ctx: click.Context, marketplace: str) -> None:
-    """Set Audible marketplace."""
+def provider_set_marketplace(
+    ctx: click.Context, provider_name: str, marketplace: str
+) -> None:
+    """Set marketplace for Audible and/or Audnexus."""
     config_manager = ctx.obj["config_manager"]
     config = config_manager.load_config()
 
-    config.providers.audible.marketplace = marketplace.upper()
+    updates: list[str] = []
+    if provider_name in {"audible", "all"}:
+        config.providers.audible.marketplace = marketplace.upper()
+        updates.append(f"audible={config.providers.audible.marketplace}")
+    if provider_name in {"audnexus", "all"}:
+        config.providers.audnexus.marketplace = marketplace.lower()
+        updates.append(f"audnexus={config.providers.audnexus.marketplace}")
+
     config_manager.save_config(config)
-    click.echo(f"Audible marketplace set to {marketplace}")
+    click.echo(f"Marketplace updated: {', '.join(updates)}")
 
 
 @cli.command("review")

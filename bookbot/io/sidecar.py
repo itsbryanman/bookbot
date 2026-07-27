@@ -5,7 +5,9 @@ import re
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
+from ..config.models import LibraryOutputConfig
 from ..core.logging import get_logger
 from ..core.models import ProviderIdentity
 
@@ -73,6 +75,32 @@ def _coerce_int(value: Any) -> int | None:
         return int(match.group())
     except ValueError:
         return None
+
+
+def sidecar_output_paths(
+    directory: Path,
+    identity: ProviderIdentity,
+    output_config: LibraryOutputConfig,
+) -> dict[str, Path]:
+    """Return the sidecar files BookBot intends to write for an identity."""
+    targets: dict[str, Path] = {}
+    if output_config.write_metadata_json:
+        targets["metadata_json"] = directory / "metadata.json"
+    if output_config.write_metadata_opf:
+        targets["metadata_opf"] = directory / "metadata.opf"
+    if output_config.write_nfo:
+        targets["nfo"] = directory / "audiobook.nfo"
+    if output_config.write_cover and identity.cover_urls:
+        targets["cover"] = directory / _cover_filename(identity.cover_urls[0])
+    return targets
+
+
+def _cover_filename(url: str) -> str:
+    """Pick a stable local cover filename from a remote URL."""
+    suffix = Path(urlparse(url).path).suffix.lower()
+    if suffix not in {".jpg", ".jpeg", ".png", ".gif", ".webp"}:
+        suffix = ".jpg"
+    return f"cover{suffix}"
 
 
 class SidecarManager:
@@ -385,7 +413,12 @@ class SidecarManager:
                     authors=authors,
                     year=year,
                     narrator=self._xml_text(tree, "narrator"),
+                    language=self._xml_text(tree, "language"),
+                    series_name=self._xml_text(tree, "series"),
+                    series_index=self._xml_text(tree, "series_index"),
                     publisher=self._xml_text(tree, "publisher"),
+                    isbn_13=self._xml_text(tree, "isbn"),
+                    asin=self._xml_text(tree, "asin"),
                     description=self._xml_text(tree, "description")
                     or self._xml_text(tree, "plot"),
                 )
@@ -426,9 +459,40 @@ class SidecarManager:
             authors=authors,
             year=year,
             narrator=fields.get("narrator"),
+            language=fields.get("language"),
+            series_name=fields.get("series"),
+            series_index=fields.get("series_index"),
             publisher=fields.get("publisher"),
+            isbn_13=fields.get("isbn"),
+            asin=fields.get("asin"),
             description=fields.get("description", fields.get("plot")),
         )
+
+    def write_nfo(self, path: Path, identity: ProviderIdentity) -> None:
+        """Write metadata as an audiobook NFO XML file."""
+        root = ET.Element("audiobook")
+
+        def add_text(tag: str, value: str | None) -> None:
+            if value is None or value == "":
+                return
+            element = ET.SubElement(root, tag)
+            element.text = value
+
+        add_text("title", identity.title)
+        add_text("author", ", ".join(identity.authors) if identity.authors else None)
+        add_text("year", str(identity.year) if identity.year else None)
+        add_text("narrator", identity.narrator)
+        add_text("language", identity.language)
+        add_text("series", identity.series_name)
+        add_text("series_index", identity.series_index)
+        add_text("publisher", identity.publisher)
+        add_text("isbn", identity.isbn_13 or identity.isbn_10)
+        add_text("asin", identity.asin)
+        add_text("description", identity.description)
+
+        tree = ET.ElementTree(root)
+        ET.indent(tree, space="  ")
+        tree.write(path, encoding="utf-8", xml_declaration=True)
 
     def auto_detect_sidecar(self, directory: Path) -> ProviderIdentity | None:
         """Check for metadata.opf, .metadata.json, audiobook.nfo in order."""

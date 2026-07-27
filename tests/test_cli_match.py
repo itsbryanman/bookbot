@@ -1,5 +1,6 @@
 """CLI tests for read-only merged matching inspection."""
 
+import json
 from pathlib import Path
 
 from click.testing import CliRunner
@@ -29,6 +30,10 @@ class _StubMergedProvider:
                     external_id="stub-1",
                     title="Matched Title",
                     authors=["Matched Author"],
+                    narrator="Narrator Name",
+                    asin="B003TEST",
+                    isbn_13="9781234567890",
+                    runtime_minutes=610,
                     raw_data={"providers": ["openlibrary", "audnexus"]},
                 ),
                 confidence=0.97,
@@ -68,6 +73,7 @@ def test_match_command_prints_reasons_from_merged_provider(
         source_path=folder / "Author - Title",
         raw_title_guess="Title",
         author_guess="Author",
+        total_duration=609 * 60.0,
     )
 
     monkeypatch.setattr(
@@ -92,11 +98,55 @@ def test_match_command_prints_reasons_from_merged_provider(
     )
 
     assert result.exit_code == 0
+    assert "Narrator:  Narrator Name" in result.output
+    assert "IDs:       ASIN B003TEST | ISBN-13 9781234567890" in result.output
+    assert "Runtime:   610 min (local 609 min, delta 0.2%)" in result.output
     assert "Corroborated by 2 providers" in result.output
     assert "ASIN exact match" in result.output
     assert "Providers: openlibrary, audnexus" in result.output
+    assert "Review:    [none]" in result.output
     assert provider.seen_limits == [1]
     assert provider.closed is True
+
+
+def test_match_command_can_emit_structured_json(tmp_path: Path, monkeypatch) -> None:
+    runner = CliRunner()
+    folder = tmp_path / "library"
+    folder.mkdir()
+    provider = _StubMergedProvider()
+    audiobook = AudiobookSet(
+        source_path=folder / "Author - Title",
+        raw_title_guess="Title",
+        author_guess="Author",
+    )
+
+    monkeypatch.setattr(
+        "bookbot.cli._build_matching_provider",
+        lambda config_manager, metadata_from_files=False: provider,
+    )
+    monkeypatch.setattr(
+        "bookbot.cli.AudioFileScanner.scan_directory",
+        lambda self, path: [audiobook],
+    )
+
+    result = runner.invoke(
+        cli,
+        [
+            "--config-dir",
+            str(tmp_path / "config"),
+            "match",
+            str(folder),
+            "--limit",
+            "1",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload[0]["query"] == "Title"
+    assert payload[0]["candidates"][0]["providers"] == ["openlibrary", "audnexus"]
+    assert payload[0]["candidates"][0]["asin"] == "B003TEST"
 
 
 def test_match_command_reports_provider_failures_cleanly(

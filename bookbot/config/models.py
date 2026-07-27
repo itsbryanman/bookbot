@@ -2,7 +2,7 @@
 
 from enum import Enum
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -133,6 +133,20 @@ class HardcoverConfig(BaseModel):
     api_key: str | None = None
 
 
+class OpenLibraryConfig(BaseModel):
+    """Open Library configuration."""
+
+    enabled: bool = True
+
+
+class MatchingConfig(BaseModel):
+    """Review and auto-accept rules for metadata candidates."""
+
+    auto_accept_threshold: float = Field(default=0.90, ge=0.0, le=1.0)
+    require_review_on_flag: bool = True
+    block_on_severity: Literal["info", "warn", "block"] = "block"
+
+
 class ABSConfig(BaseModel):
     """Audiobookshelf server configuration."""
 
@@ -146,12 +160,12 @@ class ProviderConfig(BaseModel):
 
     priority_order: list[str] = Field(
         default_factory=lambda: [
-            "openlibrary",
             "audnexus",
-            "googlebooks",
-            "librivox",
             "audible",
+            "googlebooks",
+            "openlibrary",
             "hardcover",
+            "librivox",
         ]
     )
     cache_enabled: bool = True
@@ -166,6 +180,7 @@ class ProviderConfig(BaseModel):
     audible: AudibleConfig = Field(default_factory=AudibleConfig)
     audnexus: AudnexusConfig = Field(default_factory=AudnexusConfig)
     hardcover: HardcoverConfig = Field(default_factory=HardcoverConfig)
+    openlibrary: OpenLibraryConfig = Field(default_factory=OpenLibraryConfig)
 
 
 class LibraryOutputConfig(BaseModel):
@@ -204,6 +219,9 @@ class Config(BaseModel):
 
     # Providers
     providers: ProviderConfig = Field(default_factory=ProviderConfig)
+
+    # Matching / review flow
+    matching: MatchingConfig = Field(default_factory=MatchingConfig)
 
     # Audiobookshelf
     abs: ABSConfig = Field(default_factory=ABSConfig)

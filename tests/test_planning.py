@@ -7,7 +7,13 @@ from datetime import datetime
 from pathlib import Path
 
 from bookbot.core.discovery import AudioFileScanner
-from bookbot.core.models import AudioFormat, RenameOperation, RenamePlan, Track
+from bookbot.core.models import (
+    AudioFormat,
+    AudiobookSet,
+    RenameOperation,
+    RenamePlan,
+    Track,
+)
 from bookbot.core.operations import TransactionManager
 from bookbot.core.planning import PlanBuilder
 
@@ -173,3 +179,36 @@ def test_undo_restores_original_state(config_manager, tmp_path) -> None:
     assert manager.undo_transaction(plan.applied_transaction_id) is True
     assert source_a.exists()
     assert source_b.exists()
+
+
+def test_plan_skips_books_without_reviewed_identity(config_manager, tmp_path) -> None:
+    source = tmp_path / "01 - A.mp3"
+    source.touch()
+    track = Track(
+        src_path=source,
+        disc=1,
+        track_index=1,
+        audio_format=AudioFormat.MP3,
+    )
+    unresolved = AudiobookSet(
+        source_path=tmp_path,
+        raw_title_guess="Needs Review",
+        tracks=[track],
+        chosen_identity=None,
+        needs_review=True,
+        review_reason="WARN: narrator tag may be swapped",
+    )
+
+    plan = PlanBuilder(config_manager.load_config()).create_plan(
+        tmp_path,
+        [unresolved],
+        source_roots=[tmp_path],
+    )
+
+    assert plan.operations == []
+    assert plan.skipped == [
+        {
+            "source_path": str(tmp_path),
+            "reason": "WARN: narrator tag may be swapped",
+        }
+    ]
