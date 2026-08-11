@@ -1,6 +1,5 @@
 """Tests for the Hardcover provider."""
 
-
 import pytest
 
 from bookbot.providers.hardcover import HardcoverProvider

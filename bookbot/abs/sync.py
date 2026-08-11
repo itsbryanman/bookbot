@@ -1,8 +1,6 @@
 """Progress synchronization daemon for Audiobookshelf."""
 
-import asyncio
 import sqlite3
-import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -92,9 +90,7 @@ class ProgressSyncDaemon:
                     if isinstance(last_update, (int, float)):
                         server_ts = last_update
                     else:
-                        server_ts = datetime.fromisoformat(
-                            str(last_update)
-                        ).timestamp()
+                        server_ts = datetime.fromisoformat(str(last_update)).timestamp()
 
                     try:
                         local_ts = datetime.fromisoformat(local_update).timestamp()
@@ -109,15 +105,18 @@ class ProgressSyncDaemon:
                         progress_val,
                         current_time_val,
                         1 if is_finished else 0,
-                        str(last_update) if not isinstance(last_update, str)
+                        str(last_update)
+                        if not isinstance(last_update, str)
                         else last_update,
                         synced=1,
                     )
-                    updated.append({
-                        "item_id": item_id,
-                        "progress": progress_val,
-                        "current_time": current_time_val,
-                    })
+                    updated.append(
+                        {
+                            "item_id": item_id,
+                            "progress": progress_val,
+                            "current_time": current_time_val,
+                        }
+                    )
 
         return updated
 
@@ -125,9 +124,7 @@ class ProgressSyncDaemon:
         self, item_id: str, progress: float, current_time: float
     ) -> bool:
         """Push local progress to ABS server."""
-        result = await self.client.update_progress(
-            item_id, progress, current_time
-        )
+        result = await self.client.update_progress(item_id, progress, current_time)
         if result is not None:
             self._mark_synced(item_id)
             return True
@@ -212,9 +209,7 @@ class ProgressSyncDaemon:
     def _mark_synced(self, item_id: str) -> None:
         """Mark an entry as synced."""
         with sqlite3.connect(self.state_path) as conn:
-            conn.execute(
-                "UPDATE progress SET synced = 1 WHERE item_id = ?", (item_id,)
-            )
+            conn.execute("UPDATE progress SET synced = 1 WHERE item_id = ?", (item_id,))
 
     def _get_unsynced(self) -> list[dict[str, Any]]:
         """Get all unsynced progress entries."""

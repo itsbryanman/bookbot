@@ -109,7 +109,8 @@ class TestNFO:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "audiobook.nfo"
             path.write_text(
-                "Title: My Audiobook\nAuthor: John Doe\nYear: 2020\nNarrator: Jane Smith"
+                "Title: My Audiobook\nAuthor: John Doe\n"
+                "Year: 2020\nNarrator: Jane Smith"
             )
             result = manager.read_nfo(path)
             assert result is not None

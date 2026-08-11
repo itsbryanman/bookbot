@@ -13,6 +13,8 @@ import click
 if TYPE_CHECKING:
     from .abs.client import AudiobookshelfClient
     from .core.models import AudiobookSet
+    from .providers.base import MetadataProvider
+    from .providers.manager import ProviderManager
 
 from . import __version__
 from .config.manager import ConfigManager
@@ -67,7 +69,7 @@ def _build_matching_provider(
     config_manager: ConfigManager,
     *,
     metadata_from_files: bool = False,
-):
+) -> "MetadataProvider | ProviderManager":
     """Build the configured metadata provider stack for matching flows."""
     if metadata_from_files:
         from .providers.local import LocalMetadataProvider
@@ -155,7 +157,7 @@ async def _inspect_matches(
     request_timeout: float,
 ) -> list[tuple[Any, list[Any], BaseException | None]]:
     """Run provider-backed matching across a queue of audiobook sets."""
-    results = []
+    results: list[tuple[Any, list[Any], BaseException | None]] = []
     try:
         for audiobook_set in audiobook_sets:
             try:
@@ -189,7 +191,9 @@ def _run_review_session(
     folder: Path,
     *,
     limit: int,
-) -> tuple[list[Any], list[tuple[Any, list[Any], BaseException | None, str | None, Any | None]]]:
+) -> tuple[
+    list[Any], list[tuple[Any, list[Any], BaseException | None, str | None, Any | None]]
+]:
     """Scan a folder, fetch candidates, and apply saved review decisions."""
     from .core.review import mark_set_needs_review
     from .core.review_store import ReviewDecisionStore
@@ -212,7 +216,9 @@ def _run_review_session(
 
     store = ReviewDecisionStore(config_manager)
     matching = config_manager.load_config().matching
-    resolved_results = []
+    resolved_results: list[
+        tuple[Any, list[Any], BaseException | None, str | None, Any | None]
+    ] = []
     for audiobook_set, candidates, error in raw_results:
         if error is not None:
             audiobook_set.provider_candidates = []
@@ -244,7 +250,9 @@ def _run_review_session(
     return audiobook_sets, resolved_results
 
 
-def _candidate_payload(audiobook_set: Any, candidate: Any, index: int) -> dict[str, Any]:
+def _candidate_payload(
+    audiobook_set: Any, candidate: Any, index: int
+) -> dict[str, Any]:
     """Convert a candidate into structured CLI output."""
     from .core.review import review_reason
 
@@ -304,7 +312,10 @@ def _format_review_flag_lines(candidate: Any) -> list[str]:
             detail_parts.append(f"local={flag.local_value}")
         if flag.provider_value is not None:
             detail_parts.append(f"provider={flag.provider_value}")
-        lines.append(f"  - {flag.severity.upper()} {flag.kind.value}: " + " | ".join(detail_parts))
+        lines.append(
+            f"  - {flag.severity.upper()} {flag.kind.value}: "
+            + " | ".join(detail_parts)
+        )
     return lines
 
 
@@ -329,7 +340,10 @@ def _format_candidate_block(
 
     if payload["runtime_minutes"] is not None:
         runtime_text = f"{payload['runtime_minutes']} min"
-        if payload["local_runtime_minutes"] is not None and payload["runtime_delta_pct"] is not None:
+        if (
+            payload["local_runtime_minutes"] is not None
+            and payload["runtime_delta_pct"] is not None
+        ):
             runtime_text += (
                 f" (local {payload['local_runtime_minutes']:.0f} min, "
                 f"delta {payload['runtime_delta_pct'] * 100.0:.1f}%)"
@@ -755,10 +769,10 @@ def review_queue(
             f"asin={local['asin_guess'] or '[none]'} | "
             f"isbn={local['isbn_guess'] or '[none]'}"
         )
+        runtime_val = local["runtime_minutes"]
+        runtime_display = runtime_val if runtime_val is not None else "[none]"
         click.echo(
-            "   Evidence: "
-            f"{local['track_count']} track(s), "
-            f"{local['runtime_minutes'] if local['runtime_minutes'] is not None else '[none]'} min"
+            f"   Evidence: {local['track_count']} track(s), {runtime_display} min"
         )
         click.echo(f"   Review: {audiobook_set.review_reason or 'Review required'}")
         if error is not None:
@@ -776,8 +790,12 @@ def review_queue(
 
 @cli.command("accept")
 @click.argument("folder", type=click.Path(exists=True, file_okay=False, path_type=Path))
-@click.option("--set", "set_index", type=int, required=True, help="Review queue set index")
-@click.option("--candidate", "candidate_index", type=int, help="Candidate index to accept")
+@click.option(
+    "--set", "set_index", type=int, required=True, help="Review queue set index"
+)
+@click.option(
+    "--candidate", "candidate_index", type=int, help="Candidate index to accept"
+)
 @click.option("--skip", "skip_set", is_flag=True, help="Skip the set from future plans")
 @click.pass_context
 def accept(
@@ -828,7 +846,11 @@ def accept(
         click.echo(f"Skipped set {set_index}: {audiobook_set.source_path}")
         return
 
-    if candidate_index is None or candidate_index < 1 or candidate_index > len(candidates):
+    if (
+        candidate_index is None
+        or candidate_index < 1
+        or candidate_index > len(candidates)
+    ):
         click.echo(
             f"Error: candidate index must be between 1 and {len(candidates)}",
             err=True,
@@ -924,7 +946,8 @@ def convert(
             )
         else:
             click.echo(
-                "Warning:M4B conversion is currently disabled in your configuration.", err=True
+                "Warning:M4B conversion is currently disabled in your configuration.",
+                err=True,
             )
             click.echo("")
             if click.confirm("Would you like to enable it now?", default=True):
@@ -1215,7 +1238,9 @@ def config_edit(ctx: click.Context) -> None:
         subprocess.run([editor, str(config_file)], check=True)
         click.echo("Done:Configuration file closed")
     except subprocess.CalledProcessError:
-        click.echo(f"Error:Error opening editor. Edit manually: {config_file}", err=True)
+        click.echo(
+            f"Error:Error opening editor. Edit manually: {config_file}", err=True
+        )
         sys.exit(1)
     except FileNotFoundError:
         click.echo(f"Error:Editor '{editor}' not found.", err=True)
@@ -1370,7 +1395,8 @@ def provider_enable(ctx: click.Context, provider_name: str) -> None:
     else:
         click.echo(f"Error: Unknown provider '{provider_name}'")
         click.echo(
-            "Available providers: googlebooks, librivox, audible, audnexus, hardcover, openlibrary"
+            "Available providers: googlebooks, librivox, audible,"
+            " audnexus, hardcover, openlibrary"
         )
         sys.exit(1)
 
@@ -1773,7 +1799,8 @@ def audible_import(
         cache_file = _audible_library_cache_file(ctx.obj["config_manager"])
         if not cache_file.exists():
             click.echo(
-                "Error:No library cache found. Run 'bookbot audible list' first.", err=True
+                "Error:No library cache found. Run 'bookbot audible list' first.",
+                err=True,
             )
             sys.exit(1)
 
@@ -1839,7 +1866,8 @@ def audible_import(
 
                     if not activation_bytes:
                         click.echo(
-                            "  Warning:No activation bytes available. Skipping DRM removal."
+                            "  Warning: No activation bytes available."
+                            " Skipping DRM removal."
                         )
                     else:
                         remover = DRMRemover(activation_bytes=activation_bytes)
@@ -2232,7 +2260,9 @@ def drm_remove(
                 if activation_bytes:
                     click.echo("[OK]Activation bytes fetched successfully!")
                 else:
-                    click.echo("Warning:Could not automatically fetch activation bytes.")
+                    click.echo(
+                        "Warning:Could not automatically fetch activation bytes."
+                    )
         except ImportError:
             pass
 
@@ -2296,8 +2326,9 @@ def drm_remove(
                 continue
 
             if dry_run:
+                drm_type_val = drm_info.drm_type.value
                 click.echo(
-                    f"[LOCKED] {file_path.name}: Would remove {drm_info.drm_type.value} DRM"
+                    f"[LOCKED] {file_path.name}: Would remove {drm_type_val} DRM"
                 )
                 continue
 
@@ -2337,12 +2368,12 @@ def drm_remove(
 
 @cli.command()
 @click.argument("folder", type=click.Path(exists=True, file_okay=False, path_type=Path))
-@click.option("--json-output", "json_out", is_flag=True, help="Output machine-readable JSON")
+@click.option(
+    "--json-output", "json_out", is_flag=True, help="Output machine-readable JSON"
+)
 @click.option("--verbose", is_flag=True, help="Show file paths for each issue")
 @click.pass_context
-def health(
-    ctx: click.Context, folder: Path, json_out: bool, verbose: bool
-) -> None:
+def health(ctx: click.Context, folder: Path, json_out: bool, verbose: bool) -> None:
     """Audit an audiobook library for common issues."""
     from .core.discovery import AudioFileScanner
     from .core.health import LibraryHealthChecker
@@ -2483,7 +2514,9 @@ def organize(
         if success:
             click.echo("Reorganization completed successfully.")
         else:
-            click.echo("Reorganization failed. Changes have been rolled back.", err=True)
+            click.echo(
+                "Reorganization failed. Changes have been rolled back.", err=True
+            )
             sys.exit(1)
     elif not plan.is_valid:
         click.echo("\nPlan has conflicts. Resolve them before using --confirm.")
@@ -2554,16 +2587,16 @@ def chapters_detect(
             click.echo("  No chapters detected.")
             continue
 
-        click.echo(f"  Found {len(detected)} chapter(s) (source: {detected[0].source}):")
+        click.echo(
+            f"  Found {len(detected)} chapter(s) (source: {detected[0].source}):"
+        )
         for ch in detected:
             start = _format_ms(ch.start_ms)
             end = _format_ms(ch.end_ms) if ch.end_ms else "?"
             click.echo(f"    {start} - {end}  {ch.title}")
 
 
-async def _detect_audnexus(
-    ab_set: "AudiobookSet", ctx: click.Context
-) -> list:
+async def _detect_audnexus(ab_set: "AudiobookSet", ctx: click.Context) -> list:
     """Helper to detect chapters via Audnexus."""
     from .chapters.detector import ChapterDetector
     from .providers.audnexus import AudnexusProvider
@@ -2633,7 +2666,9 @@ def chapters_apply(
         if success:
             click.echo(f"Wrote {len(detected)} chapters to {out_path}")
         else:
-            click.echo(f"Failed to write chapters for {ab_set.source_path.name}", err=True)
+            click.echo(
+                f"Failed to write chapters for {ab_set.source_path.name}", err=True
+            )
 
 
 def _format_ms(ms: int) -> str:
@@ -2683,9 +2718,7 @@ def m4b_merge(
         return
 
     ab_set = audiobook_sets[0]
-    input_files = sorted(
-        [t.src_path for t in ab_set.tracks], key=lambda p: p.name
-    )
+    input_files = sorted([t.src_path for t in ab_set.tracks], key=lambda p: p.name)
 
     click.echo(f"Merging {len(input_files)} files into {output}...")
 
@@ -2709,9 +2742,13 @@ def m4b_merge(
 
 
 @m4b.command("split")
-@click.argument("input_file", type=click.Path(exists=True, dir_okay=False, path_type=Path))
+@click.argument(
+    "input_file", type=click.Path(exists=True, dir_okay=False, path_type=Path)
+)
 @click.option("-o", "--output-dir", type=click.Path(path_type=Path), required=True)
-@click.option("--format", "out_format", type=click.Choice(["m4a", "mp3"]), default="m4a")
+@click.option(
+    "--format", "out_format", type=click.Choice(["m4a", "mp3"]), default="m4a"
+)
 def m4b_split(input_file: Path, output_dir: Path, out_format: str) -> None:
     """Split an M4B file by chapters."""
     from .convert.ffmpeg import FFmpegWrapper
@@ -2729,7 +2766,9 @@ def m4b_split(input_file: Path, output_dir: Path, out_format: str) -> None:
 
 
 @m4b.command("chapters")
-@click.argument("input_file", type=click.Path(exists=True, dir_okay=False, path_type=Path))
+@click.argument(
+    "input_file", type=click.Path(exists=True, dir_okay=False, path_type=Path)
+)
 def m4b_chapters(input_file: Path) -> None:
     """Display embedded chapters in an M4B file."""
     from .convert.ffmpeg import FFmpegWrapper
@@ -2749,7 +2788,9 @@ def m4b_chapters(input_file: Path) -> None:
 
 
 @m4b.command("tag")
-@click.argument("input_file", type=click.Path(exists=True, dir_okay=False, path_type=Path))
+@click.argument(
+    "input_file", type=click.Path(exists=True, dir_okay=False, path_type=Path)
+)
 @click.option("--title", type=str)
 @click.option("--author", type=str)
 @click.option("--cover", type=click.Path(exists=True, path_type=Path))
@@ -2899,7 +2940,9 @@ def sidecar_sync(folder: Path) -> None:
         click.echo(f"Found sidecar metadata: {identity.title}")
         click.echo("Use 'bookbot sidecar read' for full details.")
     else:
-        click.echo("No sidecar metadata found. Use 'bookbot sidecar write' to create one.")
+        click.echo(
+            "No sidecar metadata found. Use 'bookbot sidecar write' to create one."
+        )
 
 
 # --- ABS (Audiobookshelf) Commands (Feature 1C) ---
@@ -2947,7 +2990,8 @@ def _get_abs_client(ctx: click.Context) -> "AudiobookshelfClient":
 
     if not config.abs.server_url or not config.abs.api_token:
         click.echo(
-            "Not configured. Run 'bookbot abs login --server URL --username USER' first.",
+            "Not configured. Run"
+            " 'bookbot abs login --server URL --username USER' first.",
             err=True,
         )
         sys.exit(1)
@@ -3128,9 +3172,7 @@ def abs_progress(ctx: click.Context, item_id: str, set_val: float | None) -> Non
     client = _get_abs_client(ctx)
 
     if set_val is not None:
-        result = asyncio.run(
-            client.update_progress(item_id, set_val, set_val * 3600)
-        )
+        result = asyncio.run(client.update_progress(item_id, set_val, set_val * 3600))
         if result is not None:
             click.echo(f"Progress set to {set_val:.1%}")
         else:
@@ -3204,9 +3246,7 @@ def abs_collections(ctx: click.Context, library_id: str) -> None:
 @click.option("--watch", is_flag=True, help="Continuous sync mode")
 @click.option("--interval", type=int, default=60, help="Sync interval in seconds")
 @click.pass_context
-def abs_sync(
-    ctx: click.Context, direction: str, watch: bool, interval: int
-) -> None:
+def abs_sync(ctx: click.Context, direction: str, watch: bool, interval: int) -> None:
     """Synchronize playback progress with ABS server."""
     import asyncio
 
@@ -3224,9 +3264,7 @@ def abs_sync(
             click.echo(f"Pushed {report.pushed} entries to server")
         else:
             report = await daemon.sync_all()
-            click.echo(
-                f"Sync complete: pulled {report.pulled}, pushed {report.pushed}"
-            )
+            click.echo(f"Sync complete: pulled {report.pulled}, pushed {report.pushed}")
             if report.errors:
                 for err in report.errors:
                     click.echo(f"  Error: {err}", err=True)
@@ -3369,16 +3407,14 @@ def dedupe(
     if apply:
         if plan.has_conflicts():
             click.echo(
-                "Error: plan has conflicts (destination files exist). "
-                "Aborting.",
+                "Error: plan has conflicts (destination files exist). Aborting.",
                 err=True,
             )
             sys.exit(1)
         config_manager = ctx.obj["config_manager"]
         engine.execute_plan(plan, config_manager)
         click.echo(
-            f"Done. {len(plan.operations)} files quarantined to "
-            f"{plan.quarantine_root}"
+            f"Done. {len(plan.operations)} files quarantined to {plan.quarantine_root}"
         )
         click.echo(f"To undo: bookbot undo {plan.plan_id}")
     else:

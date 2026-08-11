@@ -93,8 +93,13 @@ query GetBook($id: Int!) {
 
         if self.cache_manager:
             cache_key = self.cache_manager.generate_query_hash(
-                title=title, author=author, series=series, isbn=isbn,
-                year=year, language=language, limit=limit,
+                title=title,
+                author=author,
+                series=series,
+                isbn=isbn,
+                year=year,
+                language=language,
+                limit=limit,
             )
             cached_entry = self.cache_manager.get(cache_namespace, cache_key)
             if cached_entry:
@@ -221,7 +226,7 @@ query GetBook($id: Int!) {
             isbns = data.get("isbns", [])
             isbn_13 = None
             isbn_10 = None
-            for isbn in (isbns or []):
+            for isbn in isbns or []:
                 if isinstance(isbn, str):
                     clean = isbn.replace("-", "")
                     if len(clean) == 13:
@@ -281,7 +286,7 @@ query GetBook($id: Int!) {
             isbn_10 = None
             audio_seconds = None
             editions = data.get("editions", [])
-            for edition in (editions or []):
+            for edition in editions or []:
                 if isinstance(edition, dict):
                     if not isbn_13 and edition.get("isbn_13"):
                         isbn_13 = edition["isbn_13"]
@@ -327,4 +332,3 @@ query GetBook($id: Int!) {
 
         except (KeyError, TypeError, ValueError):
             return None
-

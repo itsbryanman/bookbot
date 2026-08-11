@@ -466,7 +466,8 @@ class LibraryDoctor:
         message += " Transactions: " + ", ".join(record_descriptions) + "."
 
         missing_from_logs = [
-            record for record in summary.transactions
+            record
+            for record in summary.transactions
             if not record.present_in_current_logs
         ]
         if missing_from_logs:
@@ -504,9 +505,7 @@ class LibraryDoctor:
             prefix=f"{len(groups)} potential duplicate file group(s) detected",
         )
 
-    def _format_duplicate_warning(
-        self, groups: list[list[str]], *, prefix: str
-    ) -> str:
+    def _format_duplicate_warning(self, groups: list[list[str]], *, prefix: str) -> str:
         """Format up to three duplicate groups with concrete paths."""
         lines = [prefix]
         for index, group in enumerate(groups[:3], 1):

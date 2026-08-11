@@ -206,7 +206,9 @@ async def test_preview_apply_changes_runs_for_sidecar_only_plan(
         lambda *args, **kwargs: plan,
     )
 
-    def fake_execute_plan(_self, passed_plan: RenamePlan, dry_run: bool = False) -> bool:
+    def fake_execute_plan(
+        _self, passed_plan: RenamePlan, dry_run: bool = False
+    ) -> bool:
         passed_plan.applied_transaction_id = "tx-sidecar"
         passed_plan.dry_run = dry_run
         return True

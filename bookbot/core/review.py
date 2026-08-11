@@ -280,10 +280,9 @@ def _runtime_flags(
 
 
 def _identifiers_conflict(left, right) -> bool:  # type: ignore[no-untyped-def]
-    return (
-        bool(left.isbn_13 and right.isbn_13 and left.isbn_13 != right.isbn_13)
-        or bool(left.asin and right.asin and left.asin != right.asin)
-    )
+    return bool(
+        left.isbn_13 and right.isbn_13 and left.isbn_13 != right.isbn_13
+    ) or bool(left.asin and right.asin and left.asin != right.asin)
 
 
 def _identifier_summary(identity) -> str:  # type: ignore[no-untyped-def]

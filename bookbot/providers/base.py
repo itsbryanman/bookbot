@@ -61,9 +61,7 @@ class MetadataProvider(ABC):
 
         # ISBN fast path via search(isbn=...)
         if audiobook_set.isbn_guess:
-            isbn_results = await self.search(
-                isbn=audiobook_set.isbn_guess, limit=limit
-            )
+            isbn_results = await self.search(isbn=audiobook_set.isbn_guess, limit=limit)
             if isbn_results:
                 return self._score_identities(audiobook_set, isbn_results)
 
@@ -113,9 +111,7 @@ class MetadataProvider(ABC):
                 filtered = [
                     ident
                     for ident in identities
-                    if matcher.match_title(
-                        audiobook_set.raw_title_guess, ident.title
-                    )
+                    if matcher.match_title(audiobook_set.raw_title_guess, ident.title)
                     >= 0.5
                 ]
                 if filtered:
@@ -151,9 +147,7 @@ class MetadataProvider(ABC):
             candidate = MatchCandidate(
                 identity=identity,
                 confidence=match_score.combined_score,
-                confidence_level=self._get_confidence_level(
-                    match_score.combined_score
-                ),
+                confidence_level=self._get_confidence_level(match_score.combined_score),
                 match_reasons=match_score.reasons,
             )
             candidates.append(candidate)

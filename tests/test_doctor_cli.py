@@ -24,9 +24,7 @@ def _run_cli_subprocess(
 
     pythonpath = full_env.get("PYTHONPATH")
     full_env["PYTHONPATH"] = (
-        str(REPO_ROOT)
-        if not pythonpath
-        else f"{REPO_ROOT}{os.pathsep}{pythonpath}"
+        str(REPO_ROOT) if not pythonpath else f"{REPO_ROOT}{os.pathsep}{pythonpath}"
     )
 
     return subprocess.run(
@@ -96,9 +94,7 @@ def test_doctor_reports_duplicate_examples(tmp_path: Path) -> None:
     assert str(edition_b) in duplicate_title_check.message
     assert str(duplicate_a / "track.mp3") in duplicate_file_check.message
     assert str(duplicate_b / "track.mp3") in duplicate_file_check.message
-    assert not any(
-        "Quarantine contains" in check.message for check in report.checks
-    )
+    assert not any("Quarantine contains" in check.message for check in report.checks)
 
 
 def test_doctor_excludes_quarantine_duplicates_and_reports_state(
@@ -232,9 +228,7 @@ def test_cli_help_doctor_and_scan_avoid_default_home_log_warning(
         env=env,
     )
     assert doctor_result.returncode == 0
-    assert "Warning: log directory" not in (
-        doctor_result.stdout + doctor_result.stderr
-    )
+    assert "Warning: log directory" not in (doctor_result.stdout + doctor_result.stderr)
     assert (config_dir / "logs" / "doctor.jsonl").exists()
 
     scan_result = _run_cli_subprocess(

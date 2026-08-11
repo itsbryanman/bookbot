@@ -74,11 +74,13 @@ class LibraryHealthChecker:
                             break
 
             if not has_sidecar_cover:
-                issues.append({
-                    "path": str(ab_set.source_path),
-                    "title": ab_set.raw_title_guess or ab_set.source_path.name,
-                    "tracks": ab_set.total_tracks,
-                })
+                issues.append(
+                    {
+                        "path": str(ab_set.source_path),
+                        "title": ab_set.raw_title_guess or ab_set.source_path.name,
+                        "tracks": ab_set.total_tracks,
+                    }
+                )
 
         return issues
 
@@ -114,11 +116,13 @@ class LibraryHealthChecker:
                 mismatches.append(f"albumartist: {albumartists}")
 
             if mismatches:
-                issues.append({
-                    "path": str(ab_set.source_path),
-                    "title": ab_set.raw_title_guess or ab_set.source_path.name,
-                    "mismatches": mismatches,
-                })
+                issues.append(
+                    {
+                        "path": str(ab_set.source_path),
+                        "title": ab_set.raw_title_guess or ab_set.source_path.name,
+                        "mismatches": mismatches,
+                    }
+                )
 
         return issues
 
@@ -169,10 +173,7 @@ class LibraryHealthChecker:
         engine = DedupeEngine(library_root)
         edition_groups = engine.analyze_editions(audiobook_sets)
 
-        return [
-            [c.audiobook_set for c in g.members]
-            for g in edition_groups
-        ]
+        return [[c.audiobook_set for c in g.members] for g in edition_groups]
 
     def check_series_gaps(
         self, audiobook_sets: list[AudiobookSet]
@@ -197,11 +198,11 @@ class LibraryHealthChecker:
             series_map[series_key].append((series, vol_num))
 
         issues = []
-        for series_key, volumes in series_map.items():
+        for volumes in series_map.values():
             if len(volumes) < 2:
                 continue
 
-            vol_nums = sorted(set(v[1] for v in volumes))
+            vol_nums = sorted({v[1] for v in volumes})
             series_name = volumes[0][0]
 
             # Check for gaps in integer sequences
@@ -210,11 +211,13 @@ class LibraryHealthChecker:
                 expected = set(range(min(int_vols), max(int_vols) + 1))
                 missing = expected - set(int_vols)
                 if missing:
-                    issues.append({
-                        "series": series_name,
-                        "found_volumes": sorted(int_vols),
-                        "missing_volumes": sorted(missing),
-                    })
+                    issues.append(
+                        {
+                            "series": series_name,
+                            "found_volumes": sorted(int_vols),
+                            "missing_volumes": sorted(missing),
+                        }
+                    )
 
         return issues
 
@@ -233,11 +236,13 @@ class LibraryHealthChecker:
                 formats.add(track.audio_format.value)
 
             if len(formats) > 1:
-                issues.append({
-                    "path": str(ab_set.source_path),
-                    "title": ab_set.raw_title_guess or ab_set.source_path.name,
-                    "formats": sorted(formats),
-                })
+                issues.append(
+                    {
+                        "path": str(ab_set.source_path),
+                        "title": ab_set.raw_title_guess or ab_set.source_path.name,
+                        "formats": sorted(formats),
+                    }
+                )
 
         return issues
 
@@ -261,20 +266,27 @@ class LibraryHealthChecker:
 
             anomalies = []
             for track in ab_set.tracks:
-                if track.bitrate and abs(track.bitrate - avg_bitrate) / avg_bitrate > 0.25:
-                    anomalies.append({
-                        "file": track.filename,
-                        "bitrate": track.bitrate,
-                        "expected": int(avg_bitrate),
-                    })
+                if (
+                    track.bitrate
+                    and abs(track.bitrate - avg_bitrate) / avg_bitrate > 0.25
+                ):
+                    anomalies.append(
+                        {
+                            "file": track.filename,
+                            "bitrate": track.bitrate,
+                            "expected": int(avg_bitrate),
+                        }
+                    )
 
             if anomalies:
-                issues.append({
-                    "path": str(ab_set.source_path),
-                    "title": ab_set.raw_title_guess or ab_set.source_path.name,
-                    "average_bitrate": int(avg_bitrate),
-                    "anomalies": anomalies,
-                })
+                issues.append(
+                    {
+                        "path": str(ab_set.source_path),
+                        "title": ab_set.raw_title_guess or ab_set.source_path.name,
+                        "average_bitrate": int(avg_bitrate),
+                        "anomalies": anomalies,
+                    }
+                )
 
         return issues
 

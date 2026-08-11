@@ -75,24 +75,18 @@ class TestMajorityIdentifier:
         return tracks
 
     def test_majority_agrees(self) -> None:
-        tracks = self._make_tracks(
-            ["9780451524935", "9780451524935", "9780451524935"]
-        )
+        tracks = self._make_tracks(["9780451524935", "9780451524935", "9780451524935"])
         result = AudioFileScanner._majority_identifier(tracks, "isbn")
         assert result == "9780451524935"
 
     def test_majority_disagrees(self) -> None:
-        tracks = self._make_tracks(
-            ["9780451524935", "9780000000000", None]
-        )
+        tracks = self._make_tracks(["9780451524935", "9780000000000", None])
         # 2 tracks carry the tag, but they disagree (1 vs 1)
         result = AudioFileScanner._majority_identifier(tracks, "isbn")
         assert result is None
 
     def test_majority_with_nones(self) -> None:
-        tracks = self._make_tracks(
-            ["9780451524935", None, None, "9780451524935"]
-        )
+        tracks = self._make_tracks(["9780451524935", None, None, "9780451524935"])
         # 2 out of 2 agree
         result = AudioFileScanner._majority_identifier(tracks, "isbn")
         assert result == "9780451524935"
@@ -104,7 +98,6 @@ class TestMajorityIdentifier:
 
 
 # ── Tag extraction (ID3 TXXX, MP4 freeform) ──
-
 
 
 FIXTURE_MP3 = (

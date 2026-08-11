@@ -134,9 +134,7 @@ class TestAudnexusProvider:
 
     @pytest.mark.asyncio
     async def test_get_chapters(self, provider, mock_chapters_response):
-        with patch.object(
-            provider, "_request", new_callable=AsyncMock
-        ) as mock_request:
+        with patch.object(provider, "_request", new_callable=AsyncMock) as mock_request:
             mock_request.return_value = mock_chapters_response
             chapters = await provider.get_chapters("B003JVHSIO")
 
@@ -148,9 +146,7 @@ class TestAudnexusProvider:
 
     @pytest.mark.asyncio
     async def test_get_by_id(self, provider, mock_book_response):
-        with patch.object(
-            provider, "_request", new_callable=AsyncMock
-        ) as mock_request:
+        with patch.object(provider, "_request", new_callable=AsyncMock) as mock_request:
             mock_request.return_value = mock_book_response
             identity = await provider.get_by_id("b003jvhsio")
 

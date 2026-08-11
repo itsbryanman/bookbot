@@ -343,8 +343,8 @@ class BookBotApp(App):
         self.config_manager = config_manager
         self.source_folders = source_folders
         self.audiobook_sets: list[AudiobookSet] = []
-        self.provider: MetadataProvider | ProviderManager = (
-            provider or ProviderManager(config_manager)
+        self.provider: MetadataProvider | ProviderManager = provider or ProviderManager(
+            config_manager
         )
 
         # Application state
@@ -416,7 +416,8 @@ class BookBotApp(App):
 
         # Set initial status
         self.update_status(
-            "Scanning preloaded folders..." if self.source_folders
+            "Scanning preloaded folders..."
+            if self.source_folders
             else "Select folders and start scanning"
         )
 
@@ -747,10 +748,7 @@ class BookBotApp(App):
                 return None
             common_root = Path(
                 os.path.commonpath(
-                    [
-                        str(book.source_path)
-                        for book in preview_screen.audiobook_sets
-                    ]
+                    [str(book.source_path) for book in preview_screen.audiobook_sets]
                 )
             )
             plan = PlanBuilder(config).create_plan(

@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from bookbot.core.models import AudiobookSet, AudioFormat, ProviderIdentity, Track
-from bookbot.core.organizer import ReorganizationPlan, SmartOrganizer, TEMPLATE_PRESETS
+from bookbot.core.organizer import TEMPLATE_PRESETS, ReorganizationPlan, SmartOrganizer
 
 
 @pytest.fixture
@@ -50,9 +50,7 @@ class TestSmartOrganizer:
                 (src / f"track{i}.mp3").touch()
 
             ab = _make_set(src)
-            plan = organizer.propose_reorganization(
-                src, None, "default", [ab]
-            )
+            plan = organizer.propose_reorganization(src, None, "default", [ab])
 
             assert isinstance(plan, ReorganizationPlan)
             assert plan.total_moves == 3
@@ -72,9 +70,7 @@ class TestSmartOrganizer:
                 authors=["Some Author"],
             )
             ab = _make_set(src, identity=identity)
-            plan = organizer.propose_reorganization(
-                src, None, "abs", [ab]
-            )
+            plan = organizer.propose_reorganization(src, None, "abs", [ab])
 
             assert plan.total_moves == 3
             # ABS template: {Author}/{Title}
@@ -94,18 +90,14 @@ class TestSmartOrganizer:
             ab1 = _make_set(src, "Same Title", "Same Author")
             ab2 = _make_set(src, "Same Title", "Same Author")
 
-            plan = organizer.propose_reorganization(
-                src, None, "default", [ab1, ab2]
-            )
+            plan = organizer.propose_reorganization(src, None, "default", [ab1, ab2])
 
             assert len(plan.conflicts) > 0
             assert not plan.is_valid
 
     def test_empty_sets(self, organizer):
         with tempfile.TemporaryDirectory() as tmp:
-            plan = organizer.propose_reorganization(
-                Path(tmp), None, "default", []
-            )
+            plan = organizer.propose_reorganization(Path(tmp), None, "default", [])
             assert plan.total_moves == 0
             assert plan.is_valid
 

@@ -20,9 +20,7 @@ class ChapterWriter:
 
         metadata_content = self._build_ffmetadata(chapters)
 
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".txt", delete=False
-        ) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
             metadata_file = Path(f.name)
             f.write(metadata_content)
 
@@ -63,9 +61,7 @@ class ChapterWriter:
             if metadata_file.exists():
                 metadata_file.unlink()
 
-    def write_to_ffmetadata(
-        self, output_path: Path, chapters: list[Chapter]
-    ) -> bool:
+    def write_to_ffmetadata(self, output_path: Path, chapters: list[Chapter]) -> bool:
         """Write chapters as FFMETADATA1 format file."""
         if not chapters:
             return False

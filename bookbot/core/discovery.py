@@ -2,9 +2,10 @@
 
 import re
 from collections import Counter
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from mutagen import File as MutagenFile
 from mutagen.id3 import ID3NoHeaderError
@@ -25,9 +26,7 @@ _IMPLAUSIBLE_AUTHOR_RE = re.compile(r"^[A-Z]{1,4}\s*\d+$")
 # "Last, First" shaped folder names (bookbot's own {AuthorLastFirst} output).
 # Digits are rejected on either side so series artifacts like
 # "05, Encyclopedia Brown" never read as authors.
-_LAST_FIRST_AUTHOR_RE = re.compile(
-    r"^[^\d,]{2,}?,\s+[^\d,]{2,}$"
-)
+_LAST_FIRST_AUTHOR_RE = re.compile(r"^[^\d,]{2,}?,\s+[^\d,]{2,}$")
 _PERSONAL_NAME_TOKEN_RE = re.compile(
     r"^(?:[A-Z][A-Za-z'`-]*|[A-Z](?:\.[A-Z])+\.?|[A-Z]\.)$"
 )
@@ -326,9 +325,7 @@ class AudioFileScanner:
             return True
 
         duration, _, _, _ = self._extract_audio_properties(file_path)
-        return (
-            duration is not None and duration >= self.STANDALONE_BOOK_MIN_DURATION
-        )
+        return duration is not None and duration >= self.STANDALONE_BOOK_MIN_DURATION
 
     def _looks_like_disc_folder(self, folder_name: str) -> bool:
         """Detect folders like CD1 or Disc 2 that should collapse into one book."""
@@ -577,6 +574,7 @@ class AudioFileScanner:
                     except Exception:
                         continue
 
+                    value: str | int | None
                     if field in ["track", "disc"]:
                         value = self._normalize_numeric_tag(raw_value)
                     else:
@@ -585,12 +583,12 @@ class AudioFileScanner:
                         continue
 
                     # Validate ISBN/ASIN before setting
-                    if field == "isbn":
+                    if field == "isbn" and isinstance(value, str):
                         cleaned = re.sub(r"[-\s]", "", value)
                         if not _ISBN_RE.match(cleaned):
                             continue
                         value = cleaned
-                    elif field == "asin":
+                    elif field == "asin" and isinstance(value, str):
                         normalized_asin = self._extract_asin_from_text(value)
                         if normalized_asin is None:
                             continue
@@ -607,9 +605,7 @@ class AudioFileScanner:
                 tags.raw_tags = {
                     str(key): normalized
                     for key, value in dict(audio_file).items()
-                    if (
-                        normalized := self._normalize_raw_tag_value(value)
-                    ) is not None
+                    if (normalized := self._normalize_raw_tag_value(value)) is not None
                 }
             except Exception:
                 tags.raw_tags = {}
@@ -694,7 +690,7 @@ class AudioFileScanner:
         candidate = match.group(1).upper()
         return candidate if _ASIN_RE.match(candidate) else None
 
-    def _extract_asin_from_url_tags(self, audio_file: object) -> str | None:
+    def _extract_asin_from_url_tags(self, audio_file: Mapping[Any, Any]) -> str | None:
         """Search URL-style tag frames for Audible product links."""
         try:
             items = audio_file.items()
@@ -913,7 +909,9 @@ class AudioFileScanner:
         title_guess = (
             folder_name
             if prefer_folder_title or in_author_title_layout
-            else albums.pop() if len(albums) == 1 else folder_name
+            else albums.pop()
+            if len(albums) == 1
+            else folder_name
         )
         author_guess = (
             albumartists.pop()
@@ -1029,9 +1027,7 @@ class AudioFileScanner:
 
         return self._author_title_guess(cleaned_name)
 
-    def _author_title_guess(
-        self, cleaned_name: str
-    ) -> tuple[str | None, str | None]:
+    def _author_title_guess(self, cleaned_name: str) -> tuple[str | None, str | None]:
         """Split `Author - Title` names while rejecting implausible authors."""
         split_name = self._split_dash_name(cleaned_name)
         if split_name is None:

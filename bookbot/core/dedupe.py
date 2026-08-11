@@ -130,8 +130,7 @@ class DedupePlan:
         if invalid_sources:
             sample = ", ".join(str(path) for path in invalid_sources[:3])
             raise ValueError(
-                "Plan includes source path(s) inside .bookbot-quarantine: "
-                f"{sample}"
+                f"Plan includes source path(s) inside .bookbot-quarantine: {sample}"
             )
 
     def to_dict(self) -> dict:
@@ -210,9 +209,11 @@ class DedupeEngine:
                 author_j, title_j = self._split_key(cluster_keys[j])
 
                 title_sim = fuzz.token_set_ratio(title_i, title_j)
-                author_sim = fuzz.token_sort_ratio(author_i, author_j) if (
-                    author_i and author_j
-                ) else 100
+                author_sim = (
+                    fuzz.token_sort_ratio(author_i, author_j)
+                    if (author_i and author_j)
+                    else 100
+                )
 
                 if title_sim >= 92 and author_sim >= 90:
                     group.extend(clusters[cluster_keys[j]])
@@ -230,10 +231,8 @@ class DedupeEngine:
                 self.analysis_warnings.append(guard_warning)
                 continue
 
-            group = EditionGroup()
-            candidates = [
-                DedupeCandidate(audiobook_set=ab) for ab in members
-            ]
+            edition_group = EditionGroup()
+            candidates = [DedupeCandidate(audiobook_set=ab) for ab in members]
             # Score each
             for c in candidates:
                 c.score_tuple = self._edition_score(c.audiobook_set)
@@ -243,7 +242,7 @@ class DedupeEngine:
 
             # Keeper is the first
             candidates[0].is_keeper = True
-            group.keeper = candidates[0]
+            edition_group.keeper = candidates[0]
 
             # Others are quarantined
             for c in candidates[1:]:
@@ -251,14 +250,12 @@ class DedupeEngine:
                     c.score_tuple, candidates[0].score_tuple
                 )
 
-            group.members = candidates
-            edition_groups.append(group)
+            edition_group.members = candidates
+            edition_groups.append(edition_group)
 
         return edition_groups
 
-    def _segment_group_warning(
-        self, members: list[AudiobookSet]
-    ) -> str | None:
+    def _segment_group_warning(self, members: list[AudiobookSet]) -> str | None:
         """Return a warning when a cluster looks like one segmented work."""
         if self._looks_like_numbered_sibling_segments(members):
             title = members[0].raw_title_guess or members[0].source_path.name
@@ -290,8 +287,7 @@ class DedupeEngine:
             return True
 
         raw_titles = [
-            member.raw_title_guess or member.source_path.name
-            for member in members
+            member.raw_title_guess or member.source_path.name for member in members
         ]
         return self._labels_form_numbered_sequence(raw_titles)
 
@@ -339,13 +335,12 @@ class DedupeEngine:
         return len(parents) == 1
 
     def analyze_files(
-        self, dedupe_extensions: set[str] | None = None,
+        self,
+        dedupe_extensions: set[str] | None = None,
     ) -> list[FileGroup]:
         """Find byte-duplicate files under library_root using staged hashing."""
         if dedupe_extensions is None:
-            dedupe_extensions = (
-                AUDIO_EXTENSIONS | IMAGE_EXTENSIONS | SIDECAR_EXTENSIONS
-            )
+            dedupe_extensions = AUDIO_EXTENSIONS | IMAGE_EXTENSIONS | SIDECAR_EXTENSIONS
 
         # Stage 1: group by exact size
         size_groups: dict[int, list[Path]] = defaultdict(list)
@@ -363,9 +358,7 @@ class DedupeEngine:
                 continue
 
         # Discard singletons
-        candidates = {
-            sz: paths for sz, paths in size_groups.items() if len(paths) > 1
-        }
+        candidates = {sz: paths for sz, paths in size_groups.items() if len(paths) > 1}
 
         if not candidates:
             return []
@@ -379,9 +372,7 @@ class DedupeEngine:
                     partial_groups[f"{sz}:{ph}"].append(p)
 
         # Discard diverged
-        stage2 = {
-            key: paths for key, paths in partial_groups.items() if len(paths) > 1
-        }
+        stage2 = {key: paths for key, paths in partial_groups.items() if len(paths) > 1}
 
         if not stage2:
             return []
@@ -454,25 +445,24 @@ class DedupeEngine:
                                 source=src,
                                 destination=track_dest,
                                 reason=(
-                                    "Edition duplicate: "
-                                    f"{candidate.quarantine_reason}"
+                                    f"Edition duplicate: {candidate.quarantine_reason}"
                                 ),
                             )
                         )
                         scheduled_sources.add(src)
-                    group_info["quarantined"].append({
-                        "path": str(ab.source_path),
-                        "reason": candidate.quarantine_reason,
-                    })
+                    group_info["quarantined"].append(
+                        {
+                            "path": str(ab.source_path),
+                            "reason": candidate.quarantine_reason,
+                        }
+                    )
 
                 plan.edition_groups.append(group_info)
 
         # File-level quarantines
         if file_groups:
             for fg in file_groups:
-                keeper = self._pick_file_keeper(
-                    fg.paths, keeper_edition_paths
-                )
+                keeper = self._pick_file_keeper(fg.paths, keeper_edition_paths)
                 fg.keeper = keeper
 
                 fg_info: dict = {
@@ -505,9 +495,7 @@ class DedupeEngine:
         """Execute a quarantine plan (move files)."""
         plan.validate_sources_outside_quarantine()
         if plan.has_conflicts():
-            raise ValueError(
-                "Plan has conflicts — destination files already exist"
-            )
+            raise ValueError("Plan has conflicts — destination files already exist")
 
         for op in plan.operations:
             op.destination.parent.mkdir(parents=True, exist_ok=True)
@@ -599,8 +587,12 @@ class DedupeEngine:
         total_duration = int(ab_set.total_duration or 0)
 
         return (
-            format_rank, has_id, clean_order,
-            has_cover, mean_bitrate, total_duration,
+            format_rank,
+            has_id,
+            clean_order,
+            has_cover,
+            mean_bitrate,
+            total_duration,
         )
 
     @staticmethod
@@ -616,9 +608,7 @@ class DedupeEngine:
             "lower bitrate",
             "shorter duration",
         ]
-        for i, (w, lo) in enumerate(
-            zip(winner_score, loser_score, strict=False)
-        ):
+        for i, (w, lo) in enumerate(zip(winner_score, loser_score, strict=False)):
             if w > lo:
                 return criteria[i] if i < len(criteria) else "lower score"
         return "tie-broken by position"
@@ -650,9 +640,7 @@ class DedupeEngine:
         )
 
     @staticmethod
-    def _is_within_keeper_edition(
-        path: Path, keeper_edition_paths: set[Path]
-    ) -> bool:
+    def _is_within_keeper_edition(path: Path, keeper_edition_paths: set[Path]) -> bool:
         """Check whether a duplicate file lives inside an already-kept edition."""
         for keeper_path in keeper_edition_paths:
             try:

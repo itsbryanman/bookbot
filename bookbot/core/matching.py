@@ -104,9 +104,10 @@ class AdvancedMatcher:
         if os.environ.get("XDG_CONFIG_HOME"):
             config_path = Path(os.environ["XDG_CONFIG_HOME"]) / "bookbot"
         elif os.name == "nt":
-            config_path = Path(
-                os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming")
-            ) / "bookbot"
+            config_path = (
+                Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming"))
+                / "bookbot"
+            )
         else:
             config_path = Path.home() / ".config" / "bookbot"
 

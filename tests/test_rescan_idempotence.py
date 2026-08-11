@@ -77,9 +77,7 @@ class TestParentAuthorLayout:
         """'05, Encyclopedia Brown' style names never read as authors."""
         assert scanner._parent_author_guess(Path("/lib/05, Encyclopedia Brown")) is None
 
-    def test_plain_container_folders_rejected(
-        self, scanner: AudioFileScanner
-    ) -> None:
+    def test_plain_container_folders_rejected(self, scanner: AudioFileScanner) -> None:
         assert scanner._parent_author_guess(Path("/lib/audiobooks")) is None
         assert scanner._parent_author_guess(Path("/lib/My Cool Library")) is None
 
@@ -88,8 +86,7 @@ class TestAuthorLastFirstPassthrough:
     def test_already_flipped_name_unchanged(self) -> None:
         engine = TemplateEngine()
         assert (
-            engine._format_author_last_first("Sobol, Donald J.")
-            == "Sobol, Donald J."
+            engine._format_author_last_first("Sobol, Donald J.") == "Sobol, Donald J."
         )
 
     def test_plain_name_flipped(self) -> None:

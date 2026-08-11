@@ -81,12 +81,10 @@ class PlanBuilder:
             folder_audio = [
                 entry
                 for entry in entries
-                if entry.is_file()
-                and entry.suffix.lower() in self._AUDIO_EXTENSIONS
+                if entry.is_file() and entry.suffix.lower() in self._AUDIO_EXTENSIONS
             ]
             if any(
-                entry.resolve(strict=False) not in track_paths
-                for entry in folder_audio
+                entry.resolve(strict=False) not in track_paths for entry in folder_audio
             ):
                 # Folder is shared with audio outside this set; don't claim
                 # its sidecars.
@@ -106,19 +104,18 @@ class PlanBuilder:
                     # alongside the new one. Disambiguate with the source
                     # folder name so every companion moves and the source
                     # folder can be pruned.
-                    target_name = self._disambiguated_name(
+                    disambiguated = self._disambiguated_name(
                         entry, folder, claimed_names
                     )
-                    if target_name is None:
+                    if disambiguated is None:
                         continue
+                    target_name = disambiguated
 
                 new_path = destination_folder / target_name
                 claimed_names.add(target_name.lower())
                 if new_path.resolve(strict=False) == entry.resolve(strict=False):
                     continue
-                operations.append(
-                    RenameOperation(old_path=entry, new_path=new_path)
-                )
+                operations.append(RenameOperation(old_path=entry, new_path=new_path))
 
         return operations
 
@@ -130,9 +127,7 @@ class PlanBuilder:
         candidates = [f"{folder.name} - {entry.name}"]
         stem = entry.stem
         suffix = entry.suffix
-        candidates.extend(
-            f"{stem} ({index}){suffix}" for index in range(2, 100)
-        )
+        candidates.extend(f"{stem} ({index}){suffix}" for index in range(2, 100))
         for candidate in candidates:
             if candidate.lower() not in claimed_names:
                 return candidate
@@ -229,13 +224,10 @@ class PlanBuilder:
                     }
                 )
                 continue
-            if (
-                audiobook_set.chosen_identity is None
-                and (
-                    audiobook_set.needs_review
-                    or bool(audiobook_set.provider_candidates)
-                    or audiobook_set.review_reason is not None
-                )
+            if audiobook_set.chosen_identity is None and (
+                audiobook_set.needs_review
+                or bool(audiobook_set.provider_candidates)
+                or audiobook_set.review_reason is not None
             ):
                 skipped.append(
                     {
@@ -355,9 +347,7 @@ def load_plan(path: Path) -> RenamePlan:
     try:
         plan = RenamePlan(**data)
     except Exception as e:
-        raise ValueError(
-            f"{path} is not a valid BookBot plan file: {e}"
-        ) from e
+        raise ValueError(f"{path} is not a valid BookBot plan file: {e}") from e
     plan.validate_plan()
     return plan
 
@@ -393,8 +383,7 @@ def format_plan_summary(plan: RenamePlan, include_operations: bool = True) -> st
         lines.append("")
         lines.append("Skipped:")
         lines.extend(
-            f"  - {item['source_path']}: {item['reason']}"
-            for item in plan.skipped
+            f"  - {item['source_path']}: {item['reason']}" for item in plan.skipped
         )
 
     if plan.planned_sidecars:

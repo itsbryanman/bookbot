@@ -28,14 +28,13 @@ from ..config.manager import ConfigManager
 from ..core.exceptions import MetadataError
 from ..core.logging import get_logger
 from ..core.matching import AdvancedMatcher
-from ..core.models import AudiobookSet, MatchCandidate
+from ..core.models import AudiobookSet, MatchCandidate, RenamePlan
 from ..core.operations import TransactionManager
 from ..core.planning import PlanBuilder
 from ..core.review import (
     accept_candidate_for_set,
     detect_review_flags,
     mark_set_needs_review,
-    review_reason,
     skip_set_from_plans,
     worst_flag_severity,
 )
@@ -351,9 +350,13 @@ class MatchReviewScreen(Static):
     ) -> list[MatchCandidate]:
         """Bound direct-provider lookups so the TUI never hangs offline."""
         timeout = self._request_timeout_seconds()
+        if isinstance(self.provider, ProviderManager):
+            coro = self.provider.find_matches_merged(audiobook_set)
+        else:
+            coro = self.provider.find_matches(audiobook_set)
         try:
             return await asyncio.wait_for(
-                self.provider.find_matches(audiobook_set),
+                coro,
                 timeout=timeout,
             )
         except asyncio.TimeoutError as exc:
@@ -505,9 +508,8 @@ class MatchReviewScreen(Static):
             lines.append("  [none]")
         else:
             lines.append(f"  Title: {sidecar.title}")
-            lines.append(
-                f"  Author: {', '.join(sidecar.authors) if sidecar.authors else '[none]'}"
-            )
+            authors_str = ", ".join(sidecar.authors) if sidecar.authors else "[none]"
+            lines.append(f"  Author: {authors_str}")
             lines.append(f"  Narrator: {sidecar.narrator or '[none]'}")
             lines.append(
                 f"  IDs: ASIN {sidecar.asin or '[none]'} | "
@@ -573,9 +575,7 @@ class MatchReviewScreen(Static):
         table = self.query_one("#matches_table", DataTable)
         await self.open_candidate_picker(table.cursor_row)
 
-    async def on_data_table_row_selected(
-        self, event: DataTable.RowSelected
-    ) -> None:
+    async def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         """Open the picker when a match row is selected."""
         if event.data_table.id != "matches_table":
             return
@@ -590,13 +590,9 @@ class MatchReviewScreen(Static):
         matching = self.config_manager.load_config().matching
 
         if isinstance(self.provider, ProviderManager):
-            match_tasks = [
-                self.provider.find_matches_merged(a) for a in audiobook_sets
-            ]
+            match_tasks = [self.provider.find_matches_merged(a) for a in audiobook_sets]
         else:
-            match_tasks = [
-                self._find_matches_with_timeout(a) for a in audiobook_sets
-            ]
+            match_tasks = [self._find_matches_with_timeout(a) for a in audiobook_sets]
         results = await asyncio.gather(*match_tasks, return_exceptions=True)
 
         for audiobook_set, result in zip(audiobook_sets, results, strict=False):
@@ -827,7 +823,8 @@ class CandidateDetailScreen(ModalScreen[int | None]):
             ),
             f"Year: {identity.year or '[none]'}",
             f"Providers: {', '.join(self._provider_labels(candidate))}",
-            f"Confidence: {candidate.confidence:.2f} ({candidate.confidence_level.value})",
+            f"Confidence: {candidate.confidence:.2f}"
+            f" ({candidate.confidence_level.value})",
             f"Reasons: {'; '.join(candidate.match_reasons) or '[none]'}",
             "Review Flags:",
         ]
@@ -871,9 +868,7 @@ class CandidateDetailScreen(ModalScreen[int | None]):
             return
         self._update_candidate_detail(event.cursor_row)
 
-    async def on_data_table_row_selected(
-        self, event: DataTable.RowSelected
-    ) -> None:
+    async def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         """Accept the selected candidate on row activation."""
         if event.data_table.id != "candidate_table":
             return
@@ -942,7 +937,7 @@ class PreviewScreen(Static):
         self.config_manager = config_manager
         self.audiobook_sets: list[AudiobookSet] = []
         self.last_transaction_id: str | None = None
-        self.last_plan = None
+        self.last_plan: RenamePlan | None = None
         self.source_roots: list[Path] = []
 
     def compose(self) -> ComposeResult:
@@ -1002,7 +997,10 @@ class PreviewScreen(Static):
                         operation.new_path, common_root
                     )
                     status = "✓ Ready"
-                elif audiobook_set.chosen_identity is None and audiobook_set.review_reason:
+                elif (
+                    audiobook_set.chosen_identity is None
+                    and audiobook_set.review_reason
+                ):
                     proposed_name = audiobook_set.review_reason
                     status = "Review required"
                 else:
@@ -1251,9 +1249,7 @@ class ConversionScreen(Static):
 
                 # Update table row status
                 if i < len(self._result_row_keys):
-                    table.update_cell(
-                        self._result_row_keys[i], "Status", "Converting"
-                    )
+                    table.update_cell(self._result_row_keys[i], "Status", "Converting")
 
                 try:
                     # Perform conversion

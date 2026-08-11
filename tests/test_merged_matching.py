@@ -19,8 +19,15 @@ class _MockProviderA(MetadataProvider):
         super().__init__("ProviderA")
 
     async def search(
-        self, *, title=None, author=None, series=None,
-        isbn=None, year=None, language=None, limit=10,
+        self,
+        *,
+        title=None,
+        author=None,
+        series=None,
+        isbn=None,
+        year=None,
+        language=None,
+        limit=10,
     ) -> list[ProviderIdentity]:
         return [
             ProviderIdentity(
@@ -42,8 +49,15 @@ class _MockProviderB(MetadataProvider):
         super().__init__("ProviderB")
 
     async def search(
-        self, *, title=None, author=None, series=None,
-        isbn=None, year=None, language=None, limit=10,
+        self,
+        *,
+        title=None,
+        author=None,
+        series=None,
+        isbn=None,
+        year=None,
+        language=None,
+        limit=10,
     ) -> list[ProviderIdentity]:
         return [
             ProviderIdentity(
@@ -66,8 +80,15 @@ class _AudnexusLikeProvider(MetadataProvider):
         super().__init__("audnexus")
 
     async def search(
-        self, *, title=None, author=None, series=None,
-        isbn=None, year=None, language=None, limit=10,
+        self,
+        *,
+        title=None,
+        author=None,
+        series=None,
+        isbn=None,
+        year=None,
+        language=None,
+        limit=10,
     ) -> list[ProviderIdentity]:
         return [
             ProviderIdentity(
@@ -90,8 +111,15 @@ class _OpenLibraryLikeProvider(MetadataProvider):
         super().__init__("openlibrary")
 
     async def search(
-        self, *, title=None, author=None, series=None,
-        isbn=None, year=None, language=None, limit=10,
+        self,
+        *,
+        title=None,
+        author=None,
+        series=None,
+        isbn=None,
+        year=None,
+        language=None,
+        limit=10,
     ) -> list[ProviderIdentity]:
         return [
             ProviderIdentity(
@@ -113,8 +141,15 @@ class _AudibleLikeProvider(MetadataProvider):
         super().__init__("audible")
 
     async def search(
-        self, *, title=None, author=None, series=None,
-        isbn=None, year=None, language=None, limit=10,
+        self,
+        *,
+        title=None,
+        author=None,
+        series=None,
+        isbn=None,
+        year=None,
+        language=None,
+        limit=10,
     ) -> list[ProviderIdentity]:
         return [
             ProviderIdentity(
@@ -136,8 +171,15 @@ class _FailingProvider(MetadataProvider):
         super().__init__("FailingProvider")
 
     async def search(
-        self, *, title=None, author=None, series=None,
-        isbn=None, year=None, language=None, limit=10,
+        self,
+        *,
+        title=None,
+        author=None,
+        series=None,
+        isbn=None,
+        year=None,
+        language=None,
+        limit=10,
     ) -> list[ProviderIdentity]:
         raise RuntimeError("Provider down")
 
@@ -174,18 +216,15 @@ def _create_manager_with_providers(
 
 class TestMergeByISBN:
     def test_merge_candidates_with_same_isbn(self) -> None:
-        manager = _create_manager_with_providers([
-            _MockProviderA(), _MockProviderB()
-        ])
+        manager = _create_manager_with_providers([_MockProviderA(), _MockProviderB()])
 
         # Patch get_enabled_providers to return our mocks
         with patch.object(
-            manager, "get_enabled_providers",
+            manager,
+            "get_enabled_providers",
             return_value=list(manager.providers.values()),
         ):
-            candidates = asyncio.run(
-                manager.find_matches_merged(_make_audiobook())
-            )
+            candidates = asyncio.run(manager.find_matches_merged(_make_audiobook()))
 
         # Should merge into one candidate (same ISBN-13)
         assert len(candidates) == 1
@@ -205,17 +244,14 @@ class TestMergeByISBN:
 
 class TestCorroborationBoost:
     def test_two_provider_boost(self) -> None:
-        manager = _create_manager_with_providers([
-            _MockProviderA(), _MockProviderB()
-        ])
+        manager = _create_manager_with_providers([_MockProviderA(), _MockProviderB()])
 
         with patch.object(
-            manager, "get_enabled_providers",
+            manager,
+            "get_enabled_providers",
             return_value=list(manager.providers.values()),
         ):
-            candidates = asyncio.run(
-                manager.find_matches_merged(_make_audiobook())
-            )
+            candidates = asyncio.run(manager.find_matches_merged(_make_audiobook()))
 
         c = candidates[0]
         # With 2 providers, boost = 0.07 * (2-1) = 0.07
@@ -230,7 +266,8 @@ class TestCorroborationBoost:
         )
 
         with patch.object(
-            manager, "get_enabled_providers",
+            manager,
+            "get_enabled_providers",
             return_value=list(manager.providers.values()),
         ):
             candidates = asyncio.run(
@@ -248,18 +285,20 @@ class TestCorroborationBoost:
         assert candidate.identity.asin == "B003P2WO5E"
         assert candidate.identity.isbn_13 == "9780765326355"
         assert "Corroborated by 2 providers" in candidate.match_reasons
-        assert (
-            "Corroborated across audio + print providers"
-            in candidate.match_reasons
-        )
+        assert "Corroborated across audio + print providers" in candidate.match_reasons
 
     def test_highest_priority_provider_keeps_surviving_identity(self) -> None:
         manager = _create_manager_with_providers(
-            [_AudnexusLikeProvider(), _AudibleLikeProvider(), _OpenLibraryLikeProvider()]
+            [
+                _AudnexusLikeProvider(),
+                _AudibleLikeProvider(),
+                _OpenLibraryLikeProvider(),
+            ]
         )
 
         with patch.object(
-            manager, "get_enabled_providers",
+            manager,
+            "get_enabled_providers",
             return_value=list(manager.providers.values()),
         ):
             candidates = asyncio.run(
@@ -285,12 +324,11 @@ class TestDurationCheck:
         manager = _create_manager_with_providers([_MockProviderB()])
 
         with patch.object(
-            manager, "get_enabled_providers",
+            manager,
+            "get_enabled_providers",
             return_value=list(manager.providers.values()),
         ):
-            candidates = asyncio.run(
-                manager.find_matches_merged(audiobook)
-            )
+            candidates = asyncio.run(manager.find_matches_merged(audiobook))
 
         c = candidates[0]
         assert "Runtime match" in c.match_reasons
@@ -301,12 +339,11 @@ class TestDurationCheck:
         manager = _create_manager_with_providers([_MockProviderB()])
 
         with patch.object(
-            manager, "get_enabled_providers",
+            manager,
+            "get_enabled_providers",
             return_value=list(manager.providers.values()),
         ):
-            candidates = asyncio.run(
-                manager.find_matches_merged(audiobook)
-            )
+            candidates = asyncio.run(manager.find_matches_merged(audiobook))
 
         c = candidates[0]
         assert "Runtime mismatch (possible wrong edition/abridged)" in c.match_reasons
@@ -317,17 +354,14 @@ class TestDurationCheck:
 
 class TestFailingProvider:
     def test_one_provider_raises(self) -> None:
-        manager = _create_manager_with_providers([
-            _MockProviderA(), _FailingProvider()
-        ])
+        manager = _create_manager_with_providers([_MockProviderA(), _FailingProvider()])
 
         with patch.object(
-            manager, "get_enabled_providers",
+            manager,
+            "get_enabled_providers",
             return_value=list(manager.providers.values()),
         ):
-            candidates = asyncio.run(
-                manager.find_matches_merged(_make_audiobook())
-            )
+            candidates = asyncio.run(manager.find_matches_merged(_make_audiobook()))
 
         # Should still get results from ProviderA
         assert len(candidates) >= 1
@@ -345,13 +379,24 @@ class _EmptyThenTitleProvider(MetadataProvider):
         self.search_calls: list[dict] = []
 
     async def search(
-        self, *, title=None, author=None, series=None,
-        isbn=None, year=None, language=None, limit=10,
+        self,
+        *,
+        title=None,
+        author=None,
+        series=None,
+        isbn=None,
+        year=None,
+        language=None,
+        limit=10,
     ) -> list[ProviderIdentity]:
-        self.search_calls.append({
-            "title": title, "author": author,
-            "series": series, "isbn": isbn,
-        })
+        self.search_calls.append(
+            {
+                "title": title,
+                "author": author,
+                "series": series,
+                "isbn": isbn,
+            }
+        )
         # Return results only when searching by title alone (fallback b)
         if title and not author and not series and not isbn:
             return [

@@ -148,9 +148,7 @@ def test_scan_directory_extracts_asin_guess_from_mp4_audible_asin_tags(
     file_path = tmp_path / "The Divorce - Freida McFadden.m4b"
     file_path.touch()
 
-    monkeypatch.setattr(
-        "bookbot.core.discovery.MutagenFile", _fake_asin_mutagen_file
-    )
+    monkeypatch.setattr("bookbot.core.discovery.MutagenFile", _fake_asin_mutagen_file)
     monkeypatch.setattr(
         AudioFileScanner,
         "_extract_audio_properties",
@@ -169,9 +167,7 @@ def test_scan_directory_extracts_asin_guess_from_woas_audible_url(
     file_path = tmp_path / "Can't Hurt Me....mp3"
     file_path.touch()
 
-    monkeypatch.setattr(
-        "bookbot.core.discovery.MutagenFile", _fake_asin_mutagen_file
-    )
+    monkeypatch.setattr("bookbot.core.discovery.MutagenFile", _fake_asin_mutagen_file)
     monkeypatch.setattr(
         AudioFileScanner,
         "_extract_audio_properties",
@@ -192,9 +188,7 @@ def test_scan_cli_plan_json_includes_asin_guess_from_embedded_tags(
     m4b_path.touch()
     mp3_path.touch()
 
-    monkeypatch.setattr(
-        "bookbot.core.discovery.MutagenFile", _fake_asin_mutagen_file
-    )
+    monkeypatch.setattr("bookbot.core.discovery.MutagenFile", _fake_asin_mutagen_file)
     monkeypatch.setattr(
         AudioFileScanner,
         "_extract_audio_properties",

@@ -9,9 +9,14 @@ contexts.
 
 from __future__ import annotations
 
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
-__version__ = "0.3.0"
+try:
+    __version__ = version("bookbot-cli")
+except PackageNotFoundError:
+    __version__ = "unknown"
+
 __author__ = "itsbryanman"
 __email__ = "itsbryanman@users.noreply.github.com"
 

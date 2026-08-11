@@ -5,7 +5,6 @@ from __future__ import annotations
 import hashlib
 import json
 from datetime import datetime
-from pathlib import Path
 from typing import Literal
 
 from pydantic import BaseModel
@@ -206,7 +205,8 @@ class ReviewDecisionStore:
         try:
             return str(track_path.relative_to(source_path))
         except ValueError:
-            return track.src_path.name
+            name: str = track.src_path.name
+            return name
 
     @staticmethod
     def _find_candidate(
@@ -227,10 +227,8 @@ class ReviewDecisionStore:
                 return candidate
             if selector.isbn_10 and identity.isbn_10 == selector.isbn_10:
                 return candidate
-            if (
-                matcher.match_title(identity.title, selector.title) >= 0.99
-                and sorted(author.casefold() for author in identity.authors)
-                == sorted(author.casefold() for author in selector.authors)
-            ):
+            if matcher.match_title(identity.title, selector.title) >= 0.99 and sorted(
+                author.casefold() for author in identity.authors
+            ) == sorted(author.casefold() for author in selector.authors):
                 return candidate
         return None

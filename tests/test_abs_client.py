@@ -30,13 +30,9 @@ class TestAudiobookshelfClient:
 
     @pytest.mark.asyncio
     async def test_get_libraries(self, client):
-        with patch.object(
-            client, "_request", new_callable=AsyncMock
-        ) as mock_req:
+        with patch.object(client, "_request", new_callable=AsyncMock) as mock_req:
             mock_req.return_value = {
-                "libraries": [
-                    {"id": "lib1", "name": "Audiobooks", "mediaType": "book"}
-                ]
+                "libraries": [{"id": "lib1", "name": "Audiobooks", "mediaType": "book"}]
             }
             libs = await client.get_libraries()
         assert len(libs) == 1
@@ -44,9 +40,7 @@ class TestAudiobookshelfClient:
 
     @pytest.mark.asyncio
     async def test_get_libraries_list_response(self, client):
-        with patch.object(
-            client, "_request", new_callable=AsyncMock
-        ) as mock_req:
+        with patch.object(client, "_request", new_callable=AsyncMock) as mock_req:
             mock_req.return_value = [
                 {"id": "lib1", "name": "Books", "mediaType": "book"}
             ]
@@ -55,18 +49,14 @@ class TestAudiobookshelfClient:
 
     @pytest.mark.asyncio
     async def test_get_libraries_empty(self, client):
-        with patch.object(
-            client, "_request", new_callable=AsyncMock
-        ) as mock_req:
+        with patch.object(client, "_request", new_callable=AsyncMock) as mock_req:
             mock_req.return_value = None
             libs = await client.get_libraries()
         assert libs == []
 
     @pytest.mark.asyncio
     async def test_search_library(self, client):
-        with patch.object(
-            client, "_request", new_callable=AsyncMock
-        ) as mock_req:
+        with patch.object(client, "_request", new_callable=AsyncMock) as mock_req:
             mock_req.return_value = {
                 "book": [{"libraryItem": {"id": "item1", "title": "Dune"}}]
             }
@@ -75,9 +65,7 @@ class TestAudiobookshelfClient:
 
     @pytest.mark.asyncio
     async def test_get_item(self, client):
-        with patch.object(
-            client, "_request", new_callable=AsyncMock
-        ) as mock_req:
+        with patch.object(client, "_request", new_callable=AsyncMock) as mock_req:
             mock_req.return_value = {
                 "id": "item1",
                 "media": {"metadata": {"title": "Dune"}},
@@ -88,18 +76,14 @@ class TestAudiobookshelfClient:
 
     @pytest.mark.asyncio
     async def test_get_item_not_found(self, client):
-        with patch.object(
-            client, "_request", new_callable=AsyncMock
-        ) as mock_req:
+        with patch.object(client, "_request", new_callable=AsyncMock) as mock_req:
             mock_req.return_value = None
             item = await client.get_item("nonexistent")
         assert item is None
 
     @pytest.mark.asyncio
     async def test_update_progress(self, client):
-        with patch.object(
-            client, "_request", new_callable=AsyncMock
-        ) as mock_req:
+        with patch.object(client, "_request", new_callable=AsyncMock) as mock_req:
             mock_req.return_value = {"success": True}
             result = await client.update_progress("item1", 0.5, 1800.0)
         assert result is not None
@@ -115,18 +99,14 @@ class TestAudiobookshelfClient:
 
     @pytest.mark.asyncio
     async def test_match_item(self, client):
-        with patch.object(
-            client, "_request", new_callable=AsyncMock
-        ) as mock_req:
+        with patch.object(client, "_request", new_callable=AsyncMock) as mock_req:
             mock_req.return_value = {"updated": True}
             result = await client.match_item("item1", provider="audnexus")
         assert result is not None
 
     @pytest.mark.asyncio
     async def test_get_stats(self, client):
-        with patch.object(
-            client, "_request", new_callable=AsyncMock
-        ) as mock_req:
+        with patch.object(client, "_request", new_callable=AsyncMock) as mock_req:
             mock_req.return_value = {"totalTime": 360000}
             stats = await client.get_stats()
         assert stats is not None

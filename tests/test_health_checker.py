@@ -9,7 +9,9 @@ from bookbot.core.health import HealthReport, LibraryHealthChecker
 from bookbot.core.models import AudiobookSet, AudioFormat, AudioTags, Track
 
 
-def _make_track(path: Path, fmt: str = "mp3", bitrate: int = 128, tags: AudioTags | None = None) -> Track:
+def _make_track(
+    path: Path, fmt: str = "mp3", bitrate: int = 128, tags: AudioTags | None = None
+) -> Track:
     return Track(
         src_path=path,
         track_index=1,
@@ -134,24 +136,16 @@ class TestDuplicateEditions:
 class TestSeriesGaps:
     def test_detects_gap(self, checker):
         with tempfile.TemporaryDirectory() as tmp:
-            ab1 = _make_set(
-                Path(tmp) / "a", "Book 1", series="My Series", volume="1"
-            )
-            ab3 = _make_set(
-                Path(tmp) / "b", "Book 3", series="My Series", volume="3"
-            )
+            ab1 = _make_set(Path(tmp) / "a", "Book 1", series="My Series", volume="1")
+            ab3 = _make_set(Path(tmp) / "b", "Book 3", series="My Series", volume="3")
             gaps = checker.check_series_gaps([ab1, ab3])
             assert len(gaps) == 1
             assert 2 in gaps[0]["missing_volumes"]
 
     def test_no_gap(self, checker):
         with tempfile.TemporaryDirectory() as tmp:
-            ab1 = _make_set(
-                Path(tmp) / "a", "Book 1", series="Series", volume="1"
-            )
-            ab2 = _make_set(
-                Path(tmp) / "b", "Book 2", series="Series", volume="2"
-            )
+            ab1 = _make_set(Path(tmp) / "a", "Book 1", series="Series", volume="1")
+            ab2 = _make_set(Path(tmp) / "b", "Book 2", series="Series", volume="2")
             gaps = checker.check_series_gaps([ab1, ab2])
             assert len(gaps) == 0
 

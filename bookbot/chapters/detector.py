@@ -82,7 +82,8 @@ class ChapterDetector:
         if not all_silences:
             return []
 
-        # Filter: prefer silences > 3s, space chapters at least min_chapter_gap_sec apart
+        # Filter: prefer silences > 3s, space chapters at least
+        # min_chapter_gap_sec apart
         chapter_breaks = []
         last_break = 0.0
         for start, end in all_silences:
@@ -95,9 +96,7 @@ class ChapterDetector:
         # Build chapters from breaks
         chapters = []
         for i, break_time in enumerate(chapter_breaks):
-            start_ms = int(
-                (chapter_breaks[i - 1] if i > 0 else 0.0) * 1000
-            )
+            start_ms = int((chapter_breaks[i - 1] if i > 0 else 0.0) * 1000)
             end_ms = int(break_time * 1000)
             chapters.append(
                 Chapter(
@@ -154,14 +153,14 @@ class ChapterDetector:
         return chapters
 
     async def detect_from_audnexus(
-        self, asin: str, provider: "AudnexusProvider"
+        self, asin: str, provider: AudnexusProvider
     ) -> list[Chapter] | None:
         """Detect chapters from Audnexus API data."""
         chapter_data = await provider.get_chapters(asin)
         if not chapter_data:
             return None
 
-        chapters = []
+        chapters: list[Chapter] = []
         for ch in chapter_data:
             start_ms = ch.get("start_ms", 0)
             length_ms = ch.get("length_ms", 0)
@@ -178,7 +177,7 @@ class ChapterDetector:
 
     def detect_from_cue(self, cue_path: Path) -> list[Chapter]:
         """Parse a .cue file for chapter timecodes."""
-        chapters = []
+        chapters: list[Chapter] = []
 
         try:
             content = cue_path.read_text(encoding="utf-8", errors="replace")
@@ -186,11 +185,8 @@ class ChapterDetector:
             return []
 
         current_title = ""
-        track_pattern = re.compile(r"^\s*TRACK\s+(\d+)\s+AUDIO", re.IGNORECASE)
         title_pattern = re.compile(r'^\s*TITLE\s+"([^"]*)"', re.IGNORECASE)
-        index_pattern = re.compile(
-            r"^\s*INDEX\s+01\s+(\d+):(\d+):(\d+)", re.IGNORECASE
-        )
+        index_pattern = re.compile(r"^\s*INDEX\s+01\s+(\d+):(\d+):(\d+)", re.IGNORECASE)
 
         for line in content.splitlines():
             title_match = title_pattern.match(line)
@@ -202,9 +198,7 @@ class ChapterDetector:
                 minutes = int(index_match.group(1))
                 seconds = int(index_match.group(2))
                 frames = int(index_match.group(3))
-                start_ms = (minutes * 60 + seconds) * 1000 + int(
-                    frames * 1000 / 75
-                )
+                start_ms = (minutes * 60 + seconds) * 1000 + int(frames * 1000 / 75)
 
                 title = current_title or f"Chapter {len(chapters) + 1}"
                 chapters.append(
@@ -226,7 +220,7 @@ class ChapterDetector:
     async def auto_detect(
         self,
         audiobook_set: AudiobookSet,
-        audnexus: "AudnexusProvider | None" = None,
+        audnexus: AudnexusProvider | None = None,
     ) -> list[Chapter]:
         """Auto-detect chapters using strategy chain.
 

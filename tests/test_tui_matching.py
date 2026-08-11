@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime
 import json
 from pathlib import Path
 
@@ -16,16 +15,15 @@ from textual.widgets import DataTable, Label, Static, TabbedContent
 from bookbot.cli import cli
 from bookbot.config.manager import ConfigManager
 from bookbot.core.models import (
-    AudioFormat,
     AudiobookSet,
+    AudioFormat,
     MatchCandidate,
     MatchConfidence,
     ProviderIdentity,
-    RenameOperation,
-    Track,
-    TrackStatus,
     ReviewFlag,
     ReviewFlagKind,
+    Track,
+    TrackStatus,
 )
 from bookbot.core.planning import PlanBuilder
 from bookbot.providers.base import MetadataProvider
@@ -345,9 +343,10 @@ async def test_bookbot_app_reports_no_matches_found_honestly(
         await app.find_matches()
 
         assert app.query_one("#status_label", Label).content == "No matches found"
-        assert "Check network/providers" in app.query_one(
-            "#warnings_panel", Static
-        ).content
+        assert (
+            "Check network/providers"
+            in app.query_one("#warnings_panel", Static).content
+        )
 
 
 @pytest.mark.asyncio
@@ -368,9 +367,7 @@ async def test_bookbot_app_with_preloaded_folders_starts_in_scanning_state(
         # "Scanning preloaded folders..." to "Scanning <dir>..." depending on
         # scheduling, so assert the scanning phase rather than an exact
         # mid-race string.
-        assert str(app.query_one("#status_label", Label).content).startswith(
-            "Scanning"
-        )
+        assert str(app.query_one("#status_label", Label).content).startswith("Scanning")
 
 
 @pytest.mark.asyncio
@@ -391,9 +388,9 @@ async def test_bookbot_app_reports_partial_match_status(
         assert app.query_one("#status_label", Label).content == (
             "Matched 1 of 2 - review unmatched"
         )
-        assert "Some providers failed" in app.query_one(
-            "#warnings_panel", Static
-        ).content
+        assert (
+            "Some providers failed" in app.query_one("#warnings_panel", Static).content
+        )
 
 
 @pytest.mark.asyncio

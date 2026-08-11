@@ -49,9 +49,7 @@ class TestLooselyTypedSidecarJson:
         assert result.title == "Tampa"
         assert result.series_name is None
 
-    def test_series_object_list(
-        self, sidecars: SidecarManager, tmp_path: Path
-    ) -> None:
+    def test_series_object_list(self, sidecars: SidecarManager, tmp_path: Path) -> None:
         path = self._write(
             tmp_path,
             {"title": "T", "series": [{"name": "Kingkiller", "sequence": "1"}]},
@@ -145,9 +143,7 @@ class TestNoSourceResidueAfterApply:
         scanner = AudioFileScanner()
         sets = scanner.scan_directory(library)
         config = config_manager.load_config()
-        plan = PlanBuilder(config).create_plan(
-            library, sets, source_roots=[library]
-        )
+        plan = PlanBuilder(config).create_plan(library, sets, source_roots=[library])
         TransactionManager(config_manager).execute_plan(plan)
 
     def test_every_disc_cover_moves(self, tmp_path: Path, config_manager) -> None:
@@ -164,9 +160,7 @@ class TestNoSourceResidueAfterApply:
             b"COVER" + bytes([disc]) for disc in range(1, 4)
         }
 
-    def test_old_disc_folders_are_pruned(
-        self, tmp_path: Path, config_manager
-    ) -> None:
+    def test_old_disc_folders_are_pruned(self, tmp_path: Path, config_manager) -> None:
         library = _build_multidisc_library(tmp_path)
         self._apply(library, config_manager)
 
@@ -187,9 +181,7 @@ class TestNoSourceResidueAfterApply:
         book.mkdir(parents=True)
         (book / "companion.epub").write_text("EPUB")
         for track in range(1, 3):
-            _make_track(
-                book / f"{track:02d}.mp3", f"Track {track}", "Some Book", track
-            )
+            _make_track(book / f"{track:02d}.mp3", f"Track {track}", "Some Book", track)
 
         self._apply(library, config_manager)
 
@@ -198,9 +190,7 @@ class TestNoSourceResidueAfterApply:
 
 
 class TestBoundedEmptyDirCleanup:
-    def test_cleanup_stops_at_boundary(
-        self, tmp_path: Path, config_manager
-    ) -> None:
+    def test_cleanup_stops_at_boundary(self, tmp_path: Path, config_manager) -> None:
         root = tmp_path / "root"
         nested = root / "a" / "b"
         nested.mkdir(parents=True)

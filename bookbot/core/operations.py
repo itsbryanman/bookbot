@@ -28,9 +28,9 @@ class TransactionManager:
 
     def _destination_folder_for_set(self, audiobook_set) -> Path:  # type: ignore[no-untyped-def]
         """Infer the current destination folder for one audiobook set."""
-        parents = [track.src_path.parent for track in audiobook_set.tracks]
+        parents: list[Path] = [track.src_path.parent for track in audiobook_set.tracks]
         if not parents:
-            return audiobook_set.source_path
+            return Path(audiobook_set.source_path)
         try:
             return Path(os.path.commonpath([str(parent) for parent in parents]))
         except ValueError:
@@ -52,7 +52,8 @@ class TransactionManager:
         """Fetch remote cover art bytes with the configured timeout."""
         request = Request(url, headers={"User-Agent": "BookBot/1.0"})
         with urlopen(request, timeout=timeout) as response:
-            return response.read()
+            data: bytes = response.read()
+            return data
 
     def _write_sidecar_record(
         self,
@@ -239,8 +240,7 @@ class TransactionManager:
                     "sidecar"
                     if not plan.operations
                     and any(
-                        record.operation_type == "sidecar"
-                        for record in transaction_log
+                        record.operation_type == "sidecar" for record in transaction_log
                     )
                     else "rename"
                 ),
@@ -470,9 +470,7 @@ class TransactionManager:
         them via `old_path.parent.mkdir(parents=True)`.
         """
         root = plan.source_path.resolve(strict=False)
-        source_dirs = {
-            operation.old_path.parent for operation in plan.operations
-        }
+        source_dirs = {operation.old_path.parent for operation in plan.operations}
         # Deepest first so parents become empty before they're considered.
         for directory in sorted(
             source_dirs, key=lambda path: len(path.parts), reverse=True

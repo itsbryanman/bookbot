@@ -240,9 +240,7 @@ class ProviderManager:
         if identity.asin:
             return f"asin:{identity.asin}"
         norm_author = (
-            matcher.normalize_author(identity.authors[0])
-            if identity.authors
-            else ""
+            matcher.normalize_author(identity.authors[0]) if identity.authors else ""
         )
         norm_title = matcher.normalize_title(identity.title)
         return f"fuzzy:{norm_author}|{norm_title}"
@@ -347,9 +345,9 @@ class ProviderManager:
             all_reasons.append(f"Corroborated by {n_providers} providers")
 
         surviving_identity.raw_data = dict(surviving_identity.raw_data)
-        surviving_identity.raw_data["providers"] = (
-            provider_names or [surviving_identity.provider]
-        )
+        surviving_identity.raw_data["providers"] = provider_names or [
+            surviving_identity.provider
+        ]
 
         seen: set[str] = set()
         unique_reasons: list[str] = []
@@ -402,13 +400,10 @@ class ProviderManager:
         )
 
     @staticmethod
-    def _identifiers_conflict(
-        left: ProviderIdentity, right: ProviderIdentity
-    ) -> bool:
-        return (
-            bool(left.isbn_13 and right.isbn_13 and left.isbn_13 != right.isbn_13)
-            or bool(left.asin and right.asin and left.asin != right.asin)
-        )
+    def _identifiers_conflict(left: ProviderIdentity, right: ProviderIdentity) -> bool:
+        return bool(
+            left.isbn_13 and right.isbn_13 and left.isbn_13 != right.isbn_13
+        ) or bool(left.asin and right.asin and left.asin != right.asin)
 
     @classmethod
     def _is_audio_print_corroboration(
@@ -455,9 +450,7 @@ class ProviderManager:
             reasons.append("Runtime match")
         elif relative_error > 0.10:
             conf *= 0.6
-            reasons.append(
-                "Runtime mismatch (possible wrong edition/abridged)"
-            )
+            reasons.append("Runtime mismatch (possible wrong edition/abridged)")
 
         if conf != candidate.confidence:
             level = MatchConfidence.HIGH

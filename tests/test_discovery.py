@@ -185,10 +185,7 @@ class TestAudioFileScanner:
         visible_file.touch()
 
         quarantined_file = (
-            tmp_path
-            / ".bookbot-quarantine"
-            / "tx-1"
-            / "Hidden Duplicate.m4b"
+            tmp_path / ".bookbot-quarantine" / "tx-1" / "Hidden Duplicate.m4b"
         )
         quarantined_file.parent.mkdir(parents=True)
         quarantined_file.touch()

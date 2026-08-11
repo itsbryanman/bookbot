@@ -6,8 +6,8 @@ from datetime import datetime
 from pathlib import Path
 
 from bookbot.core.models import (
-    AudioFormat,
     AudiobookSet,
+    AudioFormat,
     ProviderIdentity,
     RenameOperation,
     RenamePlan,

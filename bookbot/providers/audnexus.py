@@ -88,11 +88,12 @@ class AudnexusProvider(MetadataProvider):
                             f"Audnexus returned {response.status} for {path}"
                         )
                         return None
-                    return await response.json()
+                    data: dict[str, Any] | list[Any] | None = await response.json()
+                    return data
             except (aiohttp.ClientError, asyncio.TimeoutError) as e:
                 logger.warning(f"Audnexus request failed: {e}")
                 if attempt < max_retries - 1:
-                    await asyncio.sleep(2 ** attempt)
+                    await asyncio.sleep(2**attempt)
                     continue
                 return None
 
@@ -115,8 +116,13 @@ class AudnexusProvider(MetadataProvider):
 
         if self.cache_manager:
             cache_key = self.cache_manager.generate_query_hash(
-                title=title, author=author, series=series, isbn=isbn,
-                year=year, language=language, limit=limit,
+                title=title,
+                author=author,
+                series=series,
+                isbn=isbn,
+                year=year,
+                language=language,
+                limit=limit,
             )
             cached_entry = self.cache_manager.get(cache_namespace, cache_key)
             if cached_entry:
@@ -198,13 +204,15 @@ class AudnexusProvider(MetadataProvider):
             return []
 
         chapters_raw = data.get("chapters", [])
-        chapters = []
+        chapters: list[dict[str, Any]] = []
         for ch in chapters_raw:
-            chapters.append({
-                "title": ch.get("title", f"Chapter {len(chapters) + 1}"),
-                "start_ms": int(ch.get("startOffsetMs", 0)),
-                "length_ms": int(ch.get("lengthMs", 0)),
-            })
+            chapters.append(
+                {
+                    "title": ch.get("title", f"Chapter {len(chapters) + 1}"),
+                    "start_ms": int(ch.get("startOffsetMs", 0)),
+                    "length_ms": int(ch.get("lengthMs", 0)),
+                }
+            )
 
         return chapters
 
@@ -274,4 +282,3 @@ class AudnexusProvider(MetadataProvider):
 
         except (KeyError, TypeError, ValueError):
             return None
-

@@ -266,4 +266,3 @@ class GoogleBooksProvider(MetadataProvider):
                 "published_date": published_date,
             },
         )
-

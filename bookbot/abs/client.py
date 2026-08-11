@@ -55,16 +55,15 @@ class AudiobookshelfClient:
                     logger.warning(f"ABS returned {response.status} for {path}")
                     return None
                 if response.content_type and "json" in response.content_type:
-                    return await response.json()
+                    result: dict[str, Any] | list[Any] | None = await response.json()
+                    return result
                 return None
         except (aiohttp.ClientError, Exception) as e:
             logger.warning(f"ABS request failed: {e}")
             return None
 
     @classmethod
-    async def login(
-        cls, server_url: str, username: str, password: str
-    ) -> str | None:
+    async def login(cls, server_url: str, username: str, password: str) -> str | None:
         """Authenticate and return a token."""
         url = f"{server_url.rstrip('/')}/login"
         try:
@@ -76,7 +75,8 @@ class AudiobookshelfClient:
                         return None
                     data = await response.json()
                     user = data.get("user", {})
-                    return user.get("token")
+                    token: str | None = user.get("token")
+                    return token
         except (aiohttp.ClientError, Exception):
             return None
 
@@ -84,7 +84,8 @@ class AudiobookshelfClient:
         """Get all libraries."""
         data = await self._request("GET", "/api/libraries")
         if isinstance(data, dict):
-            return data.get("libraries", [])
+            libraries: list[dict[str, Any]] = data.get("libraries", [])
+            return libraries
         if isinstance(data, list):
             return data
         return []
@@ -159,9 +160,7 @@ class AudiobookshelfClient:
 
     async def batch_match(self, library_id: str) -> dict[str, Any] | None:
         """Batch match all items in a library."""
-        data = await self._request(
-            "POST", f"/api/libraries/{library_id}/match-all"
-        )
+        data = await self._request("POST", f"/api/libraries/{library_id}/match-all")
         return data if isinstance(data, dict) else None
 
     async def get_progress(self, item_id: str) -> dict[str, Any] | None:
@@ -191,7 +190,8 @@ class AudiobookshelfClient:
         """Get collections for a library."""
         data = await self._request("GET", "/api/collections")
         if isinstance(data, dict):
-            return data.get("collections", [])
+            collections: list[dict[str, Any]] = data.get("collections", [])
+            return collections
         if isinstance(data, list):
             return data
         return []

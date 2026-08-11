@@ -233,4 +233,3 @@ class LibriVoxProvider(MetadataProvider):
                 "public_domain": True,  # All LibriVox content is public domain
             },
         )
-

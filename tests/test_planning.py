@@ -8,8 +8,8 @@ from pathlib import Path
 
 from bookbot.core.discovery import AudioFileScanner
 from bookbot.core.models import (
-    AudioFormat,
     AudiobookSet,
+    AudioFormat,
     RenameOperation,
     RenamePlan,
     Track,

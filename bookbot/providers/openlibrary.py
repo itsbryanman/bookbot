@@ -482,4 +482,3 @@ class OpenLibraryProvider(MetadataProvider):
 
         except (KeyError, TypeError, ValueError):
             return None
-

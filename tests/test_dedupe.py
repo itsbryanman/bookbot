@@ -193,9 +193,7 @@ class TestEditionScoring:
         d1.mkdir()
         d2.mkdir()
 
-        ab_with_id = _make_audiobook(
-            d1, "The Stand", "SK", has_identity=True
-        )
+        ab_with_id = _make_audiobook(d1, "The Stand", "SK", has_identity=True)
         ab_no_id = _make_audiobook(d2, "The Stand", "SK")
 
         engine = DedupeEngine(tmp_path)
@@ -341,9 +339,7 @@ class TestStagedHashing:
 
 
 class TestPlanAndUndo:
-    def test_quarantine_and_restore(
-        self, tmp_path: Path, config_manager
-    ) -> None:
+    def test_quarantine_and_restore(self, tmp_path: Path, config_manager) -> None:
         """Plan quarantines files; undo restores them via the shared log dir."""
         d1 = tmp_path / "lib" / "a"
         d2 = tmp_path / "lib" / "b"
@@ -443,9 +439,7 @@ class TestPlanAndUndo:
         assert f2.exists()
         assert not Path(plan.quarantine_root).exists()
 
-    def test_apply_refused_if_conflicts(
-        self, tmp_path: Path, config_manager
-    ) -> None:
+    def test_apply_refused_if_conflicts(self, tmp_path: Path, config_manager) -> None:
         """Execution should fail if destinations already exist."""
         d1 = tmp_path / "lib" / "a"
         d1.mkdir(parents=True)
@@ -586,7 +580,9 @@ class TestPlanAndUndo:
             "The Stand (Unabridged)",
             "Stephen King",
         )
-        duplicate_ab.tracks[0].src_path.write_bytes(keeper_ab.tracks[0].src_path.read_bytes())
+        duplicate_ab.tracks[0].src_path.write_bytes(
+            keeper_ab.tracks[0].src_path.read_bytes()
+        )
 
         edition_group = EditionGroup(
             members=[

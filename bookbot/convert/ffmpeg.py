@@ -409,9 +409,7 @@ class FFmpegWrapper:
         all_aac = all(self.can_stream_copy(f) for f in input_files)
 
         # Create concat demuxer file
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".txt", delete=False
-        ) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
             concat_file = Path(f.name)
             for file_path in input_files:
                 escaped = str(file_path).replace("'", "'\\''")
@@ -420,9 +418,12 @@ class FFmpegWrapper:
         try:
             cmd = [
                 self.ffmpeg_path,
-                "-f", "concat",
-                "-safe", "0",
-                "-i", str(concat_file),
+                "-f",
+                "concat",
+                "-safe",
+                "0",
+                "-i",
+                str(concat_file),
             ]
 
             # Add chapter metadata if provided
@@ -487,20 +488,28 @@ class FFmpegWrapper:
 
             cmd = [
                 self.ffmpeg_path,
-                "-i", str(input_path),
-                "-ss", str(start_sec),
+                "-i",
+                str(input_path),
+                "-ss",
+                str(start_sec),
             ]
 
             if chapter.end_ms is not None:
                 duration_sec = (chapter.end_ms - chapter.start_ms) / 1000.0
                 cmd.extend(["-t", str(duration_sec)])
 
-            cmd.extend([
-                "-c", "copy",
-                "-metadata", f"title={chapter.title}",
-                "-metadata", f"track={i + 1}",
-                "-y", str(output_file),
-            ])
+            cmd.extend(
+                [
+                    "-c",
+                    "copy",
+                    "-metadata",
+                    f"title={chapter.title}",
+                    "-metadata",
+                    f"track={i + 1}",
+                    "-y",
+                    str(output_file),
+                ]
+            )
 
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
             if result.returncode == 0:
@@ -545,9 +554,9 @@ class FFmpegWrapper:
             _safe_unlink(temp_output)
             raise RuntimeError(f"Failed to embed metadata: {result.stderr[:500]}")
 
-        except subprocess.TimeoutExpired:
+        except subprocess.TimeoutExpired as exc:
             _safe_unlink(temp_output)
-            raise RuntimeError("FFmpeg timed out while embedding metadata")
+            raise RuntimeError("FFmpeg timed out while embedding metadata") from exc
 
     def extract_chapters(self, file_path: Path) -> list[Chapter]:
         """Extract embedded chapters using ffprobe."""
@@ -555,8 +564,10 @@ class FFmpegWrapper:
 
         cmd = [
             self.ffprobe_path,
-            "-v", "quiet",
-            "-print_format", "json",
+            "-v",
+            "quiet",
+            "-print_format",
+            "json",
             "-show_chapters",
             str(file_path),
         ]
@@ -574,7 +585,7 @@ class FFmpegWrapper:
         except json.JSONDecodeError:
             return []
 
-        chapters = []
+        chapters: list[ChapterModel] = []
         for ch in data.get("chapters", []):
             start_time = float(ch.get("start_time", 0))
             end_time = float(ch.get("end_time", 0))

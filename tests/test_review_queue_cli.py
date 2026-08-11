@@ -10,8 +10,8 @@ from click.testing import CliRunner
 from bookbot.cli import _run_review_session, cli
 from bookbot.config.manager import ConfigManager
 from bookbot.core.models import (
-    AudioFormat,
     AudiobookSet,
+    AudioFormat,
     MatchCandidate,
     MatchConfidence,
     ProviderIdentity,

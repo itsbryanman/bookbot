@@ -9,4 +9,6 @@ class Chapter(BaseModel):
     title: str
     start_ms: int
     end_ms: int | None = None
-    source: str = "unknown"  # detection method: audnexus, embedded, cue, tracks, silence
+    source: str = (
+        "unknown"  # detection method: audnexus, embedded, cue, tracks, silence
+    )

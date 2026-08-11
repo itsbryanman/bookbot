@@ -1,7 +1,6 @@
 """Smart file organizer for messy audiobook libraries."""
 
 from pathlib import Path
-from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -71,7 +70,8 @@ class SmartOrganizer:
 
         Args:
             source_path: Root path of the current library.
-            target_path: Root path for the reorganized library (defaults to source_path).
+            target_path: Root path for the reorganized library
+                (defaults to source_path).
             template_name: Name of the template preset to use.
             audiobook_sets: List of discovered audiobook sets.
 
@@ -100,9 +100,7 @@ class SmartOrganizer:
                 )
                 continue
 
-            for track in sorted(
-                ab_set.tracks, key=lambda t: (t.disc, t.track_index)
-            ):
+            for track in sorted(ab_set.tracks, key=lambda t: (t.disc, t.track_index)):
                 # Generate filename
                 filename = self.template_engine.generate_filename(
                     track, ab_set, identity, template=file_template
@@ -128,9 +126,7 @@ class SmartOrganizer:
 
                 # Check for overwriting existing files
                 if dest.exists() and dest != track.src_path:
-                    plan.conflicts.append(
-                        f"Would overwrite existing file: {dest}"
-                    )
+                    plan.conflicts.append(f"Would overwrite existing file: {dest}")
 
                 plan.operations.append(
                     MoveOperation(
