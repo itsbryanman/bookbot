@@ -35,6 +35,26 @@
 
 BookBot is a Textual-powered terminal app and command-line toolkit for taming large audiobook libraries. Its core workflow is a safe, reviewable rename plan: scan a library, inspect the exact moves, apply them atomically, and undo them if needed.
 
+## Screenshots
+
+### Mission control
+
+<p align="center">
+  <img src="images/bookbot-mission-control.png" alt="BookBot mission-control interface" width="900" />
+</p>
+
+### Rename preview
+
+<p align="center">
+  <img src="images/bookbot-preview.png" alt="BookBot rename preview" width="900" />
+</p>
+
+### M4B conversion
+
+<p align="center">
+  <img src="images/bookbot-conversion.png" alt="BookBot M4B conversion interface" width="900" />
+</p>
+
 ## Highlights
 
 - Safe-plan workflow with dry-runs, atomic file operations, transaction history, diffable JSON plans, and undo support.
