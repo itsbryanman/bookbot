@@ -1,10 +1,12 @@
 """CLI and doctor regression tests for duplicate reporting."""
 
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
 
+import pytest
 from click.testing import CliRunner
 
 from bookbot.cli import cli
@@ -13,6 +15,12 @@ from bookbot.core.dedupe import DedupeEngine
 from bookbot.core.doctor import LibraryDoctor
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+
+# `bookbot doctor` exits non-zero when FFmpeg is missing, so these end-to-end
+# doctor runs only make sense on hosts that have it.
+requires_ffmpeg = pytest.mark.skipif(
+    shutil.which("ffmpeg") is None, reason="ffmpeg is not installed"
+)
 
 
 def _run_cli_subprocess(
@@ -187,6 +195,7 @@ def test_doctor_reports_quarantine_local_transaction_ids_and_undo_guidance(
     assert (b_dir / "track.mp3").exists()
 
 
+@requires_ffmpeg
 def test_doctor_uses_config_dir_with_unusable_home(tmp_path: Path) -> None:
     runner = CliRunner()
     library = tmp_path / "library"
@@ -205,6 +214,7 @@ def test_doctor_uses_config_dir_with_unusable_home(tmp_path: Path) -> None:
     assert (config_dir / "logs" / "doctor.jsonl").exists()
 
 
+@requires_ffmpeg
 def test_cli_help_doctor_and_scan_avoid_default_home_log_warning(
     tmp_path: Path,
 ) -> None:
@@ -239,6 +249,7 @@ def test_cli_help_doctor_and_scan_avoid_default_home_log_warning(
     assert "Warning: log directory" not in (scan_result.stdout + scan_result.stderr)
 
 
+@requires_ffmpeg
 def test_doctor_warns_once_when_resolved_log_dir_is_unwritable(
     tmp_path: Path,
 ) -> None:
