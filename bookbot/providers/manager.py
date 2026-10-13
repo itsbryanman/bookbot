@@ -1,6 +1,7 @@
 """Provider manager for handling multiple metadata sources."""
 
 import asyncio
+import re
 from collections.abc import Iterable
 
 from ..config.manager import ConfigManager
@@ -215,9 +216,28 @@ class ProviderManager:
             key = self._group_key(candidate.identity, matcher)
             groups.setdefault(key, []).append((priority, candidate))
 
+        compatible_groups: list[list[tuple[int, MatchCandidate]]] = []
+        for group in groups.values():
+            for priority, candidate in group:
+                for compatible in compatible_groups:
+                    if self._group_key(
+                        compatible[0][1].identity, matcher
+                    ) != self._group_key(candidate.identity, matcher):
+                        continue
+                    if all(
+                        not self._edition_metadata_conflicts(
+                            existing.identity, candidate.identity, matcher
+                        )
+                        for _, existing in compatible
+                    ):
+                        compatible.append((priority, candidate))
+                        break
+                else:
+                    compatible_groups.append([(priority, candidate)])
+
         merged: list[MatchCandidate] = []
         for group_members, group_reasons in self._merge_related_groups(
-            list(groups.values()), matcher
+            compatible_groups, matcher
         ):
             surviving = self._merge_group(group_members, extra_reasons=group_reasons)
             surviving = self._apply_duration_check(
@@ -379,11 +399,80 @@ class ProviderManager:
         """Check whether two exact-key groups corroborate the same title."""
         if cls._identifiers_conflict(left, right):
             return False
+        if cls._edition_metadata_conflicts(left, right, matcher):
+            return False
         if matcher.match_title(left.title, right.title) < 0.92:
             return False
         if cls._author_similarity(left, right, matcher) < 0.85:
             return False
         return True
+
+    @classmethod
+    def _edition_metadata_conflicts(
+        cls,
+        left: ProviderIdentity,
+        right: ProviderIdentity,
+        matcher: AdvancedMatcher,
+    ) -> bool:
+        """Reject merges that would collapse distinct audiobook editions."""
+        if left.narrator and right.narrator:
+            left_narrators = cls._split_people(left.narrator)
+            right_narrators = cls._split_people(right.narrator)
+            if not any(
+                matcher.match_author(left_name, right_name) >= 0.85
+                for left_name in left_narrators
+                for right_name in right_narrators
+            ):
+                return True
+
+        if left.language and right.language:
+            if cls._normalize_language(left.language) != cls._normalize_language(
+                right.language
+            ):
+                return True
+
+        left_edition = cls._normalize_edition(left.edition)
+        right_edition = cls._normalize_edition(right.edition)
+        if left_edition and right_edition and left_edition != right_edition:
+            return True
+
+        return False
+
+    @staticmethod
+    def _split_people(value: str) -> list[str]:
+        return [
+            name.strip()
+            for name in re.split(r"\s*(?:,|;|&|\band\b)\s*", value, flags=re.I)
+            if name.strip()
+        ]
+
+    @staticmethod
+    def _normalize_language(value: str) -> str:
+        normalized = value.strip().casefold().replace("_", "-")
+        aliases = {
+            "eng": "en",
+            "english": "en",
+            "deu": "de",
+            "ger": "de",
+            "german": "de",
+            "fra": "fr",
+            "fre": "fr",
+            "french": "fr",
+            "spa": "es",
+            "spanish": "es",
+        }
+        return aliases.get(normalized, normalized.split("-", 1)[0])
+
+    @staticmethod
+    def _normalize_edition(value: str | None) -> str | None:
+        if not value:
+            return None
+        normalized = " ".join(value.casefold().split())
+        if "unabridged" in normalized:
+            return "unabridged"
+        if "abridged" in normalized:
+            return "abridged"
+        return normalized
 
     @staticmethod
     def _author_similarity(

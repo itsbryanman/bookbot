@@ -4,9 +4,8 @@ import os
 import sys
 from pathlib import Path
 
-from pydantic import ValidationError
-
 import toml
+from pydantic import ValidationError
 
 from .models import Config, OverwritePolicy, Profile
 

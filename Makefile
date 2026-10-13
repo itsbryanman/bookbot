@@ -23,12 +23,12 @@ test-cov:  ## Run tests with coverage report
 	pytest --cov=bookbot --cov-report=html --cov-report=term
 
 lint:  ## Run code linting
-	ruff check bookbot tests
-	black --check bookbot tests
+	ruff check .
+	ruff format --check .
 
-format:  ## Format code with black and ruff
-	black bookbot tests
-	ruff check --fix bookbot tests
+format:  ## Format code with Ruff
+	ruff check --fix .
+	ruff format .
 
 type-check:  ## Run type checking with mypy
 	mypy bookbot

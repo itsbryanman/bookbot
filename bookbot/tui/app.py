@@ -43,10 +43,14 @@ logger = get_logger("tui_app")
 class BookBotApp(App):
     """Main BookBot TUI application."""
 
+    TITLE = "BookBot"
+    SUB_TITLE = "Library Control"
+
     CSS = """
     .main-container {
         height: 1fr;
-        background: $surface;
+        background: $background;
+        padding: 0 1;
     }
 
     #mission_control {
@@ -63,18 +67,20 @@ class BookBotApp(App):
     }
 
     .title {
-        text-align: center;
+        height: 3;
+        content-align: left middle;
         text-style: bold;
-        color: $accent;
-        background: $surface;
-        padding: 0 1;
+        color: $primary;
+        background: $background;
+        padding: 0 2;
+        border-bottom: heavy $primary 45%;
     }
 
     .status {
         height: auto;
         max-height: 10;
-        background: $surface;
-        border-top: solid $surface-lighten-1;
+        background: $panel;
+        border-top: heavy $primary 35%;
     }
 
     #status_label {
@@ -95,7 +101,7 @@ class BookBotApp(App):
         border: solid $surface-lighten-1;
         margin: 0 1 1 1;
         padding: 0 1;
-        background: $surface;
+        background: $panel;
         color: $text;
     }
 
@@ -143,20 +149,20 @@ class BookBotApp(App):
     }
 
     TabbedContent {
-        background: $surface;
-        border: solid $surface-lighten-1;
+        background: $background;
+        border: none;
     }
 
     Tab {
-        background: $surface;
+        background: $background;
         color: $text 70%;
         text-style: bold;
         padding: 0 2;
     }
 
     Tab.-active {
-        background: $surface-lighten-1;
-        color: $text;
+        background: $primary 18%;
+        color: $primary;
         text-style: bold;
     }
 
@@ -172,7 +178,7 @@ class BookBotApp(App):
 
     DataTable {
         background: $surface;
-        border: solid $surface-lighten-1;
+        border: round $primary 35%;
     }
 
     DataTable > .datatable--header {
@@ -235,11 +241,11 @@ class BookBotApp(App):
     }
 
     .section-title {
-        text-align: center;
+        text-align: left;
         text-style: bold;
-        color: $accent;
-        background: $surface;
-        padding: 0 1;
+        color: $primary;
+        background: $background;
+        padding: 0 2;
         margin: 1 0;
     }
 
@@ -249,12 +255,12 @@ class BookBotApp(App):
     }
 
     Header {
-        background: $surface;
+        background: $panel;
         color: $text;
     }
 
     Footer {
-        background: $surface;
+        background: $panel;
         color: $text 70%;
     }
 
@@ -279,6 +285,28 @@ class BookBotApp(App):
     .error-text {
         color: $error;
         text-style: bold;
+    }
+
+    #drm_login_container {
+        width: 92%;
+        height: auto;
+        margin: 2 4;
+        padding: 1 2 2 2;
+        background: $surface;
+        border: round $primary 45%;
+    }
+
+    #drm_login_container .description {
+        margin: 0 0 1 0;
+        color: $text 85%;
+    }
+
+    #user_code_display {
+        min-height: 3;
+        padding: 1 2;
+        margin-bottom: 1;
+        background: $panel;
+        border-left: heavy $success;
     }
 
     CandidateDetailScreen, ManualSearchScreen {
@@ -340,6 +368,7 @@ class BookBotApp(App):
         provider: MetadataProvider | ProviderManager | None = None,
     ):
         super().__init__()
+        self.theme = "catppuccin-mocha"
         self.config_manager = config_manager
         self.source_folders = source_folders
         self.audiobook_sets: list[AudiobookSet] = []
@@ -363,7 +392,7 @@ class BookBotApp(App):
         yield Header()
 
         with Container(classes="main-container"):
-            yield Label("BookBot - Ultimate Audiobook Organizer", classes="title")
+            yield Label("BOOKBOT  /  LIBRARY CONTROL", classes="title")
 
             with TabbedContent(initial="mission" if self.source_folders else "source"):
                 with TabPane("Mission Control", id="mission"):

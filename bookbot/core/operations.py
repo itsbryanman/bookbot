@@ -3,6 +3,7 @@
 import json
 import os
 import uuid
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -55,33 +56,13 @@ class TransactionManager:
             data: bytes = response.read()
             return data
 
-    def _write_sidecar_record(
-        self,
-        transaction_id: str,
-        target_path: Path,
-        *,
-        backup_path: Path | None,
-        sidecar_kind: str,
-    ) -> OperationRecord:
-        """Create an undo record for a newly written sidecar file."""
-        metadata: dict[str, Any] = {"sidecar_kind": sidecar_kind}
-        if backup_path is not None:
-            metadata["backup_path"] = str(backup_path)
-        return OperationRecord(
-            operation_id=transaction_id,
-            timestamp=datetime.now(),
-            operation_type="sidecar",
-            old_path=backup_path,
-            new_path=target_path,
-            new_content_hash=self._calculate_file_hash(target_path),
-            metadata=metadata,
-        )
-
     def _write_sidecar_outputs(
         self,
         plan: RenamePlan,
         transaction_id: str,
         transaction_log: list[OperationRecord],
+        *,
+        persist_journal: Callable[[], None] | None = None,
     ) -> None:
         """Write configured post-apply sidecars for reviewed audiobook sets."""
         config = self.config_manager.load_config()
@@ -100,6 +81,27 @@ class TransactionManager:
                 backup_path: Path | None = None
                 if target_path.exists():
                     backup_path = self._next_backup_path(target_path)
+
+                record = OperationRecord(
+                    operation_id=transaction_id,
+                    timestamp=datetime.now(),
+                    operation_type="sidecar",
+                    old_path=backup_path,
+                    new_path=target_path,
+                    metadata={
+                        "sidecar_kind": sidecar_kind,
+                        **(
+                            {"backup_path": str(backup_path)}
+                            if backup_path is not None
+                            else {}
+                        ),
+                    },
+                )
+                transaction_log.append(record)
+                if persist_journal is not None:
+                    persist_journal()
+
+                if backup_path is not None:
                     target_path.rename(backup_path)
 
                 try:
@@ -123,6 +125,9 @@ class TransactionManager:
                     if backup_path is not None and backup_path.exists():
                         backup_path.rename(target_path)
                     if sidecar_kind == "cover":
+                        transaction_log.remove(record)
+                        if persist_journal is not None:
+                            persist_journal()
                         logger.warning(
                             "Failed to fetch cover art sidecar",
                             path=str(target_path),
@@ -131,14 +136,9 @@ class TransactionManager:
                         continue
                     raise
 
-                transaction_log.append(
-                    self._write_sidecar_record(
-                        transaction_id,
-                        target_path,
-                        backup_path=backup_path,
-                        sidecar_kind=sidecar_kind,
-                    )
-                )
+                record.new_content_hash = self._calculate_file_hash(target_path)
+                if persist_journal is not None:
+                    persist_journal()
 
     def create_rename_plan(self, operations: list[RenameOperation]) -> RenamePlan:
         """Create a rename plan with validation."""
@@ -171,8 +171,22 @@ class TransactionManager:
         transaction_id = str(uuid.uuid4())
         transaction_log: list[OperationRecord] = []
         temp_operations: list[RenameOperation] = []
+        transaction_type = "sidecar" if not plan.operations else "rename"
+
+        def persist_journal(status: str = "in_progress") -> None:
+            self.record_transaction(
+                transaction_id,
+                transaction_log,
+                transaction_type=transaction_type,
+                status=status,
+            )
 
         try:
+            # The journal must exist before the first filesystem mutation. Each
+            # subsequent operation is appended before its rename/write so a
+            # process killed at any point leaves enough information to recover.
+            persist_journal()
+
             # Phase 1: Create temporary names to avoid conflicts
             for operation in plan.operations:
                 temp_path = self._get_temp_path(operation.old_path)
@@ -190,10 +204,12 @@ class TransactionManager:
                     old_content_hash=original_hash,
                 )
 
+                transaction_log.append(record)
+                persist_journal()
+
                 # Move to temp location
                 operation.old_path.rename(temp_path)
                 temp_operations.append(operation)
-                transaction_log.append(record)
 
             # Phase 2: Move from temp to final locations
             for operation in temp_operations:
@@ -223,28 +239,24 @@ class TransactionManager:
                 if operation.temp_path is None:
                     raise ValueError("Temporary path not set for operation")
 
+                transaction_log.append(record)
+                persist_journal()
+
                 # Move to final location
                 operation.temp_path.rename(operation.new_path)
                 if operation.track is not None:
                     operation.track.src_path = operation.new_path
-                transaction_log.append(record)
 
             # Phase 3: Write sidecars in the destination folders.
-            self._write_sidecar_outputs(plan, transaction_id, transaction_log)
-
-            # Save transaction log for undo
-            self.record_transaction(
+            self._write_sidecar_outputs(
+                plan,
                 transaction_id,
                 transaction_log,
-                transaction_type=(
-                    "sidecar"
-                    if not plan.operations
-                    and any(
-                        record.operation_type == "sidecar" for record in transaction_log
-                    )
-                    else "rename"
-                ),
+                persist_journal=persist_journal,
             )
+
+            # Save transaction log for undo
+            persist_journal(status="completed")
 
             # Prune source folders the apply just emptied. Without this the
             # old layout coexists with the new one (visible on multi-disc
@@ -264,6 +276,10 @@ class TransactionManager:
             # stranding .tmp_ files and leaving the library half-renamed with
             # no recorded transaction to undo.
             self._rollback_operations(temp_operations, transaction_log)
+            try:
+                persist_journal(status="rolled_back")
+            except RuntimeError:
+                pass
             raise RuntimeError(f"Failed to execute rename plan: {e}") from e
 
     def _get_temp_path(self, original_path: Path) -> Path:
@@ -308,18 +324,20 @@ class TransactionManager:
         transaction_type: str,
         timestamp: str | None = None,
         copy_to: list[Path] | None = None,
-    ) -> Path | None:
+        status: str = "completed",
+    ) -> Path:
         """Persist a transaction in the standard log directory and optional copies."""
         log_data = self._build_transaction_log_data(
             transaction_id,
             records,
             transaction_type=transaction_type,
             timestamp=timestamp,
+            status=status,
         )
         primary_log = self._transaction_log_path(transaction_id)
 
         if not self._write_transaction_log(primary_log, log_data):
-            return None
+            raise RuntimeError(f"Unable to save required undo log: {primary_log}")
 
         for copy_path in copy_to or []:
             self._write_transaction_log(copy_path, log_data)
@@ -333,12 +351,14 @@ class TransactionManager:
         *,
         transaction_type: str,
         timestamp: str | None = None,
+        status: str = "completed",
     ) -> dict[str, Any]:
         """Build a JSON-serializable transaction payload."""
         return {
             "transaction_id": transaction_id,
             "transaction_type": transaction_type,
             "timestamp": timestamp or datetime.now().isoformat(),
+            "status": status,
             "operations": [record.model_dump(mode="json") for record in records],
         }
 
@@ -347,12 +367,30 @@ class TransactionManager:
         return self.log_dir / f"transaction_{transaction_id}.json"
 
     def _write_transaction_log(self, log_file: Path, log_data: dict[str, Any]) -> bool:
-        """Write a transaction log, warning instead of raising on failure."""
+        """Atomically write and fsync a transaction log."""
+        temp_file = log_file.with_name(f".{log_file.name}.{uuid.uuid4().hex}.tmp")
         try:
             log_file.parent.mkdir(parents=True, exist_ok=True)
-            with open(log_file, "w", encoding="utf-8") as f:
+            descriptor = os.open(temp_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(descriptor, "w", encoding="utf-8") as f:
                 json.dump(log_data, f, indent=2, default=str)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(temp_file, log_file)
+            try:
+                directory_fd = os.open(log_file.parent, os.O_RDONLY)
+                try:
+                    os.fsync(directory_fd)
+                finally:
+                    os.close(directory_fd)
+            except OSError:
+                # Directory fsync is unavailable on some supported platforms.
+                pass
         except OSError as e:
+            try:
+                temp_file.unlink(missing_ok=True)
+            except OSError:
+                pass
             print(f"Warning: Failed to save transaction log: {e}")
             return False
         return True
@@ -591,7 +629,8 @@ class TransactionManager:
                             log_data, fallback_path=log_file
                         ),
                         "operation_count": len(log_data["operations"]),
-                        "can_undo": True,
+                        "can_undo": log_data.get("status") != "rolled_back",
+                        "status": log_data.get("status", "completed"),
                     }
                 )
             except (OSError, json.JSONDecodeError):
@@ -619,6 +658,14 @@ class TransactionManager:
                 continue
 
         return sorted(transactions, key=lambda x: x["timestamp"], reverse=True)
+
+    def list_incomplete_transactions(self) -> list[dict[str, Any]]:
+        """Return write-ahead journals left behind by interrupted operations."""
+        return [
+            transaction
+            for transaction in self.list_transactions(days=36500)
+            if transaction.get("status") == "in_progress"
+        ]
 
     def _infer_transaction_type(
         self, log_data: dict[str, Any], fallback_path: Path | None = None

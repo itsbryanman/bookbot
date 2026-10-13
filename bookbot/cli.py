@@ -43,7 +43,17 @@ def cli(ctx: click.Context, config_dir: Path | None) -> None:
     ctx.ensure_object(dict)
 
     # Initialize configuration manager
-    ctx.obj["config_manager"] = ConfigManager(config_dir)
+    config_manager = ConfigManager(config_dir)
+    ctx.obj["config_manager"] = config_manager
+
+    if ctx.invoked_subcommand not in {"history", "recover", "undo"}:
+        incomplete = TransactionManager(config_manager).list_incomplete_transactions()
+        if incomplete:
+            click.echo(
+                f"Recovery needed: {len(incomplete)} interrupted operation(s). "
+                "Run 'bookbot recover' before changing the library.",
+                err=True,
+            )
 
 
 def _require_profile(config_manager: ConfigManager, profile_name: str) -> Profile:
@@ -1046,6 +1056,37 @@ def undo(ctx: click.Context, transaction_id: str) -> None:
         sys.exit(1)
 
 
+@cli.command()
+@click.argument("transaction_id", required=False)
+@click.pass_context
+def recover(ctx: click.Context, transaction_id: str | None) -> None:
+    """List or roll back operations interrupted before completion."""
+    manager = TransactionManager(ctx.obj["config_manager"])
+    incomplete = manager.list_incomplete_transactions()
+
+    if transaction_id is None:
+        if not incomplete:
+            click.echo("No interrupted operations need recovery")
+            return
+        click.echo("Interrupted operations:")
+        for transaction in incomplete:
+            click.echo(
+                f"  {transaction['id']} - {transaction['timestamp']} - "
+                f"{transaction['operation_count']} recorded operation(s)"
+            )
+        click.echo("Run 'bookbot recover <transaction-id>' to restore original paths.")
+        return
+
+    matching = {transaction["id"] for transaction in incomplete}
+    if transaction_id not in matching:
+        raise click.ClickException(
+            f"No interrupted operation found with ID {transaction_id}"
+        )
+    if not manager.undo_transaction(transaction_id):
+        raise click.ClickException(f"Recovery failed for {transaction_id}")
+    click.echo(f"Recovered interrupted operation {transaction_id}")
+
+
 @cli.group()
 def config() -> None:
     """Configuration management commands."""
@@ -1896,11 +1937,23 @@ def audible_import(
 @click.option("--username", prompt=True)
 @click.option("--password", prompt=True, hide_input=True)
 @click.option(
+    "--credential-storage",
+    type=click.Choice(["keyring", "file"]),
+    default="keyring",
+    show_default=True,
+    help="Where to store activation bytes; file storage must be chosen explicitly.",
+)
+@click.option(
     "--lang",
     default="us",
     help="us (default) / au / in / de / fr / jp / uk (untested)",
 )
-def get_activation_bytes(username: str, password: str, lang: str) -> None:
+def get_activation_bytes(
+    username: str,
+    password: str,
+    credential_storage: str,
+    lang: str,
+) -> None:
     """Get activation bytes from Audible using your username and password."""
     try:
         import base64
@@ -2061,8 +2114,11 @@ def get_activation_bytes(username: str, password: str, lang: str) -> None:
 
             from .drm.secure_storage import save_activation_bytes
 
-            save_activation_bytes(activation_bytes)
-            click.echo("Activation bytes saved securely.")
+            storage_used = save_activation_bytes(
+                activation_bytes,
+                storage=credential_storage,  # type: ignore[arg-type]
+            )
+            click.echo(f"Activation bytes saved in {storage_used}.")
 
             s.get(durl, headers=headers)
 
@@ -2206,14 +2262,28 @@ def drm_detect(ctx: click.Context, files: tuple[Path, ...], recursive: bool) -> 
 
 @drm.command("set-activation-bytes")
 @click.argument("activation_bytes", type=str)
+@click.option(
+    "--credential-storage",
+    type=click.Choice(["keyring", "file"]),
+    default="keyring",
+    show_default=True,
+    help="Where to store activation bytes; file storage must be chosen explicitly.",
+)
 @click.pass_context
-def drm_set_activation_bytes(ctx: click.Context, activation_bytes: str) -> None:
+def drm_set_activation_bytes(
+    ctx: click.Context,
+    activation_bytes: str,
+    credential_storage: str,
+) -> None:
     """Store activation bytes for AAX DRM removal."""
     try:
         from .drm.secure_storage import save_activation_bytes
 
-        save_activation_bytes(activation_bytes)
-        click.echo("Activation bytes saved securely")
+        storage_used = save_activation_bytes(
+            activation_bytes,
+            storage=credential_storage,  # type: ignore[arg-type]
+        )
+        click.echo(f"Activation bytes saved in {storage_used}")
 
     except Exception as e:
         click.echo(f"Failed to save activation bytes: {e}", err=True)
@@ -2345,7 +2415,10 @@ def drm_remove(
                     click.echo(f"    Output: {result.output_file}")
                 success_count += 1
             else:
-                click.echo(f"Error:{file_path.name}: Failed - {result.error_message}")
+                click.echo(
+                    f"Error:{file_path.name}: Failed - {result.error_message}",
+                    err=True,
+                )
                 error_count += 1
 
         if dry_run:
@@ -2354,6 +2427,10 @@ def drm_remove(
             )
         else:
             click.echo(f"\nCompleted: {success_count} successful, {error_count} failed")
+            if error_count:
+                raise click.ClickException(
+                    f"DRM removal failed for {error_count} file(s)"
+                )
 
     except ImportError as e:
         click.echo(f"Error: Missing dependency: {e}", err=True)

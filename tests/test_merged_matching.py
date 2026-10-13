@@ -4,6 +4,9 @@ import asyncio
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
+from bookbot.core.matching import AdvancedMatcher
 from bookbot.core.models import (
     AudiobookSet,
     ProviderIdentity,
@@ -209,6 +212,65 @@ def _create_manager_with_providers(
     manager.config_manager = None
     manager.cache_manager = None
     return manager
+
+
+def test_merge_rejects_conflicting_narrators() -> None:
+    left = ProviderIdentity(
+        provider="one",
+        external_id="1",
+        title="Dune",
+        authors=["Frank Herbert"],
+        narrator="George Guidall",
+    )
+    right = left.model_copy(
+        update={"provider": "two", "external_id": "2", "narrator": "Simon Vance"}
+    )
+    assert not ProviderManager._identities_can_merge(left, right, AdvancedMatcher())
+
+
+def test_merge_accepts_language_alias_and_shared_narrator() -> None:
+    left = ProviderIdentity(
+        provider="one",
+        external_id="1",
+        title="Dune",
+        authors=["Frank Herbert"],
+        narrator="Simon Vance and Scott Brick",
+        language="English",
+        edition="Unabridged",
+    )
+    right = left.model_copy(
+        update={
+            "provider": "two",
+            "external_id": "2",
+            "narrator": "Simon Vance",
+            "language": "en-US",
+            "edition": "unabridged audiobook",
+        }
+    )
+    assert ProviderManager._identities_can_merge(left, right, AdvancedMatcher())
+
+
+@pytest.mark.parametrize(
+    ("left_update", "right_update"),
+    [
+        ({"language": "en"}, {"language": "de"}),
+        ({"edition": "abridged"}, {"edition": "unabridged"}),
+    ],
+)
+def test_merge_rejects_language_and_edition_conflicts(
+    left_update, right_update
+) -> None:
+    base = ProviderIdentity(
+        provider="one",
+        external_id="1",
+        title="Dune",
+        authors=["Frank Herbert"],
+    )
+    left = base.model_copy(update=left_update)
+    right = base.model_copy(
+        update={"provider": "two", "external_id": "2", **right_update}
+    )
+    assert not ProviderManager._identities_can_merge(left, right, AdvancedMatcher())
 
 
 # ── Merge groups by ISBN across two providers ──

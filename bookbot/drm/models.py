@@ -5,7 +5,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class Token(BaseModel):
@@ -40,10 +40,7 @@ class DRMInfo(BaseModel):
     activation_bytes: str | None = None
     checksum: str | None = None
 
-    class Config:
-        """Pydantic configuration."""
-
-        arbitrary_types_allowed = True
+    model_config = ConfigDict(arbitrary_types_allowed=True)
 
 
 class RemovalResult(BaseModel):
@@ -56,7 +53,4 @@ class RemovalResult(BaseModel):
     error_message: str | None = None
     method_used: str | None = None
 
-    class Config:
-        """Pydantic configuration."""
-
-        arbitrary_types_allowed = True
+    model_config = ConfigDict(arbitrary_types_allowed=True)

@@ -57,7 +57,7 @@ BookBot is a Textual-powered terminal app and command-line toolkit for taming la
 
 ## Highlights
 
-- Safe-plan workflow with dry-runs, atomic file operations, transaction history, diffable JSON plans, and undo support.
+- Safe-plan workflow with dry-runs, write-ahead recovery journals, diffable JSON plans, transaction history, and undo support.
 - Built-in profiles for `safe`, `audiobookshelf`, `plex`, `prologue`, and `apple-books`.
 - `bookbot doctor` checks your runtime, FFmpeg health, writable config/cache paths, and library integrity before changes land.
 - Unified matching via `AdvancedMatcher`, with article and Unicode normalization, shared title and author scoring across providers, series and volume extraction, and built-in plus user-supplied `author_aliases.json` support.
@@ -76,7 +76,7 @@ BookBot is a Textual-powered terminal app and command-line toolkit for taming la
 - Library health auditing to catch missing covers, inconsistent tags, orphaned files, duplicates, and series gaps.
 - Smart organizer for restructuring messy libraries into Plex, Audiobookshelf, or custom directory layouts.
 - Sidecar metadata support for OPF (Calibre), BookLore JSON, and NFO formats.
-- Audible authentication, DRM detection, and removal helpers for supported formats (AAX, AAXC, M4B, and more).
+- Audible authentication, protected-format detection, and validated AAX removal for books you own. AAXC is detected and reports its voucher/content-key requirement instead of attempting an unsafe conversion.
 
 ## Installation
 
@@ -148,6 +148,10 @@ bookbot plan diff ./bookbot-plan.json
 # 3. Apply it atomically, then undo if needed
 bookbot apply ./bookbot-plan.json
 bookbot undo <transaction-id>
+
+# If an apply was interrupted by a process kill or power loss
+bookbot recover
+bookbot recover <transaction-id>
 
 # 4. Check the host or a mounted library before a bigger run
 bookbot doctor
@@ -222,6 +226,7 @@ Prefer a desktop entry point? `bookbot gui` launches the same Textual applicatio
 | `bookbot convert DIR -o OUT` | Build single-file, chaptered M4B releases with optional normalization and artwork. |
 | `bookbot history --days 7` | Review completed transactions and identify undo candidates. |
 | `bookbot undo ID` | Roll back an operation safely using its transaction identifier. |
+| `bookbot recover [ID]` | List interrupted operations or restore one from its durable write-ahead journal. |
 | `bookbot provider ...` | Enable, disable, and configure metadata providers and API keys. |
 | `bookbot config ...` | Manage global config, reset defaults, and inspect profile settings stored under `~/.config/bookbot`. |
 | `bookbot health DIR` | Audit a library for missing covers, inconsistent tags, orphaned files, duplicates, and series gaps. Use `--json-output` for machine-readable output. |
@@ -288,7 +293,9 @@ The conversion subsystem lives in `bookbot.convert` and wraps FFmpeg (through `f
 
 BookBot includes a focused DRM toolkit backed by `ffmpeg` and the `audible` Python package.
 
-1. Authenticate once with `bookbot audible auth`; credentials are stored securely via `keyring`.
+![BookBot protected audiobook tools](images/bookbot-drm.png)
+
+1. Authenticate once with `bookbot audible auth`; credentials are stored in the system keyring.
 2. List your library (`bookbot audible list --limit 50`) or import specific titles by ASIN.
 3. Use `bookbot drm detect` to map protected files and `bookbot drm remove` to produce DRM-free audio. Activation bytes can be supplied per run or cached via `bookbot drm set-activation-bytes`.
 
@@ -313,9 +320,12 @@ Run the following command and follow the prompts to enter your Audible username 
 bookbot audible get-activation-bytes
 ```
 
-This will securely save your activation bytes for future use. After this one-time setup, you can remove DRM from your books without needing to provide the activation bytes every time.
+This stores activation bytes in the system keyring for future use. If no keyring is
+available, BookBot fails with an explanation instead of silently writing credentials to
+disk. To explicitly accept an owner-only local credential file, add
+`--credential-storage file` to the command.
 
-These features depend on optional packages (`audible`, `cryptography`, `keyring`, `selenium`) that are already declared in `pyproject.toml`. Ensure FFmpeg is compiled with the modules required for Audible AAX/AAXC processing.
+These features depend on optional packages (`audible`, `cryptography`, `keyring`, `selenium`) that are already declared in `pyproject.toml`. AAX removal requires an FFmpeg build with `activation_bytes` support. AAXC cannot be opened with activation bytes alone; it requires the matching voucher and content key.
 
 ## Audiobookshelf integration
 

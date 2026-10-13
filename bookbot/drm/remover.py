@@ -1,6 +1,9 @@
 """DRM removal functionality."""
 
+import os
+import re
 import subprocess
+import uuid
 from pathlib import Path
 
 from .detector import DRMDetector
@@ -41,8 +44,18 @@ class DRMRemover:
         Returns:
             RemovalResult with operation details
         """
-        # First detect DRM type
+        file_path = Path(file_path)
         drm_info = self.detector.detect_drm(file_path)
+
+        if not file_path.is_file():
+            return RemovalResult(
+                success=False,
+                original_file=file_path,
+                drm_info=drm_info,
+                error_message=(
+                    f"Input file does not exist or is not a file: {file_path}"
+                ),
+            )
 
         if not drm_info.is_protected:
             return RemovalResult(
@@ -56,6 +69,15 @@ class DRMRemover:
         # Generate output path if not provided
         if output_path is None:
             output_path = self._generate_output_path(file_path, drm_info.drm_type)
+        output_path = Path(output_path)
+
+        if output_path.resolve(strict=False) == file_path.resolve(strict=False):
+            return RemovalResult(
+                success=False,
+                original_file=file_path,
+                drm_info=drm_info,
+                error_message="Output path must differ from the protected input file",
+            )
 
         # Use provided activation bytes or instance default or stored bytes
         activation_bytes = activation_bytes or self.activation_bytes
@@ -94,118 +116,133 @@ class DRMRemover:
         self, input_path: Path, output_path: Path, activation_bytes: str | None
     ) -> RemovalResult:
         """Remove DRM from Audible AAX files using ffmpeg."""
-        if not activation_bytes:
+        normalized_activation = self._normalize_activation_bytes(activation_bytes)
+        if normalized_activation is None:
             return RemovalResult(
                 success=False,
                 original_file=input_path,
                 drm_info=self.detector.detect_drm(input_path),
-                error_message="Activation bytes required for AAX DRM removal",
+                error_message=(
+                    "AAX activation bytes must be exactly 8 hexadecimal characters"
+                ),
             )
 
-        try:
-            # Use ffmpeg to convert AAX to M4A/MP3
-            cmd = [
-                self.ffmpeg_path,
-                "-activation_bytes",
-                activation_bytes,
-                "-i",
-                str(input_path),
-                "-vn",  # No video
-                "-c:a",
-                "copy",  # Copy audio codec if possible
-                "-y",  # Overwrite output
-                str(output_path),
-            ]
-
-            subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=600)
-
-            return RemovalResult(
-                success=True,
-                original_file=input_path,
-                output_file=output_path,
-                drm_info=self.detector.detect_drm(input_path),
-                method_used="ffmpeg_activation_bytes",
-            )
-
-        except subprocess.TimeoutExpired:
-            error_msg = "FFmpeg timed out during AAX DRM removal"
-        except subprocess.CalledProcessError as e:
-            error_msg = f"FFmpeg failed: {e.stderr}" if e.stderr else str(e)
-
-        if output_path.exists():
-            output_path.unlink(missing_ok=True)
-
-        return RemovalResult(
-            success=False,
-            original_file=input_path,
-            drm_info=self.detector.detect_drm(input_path),
-            error_message=error_msg,
+        return self._run_ffmpeg_removal(
+            input_path,
+            output_path,
+            input_options=["-activation_bytes", normalized_activation],
+            method="ffmpeg_activation_bytes",
         )
 
     def _remove_aaxc_drm(self, input_path: Path, output_path: Path) -> RemovalResult:
-        """Remove DRM from Audible AAXC files."""
-        try:
-            cmd = [
-                self.ffmpeg_path,
-                "-i",
-                str(input_path),
-                "-vn",  # No video
-                "-c:a",
-                "copy",  # Copy audio codec
-                "-y",  # Overwrite output
-                str(output_path),
-            ]
-
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
-
-            if result.returncode == 0:
-                return RemovalResult(
-                    success=True,
-                    original_file=input_path,
-                    output_file=output_path,
-                    drm_info=self.detector.detect_drm(input_path),
-                    method_used="ffmpeg_copy",
-                )
-
-            # If copy fails, try re-encoding
-            cmd = [
-                self.ffmpeg_path,
-                "-i",
-                str(input_path),
-                "-vn",
-                "-c:a",
-                "aac",  # Re-encode to AAC
-                "-b:a",
-                "128k",
-                "-y",
-                str(output_path),
-            ]
-
-            result = subprocess.run(
-                cmd, capture_output=True, text=True, check=True, timeout=600
-            )
-
-            return RemovalResult(
-                success=True,
-                original_file=input_path,
-                output_file=output_path,
-                drm_info=self.detector.detect_drm(input_path),
-                method_used="ffmpeg_reencode",
-            )
-
-        except subprocess.TimeoutExpired:
-            error_msg = "FFmpeg timed out during AAXC DRM removal"
-        except subprocess.CalledProcessError as e:
-            error_msg = f"FFmpeg failed: {e.stderr}" if e.stderr else str(e)
-
-        if output_path.exists():
-            output_path.unlink(missing_ok=True)
-
+        """Explain the credential requirement for AAXC instead of corrupting it."""
         return RemovalResult(
             success=False,
             original_file=input_path,
             drm_info=self.detector.detect_drm(input_path),
-            error_message=error_msg,
+            error_message=(
+                "AAXC removal requires the matching Audible voucher and content key; "
+                "activation bytes alone are insufficient"
+            ),
+        )
+
+    @staticmethod
+    def _normalize_activation_bytes(value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip().lower()
+        return normalized if re.fullmatch(r"[0-9a-f]{8}", normalized) else None
+
+    def _run_ffmpeg_removal(
+        self,
+        input_path: Path,
+        output_path: Path,
+        *,
+        input_options: list[str],
+        method: str,
+    ) -> RemovalResult:
+        """Decrypt to a temporary file, validate audio, then publish atomically."""
+        drm_info = self.detector.detect_drm(input_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        partial_path = output_path.with_name(
+            f".{output_path.stem}.{uuid.uuid4().hex}.partial{output_path.suffix}"
+        )
+        command = [
+            self.ffmpeg_path,
+            "-v",
+            "error",
+            *input_options,
+            "-i",
+            str(input_path),
+            "-map",
+            "0:a:0",
+            "-map_metadata",
+            "0",
+            "-map_chapters",
+            "0",
+            "-c:a",
+            "copy",
+            "-y",
+            str(partial_path),
+        ]
+
+        try:
+            subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                check=True,
+                timeout=600,
+            )
+            if not partial_path.is_file() or partial_path.stat().st_size == 0:
+                raise RuntimeError("FFmpeg produced an empty output file")
+
+            subprocess.run(
+                [
+                    self.ffmpeg_path,
+                    "-v",
+                    "error",
+                    "-i",
+                    str(partial_path),
+                    "-map",
+                    "0:a:0",
+                    "-f",
+                    "null",
+                    os.devnull,
+                ],
+                capture_output=True,
+                text=True,
+                check=True,
+                timeout=120,
+            )
+            os.replace(partial_path, output_path)
+        except subprocess.TimeoutExpired:
+            error_message = "FFmpeg timed out during AAX DRM removal"
+        except FileNotFoundError:
+            error_message = f"FFmpeg executable not found: {self.ffmpeg_path}"
+        except subprocess.CalledProcessError as exc:
+            details = (exc.stderr or "").strip().splitlines()
+            error_message = (
+                f"FFmpeg failed: {details[-1]}" if details else "FFmpeg failed"
+            )
+        except (OSError, RuntimeError) as exc:
+            error_message = str(exc)
+        else:
+            return RemovalResult(
+                success=True,
+                original_file=input_path,
+                output_file=output_path,
+                drm_info=drm_info,
+                method_used=method,
+            )
+        finally:
+            partial_path.unlink(missing_ok=True)
+
+        return RemovalResult(
+            success=False,
+            original_file=input_path,
+            drm_info=drm_info,
+            error_message=error_message,
         )
 
     def _remove_fairplay_drm(
@@ -280,8 +317,13 @@ class DRMRemover:
                 text=True,
                 check=True,
             )
-            return "activation_bytes" in result.stdout
-        except (subprocess.CalledProcessError, FileNotFoundError):
+            help_text = f"{result.stdout}\n{result.stderr}"
+            return "activation_bytes" in help_text
+        except (
+            subprocess.CalledProcessError,
+            FileNotFoundError,
+            subprocess.TimeoutExpired,
+        ):
             return False
 
     def get_supported_formats(self) -> list[DRMType]:

@@ -60,6 +60,14 @@ jobs:
           data["project"]["version"] = new_version
           pyproject.write_text(tomli_w.dumps(data))
 
+          package_init = Path("bookbot/__init__.py")
+          package_init.write_text(
+              package_init.read_text().replace(
+                  f'__version__ = "{current}"',
+                  f'__version__ = "{new_version}"',
+              )
+          )
+
           # Also update Dockerfile label if present
           dockerfile = Path("Dockerfile")
           if dockerfile.exists():
@@ -85,7 +93,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add pyproject.toml Dockerfile
+          git add pyproject.toml bookbot/__init__.py Dockerfile
           git commit -m "Release ${TAG}"
           git tag "$TAG"
           git push origin main --tags

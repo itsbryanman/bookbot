@@ -1,5 +1,7 @@
 import json
+import os
 from pathlib import Path
+from typing import Literal
 
 try:
     import keyring  # type: ignore
@@ -19,23 +21,61 @@ def _get_fallback_file(service_name: str, key_name: str) -> Path:
     return config_dir / f".{service_name}_{key_name}.json"
 
 
-def save_token(token: Token, service_name: str = "bookbot") -> None:
+def _write_private_text(path: Path, content: str) -> None:
+    """Create or replace a credential file with private permissions from byte one."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = path.with_name(f".{path.name}.tmp")
+    descriptor = os.open(
+        temp_path,
+        os.O_WRONLY | os.O_CREAT | os.O_TRUNC,
+        0o600,
+    )
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp_path, path)
+        path.chmod(0o600)
+    except Exception:
+        temp_path.unlink(missing_ok=True)
+        raise
+
+
+def _require_file_choice(storage: Literal["keyring", "file"], error: Exception) -> None:
+    if storage == "file":
+        return
+    raise RuntimeError(
+        "System keyring storage is unavailable. Re-run with explicit file "
+        "credential storage if you accept credentials being saved in a local "
+        "owner-readable file."
+    ) from error
+
+
+def save_token(
+    token: Token,
+    service_name: str = "bookbot",
+    *,
+    storage: Literal["keyring", "file"] = "keyring",
+) -> str:
     """
     Saves a token to the system's keyring or fallback file.
     """
     token_data = toml.dumps({"token": token.model_dump()})
 
-    if keyring is not None:
+    if storage == "keyring" and keyring is not None:
         try:
             keyring.set_password(service_name, "token", token_data)
-            return
-        except Exception:
-            pass  # Fall through to file storage
+            return "system keyring"
+        except Exception as exc:
+            _require_file_choice(storage, exc)
 
-    # Fallback to file storage
+    if storage == "keyring":
+        _require_file_choice(storage, RuntimeError("keyring package unavailable"))
+
     fallback_file = _get_fallback_file(service_name, "token")
-    fallback_file.write_text(token_data)
-    fallback_file.chmod(0o600)
+    _write_private_text(fallback_file, token_data)
+    return f"local file ({fallback_file})"
 
 
 def load_token(service_name: str = "bookbot") -> Token | None:
@@ -75,21 +115,31 @@ def delete_token(service_name: str = "bookbot") -> None:
         fallback_file.unlink()
 
 
-def save_activation_bytes(activation_bytes: str, service_name: str = "bookbot") -> None:
+def save_activation_bytes(
+    activation_bytes: str,
+    service_name: str = "bookbot",
+    *,
+    storage: Literal["keyring", "file"] = "keyring",
+) -> str:
     """
     Saves activation bytes to the system's keyring or fallback file.
     """
-    if keyring is not None:
+    if storage == "keyring" and keyring is not None:
         try:
             keyring.set_password(service_name, "activation_bytes", activation_bytes)
-            return
-        except Exception:
-            pass
+            return "system keyring"
+        except Exception as exc:
+            _require_file_choice(storage, exc)
 
-    # Fallback to file storage
+    if storage == "keyring":
+        _require_file_choice(storage, RuntimeError("keyring package unavailable"))
+
     fallback_file = _get_fallback_file(service_name, "activation_bytes")
-    fallback_file.write_text(json.dumps({"activation_bytes": activation_bytes}))
-    fallback_file.chmod(0o600)
+    _write_private_text(
+        fallback_file,
+        json.dumps({"activation_bytes": activation_bytes}),
+    )
+    return f"local file ({fallback_file})"
 
 
 def load_activation_bytes(service_name: str = "bookbot") -> str | None:

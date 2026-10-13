@@ -3,7 +3,9 @@
 import asyncio
 import os
 from asyncio import to_thread
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -96,11 +98,12 @@ class DRMLoginScreen(Static):
 
     def compose(self) -> ComposeResult:
         yield Container(
-            Label("Audible Authentication", classes="section-title"),
+            Label("Protected Audiobook Access", classes="section-title"),
             Static(
-                "To remove DRM from Audible audiobooks, you need to authenticate with "
-                "your Audible account. This process will open a browser window for you "
-                "to log in securely.",
+                "Authenticate with your Audible account to access books you own. "
+                "AAX output is decrypted to a temporary file, decoded for integrity, "
+                "and only then published. AAXC requires its matching voucher and "
+                "content key.",
                 classes="description",
             ),
             Static("", id="user_code_display"),
@@ -1054,7 +1057,18 @@ class PreviewScreen(Static):
             if plan.conflicts:
                 raise ValueError("; ".join(plan.conflicts))
 
-            await to_thread(transaction_manager.execute_plan, plan, dry_run=False)
+            # Use a short-lived executor for apply operations. Keeping this work
+            # on asyncio's global executor can hold the TUI event loop open during
+            # shutdown after an apply completes.
+            loop = asyncio.get_running_loop()
+            with ThreadPoolExecutor(
+                max_workers=1,
+                thread_name_prefix="bookbot-apply",
+            ) as executor:
+                await loop.run_in_executor(
+                    executor,
+                    partial(transaction_manager.execute_plan, plan, dry_run=False),
+                )
 
             transaction_id = plan.applied_transaction_id or "unknown"
             self.last_transaction_id = transaction_id
