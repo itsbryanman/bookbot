@@ -8,7 +8,7 @@ import aiohttp
 from pydantic import ValidationError
 
 from ..core.models import ProviderIdentity
-from .base import MetadataProvider
+from .base import NETWORK_ERRORS, MetadataProvider
 
 if TYPE_CHECKING:
     from ..io.cache import CacheManager
@@ -31,7 +31,7 @@ class GoogleBooksProvider(MetadataProvider):
         """Get or create HTTP session."""
         if self.session is None or self.session.closed:
             self.session = aiohttp.ClientSession(
-                timeout=aiohttp.ClientTimeout(total=30),
+                timeout=self._client_timeout(),
                 headers={"User-Agent": "BookBot/1.0 (Audiobook Organizer)"},
             )
         return self.session
@@ -113,6 +113,7 @@ class GoogleBooksProvider(MetadataProvider):
                 f"{self.base_url}/volumes", params=params
             ) as response:
                 if response.status != 200:
+                    self._note_http_status(response.status)
                     return []
 
                 data = await response.json()
@@ -134,6 +135,9 @@ class GoogleBooksProvider(MetadataProvider):
 
                 return identities
 
+        except NETWORK_ERRORS as network_error:
+            self._record_network_failure(network_error)
+            return []
         except (aiohttp.ClientError, asyncio.TimeoutError, json.JSONDecodeError):
             return []
 
@@ -168,6 +172,7 @@ class GoogleBooksProvider(MetadataProvider):
                 f"{self.base_url}/volumes/{external_id}", params=params
             ) as response:
                 if response.status != 200:
+                    self._note_http_status(response.status)
                     return None
 
                 data = await response.json()
@@ -181,6 +186,9 @@ class GoogleBooksProvider(MetadataProvider):
                     )
                 return identity
 
+        except NETWORK_ERRORS as network_error:
+            self._record_network_failure(network_error)
+            return None
         except (aiohttp.ClientError, asyncio.TimeoutError, json.JSONDecodeError):
             return None
 

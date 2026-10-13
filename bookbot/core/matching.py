@@ -12,6 +12,77 @@ from .logging import get_logger
 
 logger = get_logger("matching")
 
+# Catalogs such as Audible list translators, editors and foreword writers next
+# to the author as "Name - role". They are contributors, not authors.
+_CONTRIBUTOR_ROLE_RE = re.compile(
+    r"\s+[-\u2013\u2014]\s+(?:translator|translated by|translation|foreword|"
+    r"afterword|introduction|editor|edited by|contributor|illustrator|"
+    r"adaptation|adapted by|adapter|preface|narrator|reader|compiler)\s*$",
+    re.IGNORECASE,
+)
+
+
+def filter_author_names(names: list[str]) -> list[str]:
+    """Drop contributors listed with a role suffix (" - translator", ...).
+
+    If every name carries a role (an edited anthology, say), the names are
+    kept without their suffixes rather than leaving the book authorless.
+    """
+    authors = [name for name in names if not _CONTRIBUTOR_ROLE_RE.search(name)]
+    if authors or not names:
+        return authors
+    return [_CONTRIBUTOR_ROLE_RE.sub("", name).strip() for name in names]
+
+
+# Noise that release groups and rippers attach to titles. None of it is part
+# of a title a catalog would know, and all of it makes search APIs return
+# nothing at all.
+_BRACKETED_NOISE_RE = re.compile(r"\[[^\]]*\]|\{[^}]*\}|\([^)]*\)")
+_LEADING_YEAR_RE = re.compile(r"^(?:19|20)\d{2}\s*[-\u2013\u2014.]\s+")
+_BITRATE_RE = re.compile(r"\b\d{2,3}\s*k(?:bps|bits?|bts)?\b", re.IGNORECASE)
+_RUNTIME_RE = re.compile(r"\b\d{1,3}[.:]\d{2}[.:]\d{2}\b")
+_SIZE_RE = re.compile(r"\b\d+(?:\.\d+)?\s*(?:kb|mb|gb)\b", re.IGNORECASE)
+_SUBTITLE_NOISE_RE = re.compile(
+    r"(?:\s*[:\-\u2013\u2014]\s*|\s+)"
+    r"(?:a|an)\s+(?:novel|novella|memoir|thriller|mystery|short story|love story)"
+    r"\s*$",
+    re.IGNORECASE,
+)
+_TRAILING_FORMAT_RE = re.compile(
+    r"[\s_\-]+(?:m4b|m4a|mp3|aac|flac|epub|mobi|azw3|unabridged|abridged|"
+    r"audiobooks?|audio)\s*$",
+    re.IGNORECASE,
+)
+_EDGE_PUNCTUATION_RE = re.compile(
+    r"^[\s\-\u2013\u2014:;,_.~]+|[\s\-\u2013\u2014:;,_.~@]+$"
+)
+
+
+def clean_query_title(title: str) -> str:
+    """Strip release noise from a title before it is used as a search query.
+
+    Removes bracketed/parenthesised/braced asides ("(Unabridged)", "[audio]",
+    "{220mb}"), bitrate/runtime/size suffixes ("64k 07.58.53"), a leading
+    release year ("1992 - "), generic subtitles (": A Novel") and trailing
+    format words ("_M4B"). Returns the input unchanged when nothing would be
+    left, so a title such as "1984" survives.
+    """
+    original = " ".join(title.split())
+    cleaned = original
+    previous = None
+    while cleaned != previous:
+        previous = cleaned
+        cleaned = _BRACKETED_NOISE_RE.sub(" ", cleaned)
+        cleaned = _LEADING_YEAR_RE.sub("", cleaned)
+        cleaned = _BITRATE_RE.sub(" ", cleaned)
+        cleaned = _RUNTIME_RE.sub(" ", cleaned)
+        cleaned = _SIZE_RE.sub(" ", cleaned)
+        cleaned = " ".join(cleaned.replace("_", " ").split())
+        cleaned = _SUBTITLE_NOISE_RE.sub("", cleaned)
+        cleaned = _TRAILING_FORMAT_RE.sub("", cleaned)
+        cleaned = _EDGE_PUNCTUATION_RE.sub("", cleaned)
+    return cleaned if re.search(r"\w", cleaned) else original
+
 
 @dataclass
 class MatchScore:
@@ -98,20 +169,11 @@ class AdvancedMatcher:
     @staticmethod
     def _find_aliases_json() -> Path | None:
         """Find author_aliases.json in config dir or bundled data."""
-        import os
+        from ..config.manager import get_runtime_config_dir
 
-        # Check config dir
-        if os.environ.get("XDG_CONFIG_HOME"):
-            config_path = Path(os.environ["XDG_CONFIG_HOME"]) / "bookbot"
-        elif os.name == "nt":
-            config_path = (
-                Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming"))
-                / "bookbot"
-            )
-        else:
-            config_path = Path.home() / ".config" / "bookbot"
-
-        config_json = config_path / "author_aliases.json"
+        # Same resolution as ConfigManager: --config-dir (exported as
+        # BOOKBOT_CONFIG_DIR), then the platform default config directory.
+        config_json = get_runtime_config_dir() / "author_aliases.json"
         if config_json.is_file():
             return config_json
 
@@ -186,18 +248,41 @@ class AdvancedMatcher:
 
         return norm
 
+    def _title_similarity(self, norm1: str, norm2: str) -> float:
+        if norm1 == norm2:
+            return 1.0
+        ratio = fuzz.ratio(norm1, norm2) / 100.0
+        token_set = fuzz.token_set_ratio(norm1, norm2) / 100.0
+        return ratio * 0.4 + token_set * 0.6
+
     def match_title(self, title1: str, title2: str) -> float:
-        """Title similarity [0.0-1.0]."""
+        """Title similarity [0.0-1.0].
+
+        Subtitles after a colon are optional on either side, so
+        "What If?: Serious Scientific Answers" still matches "What If?". A
+        volume number present on only one side ("What If? 2") is penalized so
+        sequels don't outrank the book itself.
+        """
         norm1 = self.normalize_title(title1)
         norm2 = self.normalize_title(title2)
 
         if norm1 == norm2:
             return 1.0
 
-        ratio = fuzz.ratio(norm1, norm2) / 100.0
-        token_set = fuzz.token_set_ratio(norm1, norm2) / 100.0
+        score = self._title_similarity(norm1, norm2)
+        main1 = self.normalize_title(title1.split(":", 1)[0])
+        main2 = self.normalize_title(title2.split(":", 1)[0])
+        if main1 and main2 and (main1 != norm1 or main2 != norm2):
+            score = max(score, 0.95 * self._title_similarity(main1, main2))
 
-        return ratio * 0.4 + token_set * 0.6
+        trailing1 = re.search(r"(\d+)$", main1 or norm1)
+        trailing2 = re.search(r"(\d+)$", main2 or norm2)
+        number1 = int(trailing1.group(1)) if trailing1 else None
+        number2 = int(trailing2.group(1)) if trailing2 else None
+        if number1 != number2:
+            score *= 0.8
+
+        return score
 
     def extract_series(self, title: str) -> tuple[str, int | None, float] | None:
         """Extract (series_name, book_number, confidence) from title."""

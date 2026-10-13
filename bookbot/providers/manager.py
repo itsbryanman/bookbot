@@ -5,7 +5,7 @@ import re
 from collections.abc import Iterable
 
 from ..config.manager import ConfigManager
-from ..core.exceptions import MetadataError
+from ..core.exceptions import MetadataError, ProviderUnavailableError
 from ..core.logging import get_logger
 from ..core.matching import AdvancedMatcher
 from ..core.models import (
@@ -14,7 +14,13 @@ from ..core.models import (
     MatchConfidence,
     ProviderIdentity,
 )
-from ..core.review import apply_ambiguous_top2_flag, detect_review_flags
+from ..core.review import (
+    RUNTIME_MATCH_TOLERANCE,
+    apply_ambiguous_top2_flag,
+    detect_review_flags,
+    narrator_agreement,
+    runtime_relative_error,
+)
 from ..io.cache import CacheManager
 from .audible import AudibleProvider
 from .audnexus import AudnexusProvider
@@ -33,10 +39,16 @@ class ProviderManager:
     AUDIO_PROVIDERS = frozenset({"audible", "audnexus", "librivox"})
     PRINT_PROVIDERS = frozenset({"openlibrary", "googlebooks", "hardcover"})
 
+    # After this many consecutive unreachable/timed-out lookups a provider is
+    # skipped for the rest of the run, so one dead service costs a few
+    # connect timeouts in total instead of one per book.
+    CIRCUIT_BREAKER_THRESHOLD = 3
+
     def __init__(self, config_manager: ConfigManager):
         self.config_manager = config_manager
         self.cache_manager = CacheManager(config_manager)
         self.providers: dict[str, MetadataProvider] = {}
+        self._consecutive_failures: dict[str, int] = {}
         self._initialize_providers()
 
     def _initialize_providers(self) -> None:
@@ -162,6 +174,52 @@ class ProviderManager:
                 recoverable=True,
             ) from exc
 
+    def _failure_counts(self) -> dict[str, int]:
+        # Managers built without __init__ (tests, embedding) start clean.
+        counts = getattr(self, "_consecutive_failures", None)
+        if counts is None:
+            counts = {}
+            self._consecutive_failures = counts
+        return counts
+
+    def is_provider_tripped(self, provider: MetadataProvider) -> bool:
+        """Whether a provider is being skipped after repeated outages."""
+        return (
+            self._failure_counts().get(provider.name, 0)
+            >= self.CIRCUIT_BREAKER_THRESHOLD
+        )
+
+    def _record_provider_outcome(
+        self, provider: MetadataProvider, error: BaseException | None
+    ) -> None:
+        counts = self._failure_counts()
+        if error is None:
+            counts[provider.name] = 0
+            return
+        if not self._is_outage(error):
+            return
+        counts[provider.name] = counts.get(provider.name, 0) + 1
+        if counts[provider.name] == self.CIRCUIT_BREAKER_THRESHOLD:
+            logger.warning(
+                f"Provider {provider.name} unreachable "
+                f"{self.CIRCUIT_BREAKER_THRESHOLD} times in a row; "
+                "skipping it for the rest of this run",
+                error=str(error),
+            )
+
+    @staticmethod
+    def _can_search(provider: MetadataProvider, audiobook_set: AudiobookSet) -> bool:
+        can_search = getattr(provider, "can_search", None)
+        return bool(can_search(audiobook_set)) if callable(can_search) else True
+
+    @staticmethod
+    def _is_outage(error: BaseException) -> bool:
+        if isinstance(error, ProviderUnavailableError):
+            return True
+        if isinstance(error, MetadataError):
+            return error.details.get("kind") in {"timeout", "network"}
+        return False
+
     async def find_matches_merged(
         self, audiobook_set: AudiobookSet, limit: int = 10
     ) -> list[MatchCandidate]:
@@ -169,39 +227,58 @@ class ProviderManager:
 
         Merge groups by isbn_13, then asin, then (normalized_author, normalized_title).
         Applies corroboration boost and duration cross-check.
+
+        Providers that were unreachable several times in a row are skipped.
+        Raises :class:`MetadataError` ("All metadata providers unavailable")
+        when no provider could be asked, so callers can report an outage
+        instead of "no matches".
         """
         enabled = self.get_enabled_providers()
         if not enabled:
             return []
 
+        # Providers that cannot look this set up (Audnexus without an ASIN)
+        # are left out entirely: their empty answer says nothing about
+        # whether the network is reachable.
+        applicable = [p for p in enabled if self._can_search(p, audiobook_set)]
+        if not applicable:
+            return []
+        active = [p for p in applicable if not self.is_provider_tripped(p)]
+        skipped = [p.name for p in applicable if self.is_provider_tripped(p)]
+        provider_failures: list[dict[str, object]] = [
+            {"provider": name, "error": "skipped after repeated connection failures"}
+            for name in skipped
+        ]
+
         # Fan out concurrently
         tasks = [
-            self._find_matches_with_timeout(p, audiobook_set, limit) for p in enabled
+            self._find_matches_with_timeout(p, audiobook_set, limit) for p in active
         ]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
         # Collect all candidates, tagging each with its provider priority
         all_candidates: list[tuple[int, MatchCandidate]] = []
-        provider_failures: list[dict[str, object]] = []
         for i, result in enumerate(results):
+            provider = active[i]
             if isinstance(result, BaseException):
-                provider_name = enabled[i].name
+                self._record_provider_outcome(provider, result)
                 provider_failures.append(
                     {
-                        "provider": provider_name,
+                        "provider": provider.name,
                         "error": str(result),
                     }
                 )
                 logger.warning(
-                    f"Provider {provider_name} failed during find_matches",
+                    f"Provider {provider.name} failed during find_matches",
                     error=str(result),
                 )
                 continue
+            self._record_provider_outcome(provider, None)
             for candidate in result:
                 all_candidates.append((i, candidate))  # i = priority index
 
         if not all_candidates:
-            if provider_failures and len(provider_failures) == len(enabled):
+            if provider_failures and len(provider_failures) == len(applicable):
                 raise MetadataError(
                     "All metadata providers unavailable",
                     details={"provider_errors": provider_failures},
@@ -210,6 +287,7 @@ class ProviderManager:
             return []
 
         matcher = AdvancedMatcher()
+        marketplace = self._marketplace()
         groups: dict[str, list[tuple[int, MatchCandidate]]] = {}
 
         for priority, candidate in all_candidates:
@@ -243,13 +321,21 @@ class ProviderManager:
             surviving = self._apply_duration_check(
                 surviving, audiobook_set.total_duration
             )
+            surviving = self._apply_narrator_check(
+                surviving, audiobook_set.narrator_guess, matcher
+            )
+            surviving = self._apply_language_check(
+                surviving, audiobook_set.language_guess, marketplace
+            )
             surviving.review_flags = detect_review_flags(
                 audiobook_set, surviving, matcher
             )
             merged.append(surviving)
 
-        merged.sort(key=lambda c: c.confidence, reverse=True)
-        merged = apply_ambiguous_top2_flag(merged)
+        merged.sort(
+            key=lambda c: self._ranking_key(c, audiobook_set, matcher), reverse=True
+        )
+        merged = apply_ambiguous_top2_flag(merged, audiobook_set, matcher)
         return merged[:limit]
 
     @staticmethod
@@ -460,6 +546,31 @@ class ProviderManager:
             "french": "fr",
             "spa": "es",
             "spanish": "es",
+            "swe": "sv",
+            "swedish": "sv",
+            "ita": "it",
+            "italian": "it",
+            "dut": "nl",
+            "nld": "nl",
+            "dutch": "nl",
+            "dan": "da",
+            "danish": "da",
+            "nor": "no",
+            "nob": "no",
+            "norwegian": "no",
+            "fin": "fi",
+            "finnish": "fi",
+            "por": "pt",
+            "portuguese": "pt",
+            "pol": "pl",
+            "polish": "pl",
+            "rus": "ru",
+            "russian": "ru",
+            "jpn": "ja",
+            "japanese": "ja",
+            "chi": "zh",
+            "zho": "zh",
+            "chinese": "zh",
         }
         return aliases.get(normalized, normalized.split("-", 1)[0])
 
@@ -515,9 +626,9 @@ class ProviderManager:
             return {str(provider).lower() for provider in providers}
         return {identity.provider.lower()}
 
-    @staticmethod
+    @classmethod
     def _apply_duration_check(
-        candidate: MatchCandidate, total_duration: float | None
+        cls, candidate: MatchCandidate, total_duration: float | None
     ) -> MatchCandidate:
         """Apply duration cross-check to adjust confidence."""
         if total_duration is None or total_duration <= 0:
@@ -541,21 +652,112 @@ class ProviderManager:
             conf *= 0.6
             reasons.append("Runtime mismatch (possible wrong edition/abridged)")
 
-        if conf != candidate.confidence:
-            level = MatchConfidence.HIGH
-            if conf <= 0.85:
-                level = MatchConfidence.MEDIUM
-            if conf <= 0.65:
-                level = MatchConfidence.LOW
+        return cls._rescored(candidate, conf, reasons)
 
-            return MatchCandidate(
-                identity=candidate.identity,
-                confidence=conf,
-                confidence_level=level,
-                match_reasons=reasons,
+    @staticmethod
+    def _rescored(
+        candidate: MatchCandidate, conf: float, reasons: list[str]
+    ) -> MatchCandidate:
+        """Return the candidate with an adjusted confidence and reasons."""
+        if conf == candidate.confidence:
+            return candidate
+        level = MatchConfidence.HIGH
+        if conf <= 0.85:
+            level = MatchConfidence.MEDIUM
+        if conf <= 0.65:
+            level = MatchConfidence.LOW
+        return MatchCandidate(
+            identity=candidate.identity,
+            confidence=conf,
+            confidence_level=level,
+            match_reasons=reasons,
+            review_flags=candidate.review_flags,
+        )
+
+    @classmethod
+    def _apply_narrator_check(
+        cls,
+        candidate: MatchCandidate,
+        local_narrator: str | None,
+        matcher: AdvancedMatcher,
+    ) -> MatchCandidate:
+        """Boost a narrator overlap with the local guess, penalize a clash."""
+        agreement = narrator_agreement(
+            local_narrator, candidate.identity.narrator, matcher
+        )
+        if agreement is None:
+            return candidate
+        reasons = list(candidate.match_reasons)
+        if agreement:
+            reasons.append("Narrator match")
+            return cls._rescored(
+                candidate, min(1.0, candidate.confidence + 0.05), reasons
             )
+        reasons.append("Narrator mismatch")
+        return cls._rescored(candidate, candidate.confidence * 0.92, reasons)
 
+    @classmethod
+    def _apply_language_check(
+        cls,
+        candidate: MatchCandidate,
+        local_language: str | None,
+        marketplace: str | None,
+    ) -> MatchCandidate:
+        """Penalize editions in a language other than the local one.
+
+        With no local language known, a non-English edition only drops
+        slightly on English-language marketplaces, enough to rank it below
+        an otherwise equal English one.
+        """
+        provider_language = candidate.identity.language
+        if not provider_language:
+            return candidate
+        provider_code = cls._normalize_language(provider_language)
+        reasons = list(candidate.match_reasons)
+        if local_language:
+            if cls._normalize_language(local_language) == provider_code:
+                return candidate
+            reasons.append("Language mismatch")
+            return cls._rescored(candidate, candidate.confidence * 0.85, reasons)
+        if provider_code != "en" and (marketplace or "us").casefold() in {
+            "us",
+            "uk",
+        }:
+            reasons.append("Non-English edition")
+            return cls._rescored(
+                candidate, max(0.0, candidate.confidence - 0.02), reasons
+            )
         return candidate
+
+    def _marketplace(self) -> str | None:
+        if self.config_manager is None:
+            return None
+        try:
+            return str(self.config_manager.load_config().providers.audible.marketplace)
+        except Exception:  # noqa: BLE001 - scoring must not fail on config
+            return None
+
+    @staticmethod
+    def _ranking_key(
+        candidate: MatchCandidate,
+        audiobook_set: AudiobookSet,
+        matcher: AdvancedMatcher,
+    ) -> tuple[float, int, float]:
+        """Order by confidence, then by local corroboration on ties.
+
+        Confidence is capped at 1.0, so two strong candidates can tie even
+        when only one of them matches the local narrator or runtime.
+        """
+        corroboration = 0
+        if narrator_agreement(
+            audiobook_set.narrator_guess, candidate.identity.narrator, matcher
+        ):
+            corroboration += 1
+        error = runtime_relative_error(audiobook_set, candidate)
+        if error is not None and error <= RUNTIME_MATCH_TOLERANCE:
+            corroboration += 1
+        closeness = -error if error is not None else -1.0
+        return (round(candidate.confidence, 6), corroboration, closeness)
 
     async def close_all(self) -> None:
         """Close all provider connections."""

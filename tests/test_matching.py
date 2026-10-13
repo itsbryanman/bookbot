@@ -212,3 +212,22 @@ class TestFindMatchesEndToEnd:
         assert len(candidates[0].match_reasons) > 0
         # Without series/year, max combined = title(0.5) + author(0.3) = 0.8
         assert candidates[0].confidence >= 0.8
+
+
+def test_title_subtitle_does_not_lose_to_numbered_sequel() -> None:
+    """A local title with a subtitle should prefer the base work over book 2."""
+    from bookbot.core.matching import AdvancedMatcher
+
+    matcher = AdvancedMatcher()
+    local = "What If?: Serious Scientific Answers to Absurd Hypothetical Questions"
+
+    original = matcher.match_title(local, "What If?")
+    sequel = matcher.match_title(local, "What If? 2")
+
+    assert original > sequel
+    assert original >= 0.9
+    assert matcher.match_title("Stormbreaker", "Stormbreaker 2") < 0.9
+    assert matcher.match_title(local, "What If?2") < original
+    assert matcher.match_title("Catch-22", "Catch-22") == 1.0
+    # A series number in front of the title is not a sequel number.
+    assert matcher.match_title("Alex Rider 02 - Point Blanc", "Point Blanc") >= 0.75

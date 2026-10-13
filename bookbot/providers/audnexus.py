@@ -7,8 +7,14 @@ from typing import TYPE_CHECKING, Any
 import aiohttp
 
 from ..core.logging import get_logger
-from ..core.models import ProviderIdentity
-from .base import MetadataProvider
+from ..core.matching import filter_author_names
+from ..core.models import (
+    AudiobookSet,
+    MatchCandidate,
+    MatchConfidence,
+    ProviderIdentity,
+)
+from .base import NETWORK_ERRORS, MetadataProvider
 
 if TYPE_CHECKING:
     from ..io.cache import CacheManager
@@ -36,7 +42,7 @@ class AudnexusProvider(MetadataProvider):
     async def _get_session(self) -> aiohttp.ClientSession:
         """Get or create the HTTP session."""
         if self._session is None or self._session.closed:
-            timeout = aiohttp.ClientTimeout(total=self.API_TIMEOUT)
+            timeout = self._client_timeout()
             headers = {
                 "User-Agent": "BookBot/0.3.0 (https://github.com/itsbryanman/BookBot)",
                 "Accept": "application/json",
@@ -84,17 +90,19 @@ class AudnexusProvider(MetadataProvider):
                     if response.status == 404:
                         return None
                     if response.status != 200:
-                        logger.warning(
-                            f"Audnexus returned {response.status} for {path}"
-                        )
+                        self._note_http_status(response.status)
+                        logger.debug(f"Audnexus returned {response.status} for {path}")
                         return None
                     data: dict[str, Any] | list[Any] | None = await response.json()
                     return data
-            except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+            except NETWORK_ERRORS as e:
+                # Retrying a refused or timed-out connection only multiplies
+                # the wait; the provider manager decides when to try again.
                 logger.warning(f"Audnexus request failed: {e}")
-                if attempt < max_retries - 1:
-                    await asyncio.sleep(2**attempt)
-                    continue
+                self._record_network_failure(e)
+                return None
+            except (aiohttp.ClientError, ValueError) as e:
+                logger.warning(f"Audnexus returned an unusable response: {e}")
                 return None
 
         return None
@@ -110,58 +118,30 @@ class AudnexusProvider(MetadataProvider):
         language: str | None = None,
         limit: int = 10,
     ) -> list[ProviderIdentity]:
-        """Search Audnexus for books by name."""
-        cache_key = None
-        cache_namespace = "audnexus_search"
+        """Audnexus has no title/author search.
 
-        if self.cache_manager:
-            cache_key = self.cache_manager.generate_query_hash(
-                title=title,
-                author=author,
-                series=series,
-                isbn=isbn,
-                year=year,
-                language=language,
-                limit=limit,
-            )
-            cached_entry = self.cache_manager.get(cache_namespace, cache_key)
-            if cached_entry:
-                try:
-                    return [
-                        ProviderIdentity.model_validate(item)
-                        for item in cached_entry["data"]
-                    ]
-                except (KeyError, TypeError, ValueError):
-                    pass
+        Its API only resolves books by ASIN (``/books/{asin}``); a
+        ``/books?name=`` route does not exist and answers 404. Matching goes
+        through :meth:`get_by_id` via the ASIN fast path instead, so a search
+        returns nothing without spending a request.
+        """
+        return []
 
-        query = title or ""
-        if author and query:
-            query = f"{query} {author}"
-        elif author:
-            query = author
+    def can_search(self, audiobook_set: AudiobookSet) -> bool:
+        """Audnexus can only resolve a set that carries an ASIN."""
+        return bool(audiobook_set.asin_guess)
 
-        if not query:
-            return []
-
-        data = await self._request("GET", "/books", params={"name": query})
-        if not data or not isinstance(data, list):
-            return []
-
-        identities = []
-        for item in data[:limit]:
-            identity = self._parse_book(item)
-            if identity:
-                identities.append(identity)
-
-        if identities and self.cache_manager and cache_key:
-            self.cache_manager.set(
-                cache_namespace,
-                cache_key,
-                [i.model_dump(mode="json") for i in identities],
-                ttl_seconds=24 * 60 * 60,
-            )
-
-        return identities
+    async def _try_asin_lookup(self, asin: str) -> MatchCandidate | None:
+        """Resolve an ASIN from tags or a sidecar via ``/books/{asin}``."""
+        identity = await self.get_by_id(asin)
+        if identity is None:
+            return None
+        return MatchCandidate(
+            identity=identity,
+            confidence=1.0,
+            confidence_level=MatchConfidence.HIGH,
+            match_reasons=["ASIN exact match"],
+        )
 
     async def get_by_id(self, external_id: str) -> ProviderIdentity | None:
         """Get a book by ASIN."""
@@ -229,6 +209,7 @@ class AudnexusProvider(MetadataProvider):
                 name = author.get("name", "")
                 if name:
                     authors.append(name)
+            authors = filter_author_names(authors)
 
             narrators = []
             for narrator in data.get("narrators", []):
@@ -256,6 +237,13 @@ class AudnexusProvider(MetadataProvider):
                 except ValueError:
                     pass
 
+            runtime = data.get("runtimeLengthMin")
+            runtime_minutes = (
+                int(runtime)
+                if isinstance(runtime, (int, float)) and runtime > 0
+                else None
+            )
+
             cover_url = data.get("image", "")
             cover_urls = [cover_url] if cover_url else []
 
@@ -276,6 +264,7 @@ class AudnexusProvider(MetadataProvider):
                 publisher=publisher if publisher else None,
                 description=description if description else None,
                 asin=asin.upper(),
+                runtime_minutes=runtime_minutes,
                 cover_urls=cover_urls,
                 raw_data=data,
             )

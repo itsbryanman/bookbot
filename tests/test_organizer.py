@@ -92,8 +92,13 @@ class TestSmartOrganizer:
 
             plan = organizer.propose_reorganization(src, None, "default", [ab1, ab2])
 
-            assert len(plan.conflicts) > 0
-            assert not plan.is_valid
+            # The second set is a duplicate: it is left in place with a
+            # reason instead of blocking the whole reorganization.
+            assert plan.conflicts == []
+            assert plan.is_valid
+            assert len(plan.skipped) == 1
+            assert "same destination" in plan.skipped[0]["reason"]
+            assert plan.total_moves == 3
 
     def test_empty_sets(self, organizer):
         with tempfile.TemporaryDirectory() as tmp:

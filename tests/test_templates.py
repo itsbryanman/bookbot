@@ -99,7 +99,7 @@ class TestTemplateEngine:
             zero_padding_width=2,
         )
 
-        assert filename == "101 - The Way Of Kings.mp3"
+        assert filename == "101 - The Way of Kings.mp3"
 
     def test_generate_folder_name(self, sample_audiobook_set, sample_identity):
         """Test folder name generation from template."""
@@ -113,7 +113,7 @@ class TestTemplateEngine:
 
         assert (
             folder_name
-            == "Sanderson, Brandon/The Stormlight Archive/1 - The Way Of Kings (2010)"
+            == "Sanderson, Brandon/The Stormlight Archive/1 - The Way of Kings (2010)"
         )
 
     def test_generate_folder_name_with_snake_case_tokens(
@@ -130,13 +130,13 @@ class TestTemplateEngine:
 
         assert (
             folder_name
-            == "Brandon Sanderson/The Stormlight Archive/01 - The Way Of Kings"
+            == "Brandon Sanderson/The Stormlight Archive/01 - The Way of Kings"
         )
 
     def test_case_policies(self, sample_audiobook_set, sample_identity):
         """Test different case policies."""
         test_cases = [
-            (CasePolicy.TITLE_CASE, "The Way Of Kings"),
+            (CasePolicy.TITLE_CASE, "The Way of Kings"),
             (CasePolicy.LOWER_CASE, "the way of kings"),
             (CasePolicy.UPPER_CASE, "THE WAY OF KINGS"),
             (CasePolicy.AS_IS, "The Way of Kings"),
@@ -152,15 +152,33 @@ class TestTemplateEngine:
         engine = TemplateEngine()
 
         test_cases = [
-            ("the way of kings", "The Way Of Kings"),
-            ("a song of ice and fire", "A Song Of Ice And Fire"),
-            ("the lord of the rings", "The Lord Of The Rings"),
+            ("the way of kings", "The Way of Kings"),
+            ("a song of ice and fire", "A Song of Ice and Fire"),
+            ("the lord of the rings", "The Lord of the Rings"),
+            ("along came a spider", "Along Came a Spider"),
+            ("what if: the answer of", "What If: The Answer Of"),
             ("ready player one", "Ready Player One"),
         ]
 
         for input_text, expected in test_cases:
             result = engine._smart_title_case(input_text)
             assert result == expected
+
+    def test_author_sort_uses_first_of_several_authors(self):
+        engine = TemplateEngine()
+
+        assert (
+            engine._format_author_last_first("Jocko Willink, Leif Babin")
+            == "Willink, Jocko"
+        )
+        assert (
+            engine._format_author_last_first("Marcia Thornton Jones & Debbie Dadey")
+            == "Jones, Marcia Thornton"
+        )
+        assert engine._format_author_last_first("Le Guin, Ursula K.") == (
+            "Le Guin, Ursula K."
+        )
+        assert engine._format_author_last_first("Tolkien, J.R.R.") == "Tolkien, J.R.R."
 
     def test_author_last_first_formatting(self):
         """Test author name formatting."""
@@ -171,7 +189,8 @@ class TestTemplateEngine:
             ("J.K. Rowling", "Rowling, J.K."),
             ("Stephen King", "King, Stephen"),
             ("Madonna", "Madonna"),  # Single name
-            ("Jean-Claude Van Damme", "Damme, Jean-Claude Van"),
+            # Surname particles stay with the family name.
+            ("Jean-Claude Van Damme", "Van Damme, Jean-Claude"),
         ]
 
         for input_name, expected in test_cases:
@@ -194,12 +213,13 @@ class TestTemplateEngine:
 
         test_cases = [
             ("File with spaces.mp3", "File with spaces.mp3"),
-            ("File/with\\forbidden:chars.mp3", "File_with_forbidden_chars.mp3"),
+            ("File/with\\forbidden:chars.mp3", "File_with_forbidden - chars.mp3"),
             (
                 "File<with>more|forbidden?chars*.mp3",
-                "File_with_more_forbidden_chars_.mp3",
+                "Filewithmore - forbiddenchars_.mp3",
             ),
-            ("File\"with'quotes.mp3", "File_with'quotes.mp3"),
+            ("File\"with'quotes.mp3", "File'with'quotes.mp3"),
+            ("What If?: Serious Answers.mp3", "What If - Serious Answers.mp3"),
         ]
 
         for input_filename, expected in test_cases:

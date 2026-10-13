@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from typing import Literal
 
 from ..config.models import MatchingConfig
 from .matching import AdvancedMatcher
@@ -100,10 +101,20 @@ def detect_review_flags(
     return flags
 
 
+RUNTIME_MATCH_TOLERANCE = 0.02
+
+
 def apply_ambiguous_top2_flag(
     candidates: list[MatchCandidate],
+    audiobook_set: AudiobookSet | None = None,
+    matcher: AdvancedMatcher | None = None,
 ) -> list[MatchCandidate]:
-    """Flag a close top-two ranking when identifiers disagree."""
+    """Flag a close top-two ranking when identifiers disagree.
+
+    Two genuinely different works that tie block. Two editions of the same
+    work (same title and primary author) only warn, and nothing is flagged
+    when local evidence (narrator, runtime) already favours the top one.
+    """
     if len(candidates) < 2:
         return candidates
 
@@ -115,11 +126,25 @@ def apply_ambiguous_top2_flag(
     if not _identifiers_conflict(top.identity, runner_up.identity):
         return candidates
 
+    matcher = matcher or AdvancedMatcher()
+    if audiobook_set is not None and _better_corroborated(
+        audiobook_set, top, runner_up, matcher
+    ):
+        return candidates
+
+    severity: Literal["warn", "block"]
+    if _same_work(top.identity, runner_up.identity, matcher):
+        severity = "warn"
+        message = "Top two candidates are close editions of the same work"
+    else:
+        severity = "block"
+        message = "Top two candidates are close in score but disagree on identifiers"
+
     top.review_flags.append(
         ReviewFlag(
             kind=ReviewFlagKind.AMBIGUOUS_TOP2,
-            severity="block",
-            message="Top two candidates are close in score but disagree on identifiers",
+            severity=severity,
+            message=message,
             local_value=None,
             provider_value=_identifier_summary(runner_up.identity),
         )
@@ -127,13 +152,85 @@ def apply_ambiguous_top2_flag(
     runner_up.review_flags.append(
         ReviewFlag(
             kind=ReviewFlagKind.AMBIGUOUS_TOP2,
-            severity="block",
-            message="Top two candidates are close in score but disagree on identifiers",
+            severity=severity,
+            message=message,
             local_value=None,
             provider_value=_identifier_summary(top.identity),
         )
     )
     return candidates
+
+
+def split_people(value: str) -> list[str]:
+    """Split a multi-person credit ("A, B & C") into names."""
+    return [
+        name.strip()
+        for name in re.split(r"\s*(?:,|;|&|\band\b)\s*", value, flags=re.I)
+        if name.strip()
+    ]
+
+
+def narrator_agreement(
+    local_narrator: str | None,
+    provider_narrator: str | None,
+    matcher: AdvancedMatcher,
+) -> bool | None:
+    """True if any narrator overlaps, False if all differ, None if unknown."""
+    if not local_narrator or not provider_narrator:
+        return None
+    local_names = split_people(local_narrator)
+    provider_names = split_people(provider_narrator)
+    if not local_names or not provider_names:
+        return None
+    return any(
+        matcher.match_author(local_name, provider_name) >= 0.85
+        for local_name in local_names
+        for provider_name in provider_names
+    )
+
+
+def runtime_relative_error(
+    audiobook_set: AudiobookSet, candidate: MatchCandidate
+) -> float | None:
+    """Relative difference between local and provider runtime, if both known."""
+    runtime = candidate.identity.runtime_minutes
+    if not audiobook_set.total_duration or not runtime or runtime <= 0:
+        return None
+    local_minutes = audiobook_set.total_duration / 60.0
+    return abs(local_minutes - runtime) / runtime
+
+
+def _better_corroborated(
+    audiobook_set: AudiobookSet,
+    top: MatchCandidate,
+    runner_up: MatchCandidate,
+    matcher: AdvancedMatcher,
+) -> bool:
+    narrator = audiobook_set.narrator_guess
+    top_narrator = narrator_agreement(narrator, top.identity.narrator, matcher)
+    runner_narrator = narrator_agreement(narrator, runner_up.identity.narrator, matcher)
+    if top_narrator and not runner_narrator:
+        return True
+
+    top_error = runtime_relative_error(audiobook_set, top)
+    runner_error = runtime_relative_error(audiobook_set, runner_up)
+    top_runtime_ok = top_error is not None and top_error <= RUNTIME_MATCH_TOLERANCE
+    runner_runtime_ok = (
+        runner_error is not None and runner_error <= RUNTIME_MATCH_TOLERANCE
+    )
+    if top_runtime_ok and not runner_runtime_ok and runner_narrator is not True:
+        return True
+    return False
+
+
+def _same_work(left, right, matcher: AdvancedMatcher) -> bool:  # type: ignore[no-untyped-def]
+    if not left.authors or not right.authors:
+        return False
+    if matcher.normalize_title(left.title) != matcher.normalize_title(right.title):
+        return False
+    return matcher.normalize_author(left.authors[0]) == matcher.normalize_author(
+        right.authors[0]
+    )
 
 
 def worst_flag_severity(flags: list[ReviewFlag]) -> str | None:

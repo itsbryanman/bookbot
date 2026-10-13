@@ -14,6 +14,7 @@ from mutagen import MutagenError
 from ..config.manager import ConfigManager
 from ..core.logging import get_logger
 from ..io.sidecar import SidecarManager, sidecar_output_paths
+from .discovery import QUARANTINE_DIRNAME, is_ignored_file, is_within_quarantine_tree
 from .models import AudioTags, OperationRecord, RenameOperation, RenamePlan, Track
 
 logger = get_logger("operations")
@@ -254,6 +255,14 @@ class TransactionManager:
                 transaction_log,
                 persist_journal=persist_journal,
             )
+
+            # Phase 4: Source folders left holding only OS junk (Thumbs.db,
+            # desktop.ini, ._* ...) get that junk moved into quarantine under
+            # the journal, so undo restores it and the folders can be pruned.
+            if plan.operations:
+                self._quarantine_junk_only_source_dirs(
+                    plan, transaction_id, transaction_log, persist_journal
+                )
 
             # Save transaction log for undo
             persist_journal(status="completed")
@@ -500,6 +509,84 @@ class TransactionManager:
         if record.new_path is not None:
             self._cleanup_empty_directories(record.new_path.parent)
 
+    @staticmethod
+    def _source_dirs_with_ancestors(plan: RenamePlan, root: Path) -> list[Path]:
+        """Source folders of a plan plus their ancestors below ``root``.
+
+        Ordered deepest first so children are handled before their parents.
+        """
+        candidates: set[Path] = set()
+        for operation in plan.operations:
+            current = operation.old_path.parent
+            while True:
+                resolved = current.resolve(strict=False)
+                if resolved == root or root not in resolved.parents:
+                    break
+                candidates.add(current)
+                current = current.parent
+        return sorted(candidates, key=lambda path: len(path.parts), reverse=True)
+
+    def _quarantine_junk_only_source_dirs(
+        self,
+        plan: RenamePlan,
+        transaction_id: str,
+        transaction_log: list[OperationRecord],
+        persist_journal: Callable[[], None],
+    ) -> None:
+        """Move OS junk out of source folders that hold nothing else.
+
+        Junk is never deleted: each file is journaled as a rename into
+        ``<root>/.bookbot-quarantine/<plan_id>/<relative path>`` before it
+        moves, so undo puts it back exactly. Folders with any other content
+        (a real file or a surviving subfolder) are left untouched.
+        """
+        root = plan.source_path.resolve(strict=False)
+        quarantine_root = root / QUARANTINE_DIRNAME / plan.plan_id
+        cleared: set[Path] = set()
+
+        for directory in self._source_dirs_with_ancestors(plan, root):
+            if not directory.is_dir() or is_within_quarantine_tree(directory):
+                continue
+            try:
+                entries = list(directory.iterdir())
+            except OSError:
+                continue
+            junk: list[Path] = []
+            keep = False
+            for entry in entries:
+                if entry.is_symlink() or not (entry.is_file() or entry.is_dir()):
+                    keep = True
+                elif entry.is_dir():
+                    keep = keep or entry not in cleared
+                elif is_ignored_file(entry):
+                    junk.append(entry)
+                else:
+                    keep = True
+            if keep:
+                continue
+
+            for entry in junk:
+                relative = entry.resolve(strict=False).relative_to(root)
+                destination = quarantine_root / relative
+                if destination.exists():
+                    keep = True
+                    continue
+                record = OperationRecord(
+                    operation_id=transaction_id,
+                    timestamp=datetime.now(),
+                    operation_type="rename",
+                    old_path=entry,
+                    new_path=destination,
+                    old_content_hash=self._calculate_file_hash(entry),
+                    metadata={"reason": "os_junk_quarantine"},
+                )
+                transaction_log.append(record)
+                persist_journal()
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                entry.rename(destination)
+            if not keep:
+                cleared.add(directory)
+
     def _prune_emptied_source_dirs(self, plan: RenamePlan) -> None:
         """Remove source directories left empty by an applied plan.
 
@@ -508,11 +595,8 @@ class TransactionManager:
         them via `old_path.parent.mkdir(parents=True)`.
         """
         root = plan.source_path.resolve(strict=False)
-        source_dirs = {operation.old_path.parent for operation in plan.operations}
         # Deepest first so parents become empty before they're considered.
-        for directory in sorted(
-            source_dirs, key=lambda path: len(path.parts), reverse=True
-        ):
+        for directory in self._source_dirs_with_ancestors(plan, root):
             resolved = directory.resolve(strict=False)
             if resolved == root or root not in resolved.parents:
                 continue

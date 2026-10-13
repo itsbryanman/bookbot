@@ -46,3 +46,15 @@ class ConfigurationError(BookBotError):
     """Invalid configuration."""
 
     pass
+
+
+class ProviderUnavailableError(MetadataError):
+    """A metadata provider could not be reached (connection refused, timeout,
+    DNS failure, or a 5xx response), as opposed to answering "no results"."""
+
+    def __init__(
+        self,
+        message: str,
+        details: dict[str, Any] | None = None,
+    ):
+        super().__init__(message, details=details, recoverable=True)

@@ -10,7 +10,7 @@ from pydantic import ValidationError
 
 from ..core.logging import get_logger
 from ..core.models import ProviderIdentity
-from .base import MetadataProvider
+from .base import NETWORK_ERRORS, MetadataProvider
 
 if TYPE_CHECKING:
     from ..io.cache import CacheManager
@@ -33,7 +33,7 @@ class OpenLibraryProvider(MetadataProvider):
     async def _get_session(self) -> aiohttp.ClientSession:
         """Get or create the HTTP session."""
         if self._session is None or self._session.closed:
-            timeout = aiohttp.ClientTimeout(total=self.API_TIMEOUT)
+            timeout = self._client_timeout()
             headers = {
                 "User-Agent": "BookBot/0.1.0 (https://github.com/itsbryanman/BookBot)",
                 "Accept": "application/json",
@@ -132,6 +132,7 @@ class OpenLibraryProvider(MetadataProvider):
             session = await self._get_session()
             async with session.get(url, params=params) as response:
                 if response.status != 200:
+                    self._note_http_status(response.status)
                     return []
 
                 data = await response.json()
@@ -153,6 +154,9 @@ class OpenLibraryProvider(MetadataProvider):
 
                 return identities
 
+        except NETWORK_ERRORS as network_error:
+            self._record_network_failure(network_error)
+            return []
         except (aiohttp.ClientError, asyncio.TimeoutError, ValueError):
             return []
 
@@ -181,6 +185,7 @@ class OpenLibraryProvider(MetadataProvider):
             session = await self._get_session()
             async with session.get(url, params=params) as response:
                 if response.status != 200:
+                    self._note_http_status(response.status)
                     return None
 
                 data = await response.json()
@@ -202,6 +207,8 @@ class OpenLibraryProvider(MetadataProvider):
                             )
                         return identity
 
+        except NETWORK_ERRORS as network_error:
+            self._record_network_failure(network_error)
         except (aiohttp.ClientError, asyncio.TimeoutError, ValueError):
             pass
 
@@ -232,6 +239,7 @@ class OpenLibraryProvider(MetadataProvider):
             session = await self._get_session()
             async with session.get(url) as response:
                 if response.status != 200:
+                    self._note_http_status(response.status)
                     return None
 
                 work_data = await response.json()
@@ -269,6 +277,9 @@ class OpenLibraryProvider(MetadataProvider):
                     )
                 return identity
 
+        except NETWORK_ERRORS as network_error:
+            self._record_network_failure(network_error)
+            return None
         except (aiohttp.ClientError, asyncio.TimeoutError, ValueError):
             return None
 

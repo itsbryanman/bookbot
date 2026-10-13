@@ -1,8 +1,9 @@
 """Audio file discovery and metadata extraction."""
 
 import re
+import unicodedata
 from collections import Counter
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -10,6 +11,7 @@ from typing import Any
 from mutagen import File as MutagenFile
 from mutagen.id3 import ID3NoHeaderError
 
+from .matching import AdvancedMatcher, clean_query_title
 from .models import AudiobookSet, AudioFormat, AudioTags, Track, TrackStatus
 
 # ISBN validation: 10 digits (trailing X allowed) or 13 digits, after stripping
@@ -23,6 +25,31 @@ _NFO_NARRATOR_RE = re.compile(
     re.IGNORECASE,
 )
 _IMPLAUSIBLE_AUTHOR_RE = re.compile(r"^[A-Z]{1,4}\s*\d+$")
+# "Book 1 - Title" / "Vol. 2 - Title": a volume number, never an author.
+_VOLUME_PREFIX_RE = re.compile(
+    r"^(?:book|vol(?:ume)?|part)\.?\s*(\d+)\s*[-–—:]\s*(.+)$", re.IGNORECASE
+)
+_VOLUME_ONLY_RE = re.compile(r"^(?:book|vol(?:ume)?|part)\.?\s*\d+$", re.IGNORECASE)
+# Encoding noise such as "128kbps", "64 kbps" or "64k" in folder names.
+_BITRATE_NOISE_RE = re.compile(r"\b\d{2,3}\s*k(?:bps|bits?|bts)?\b", re.IGNORECASE)
+# Rip-group suffixes: runtime "07.58.53" and size "{220mb}" / "1.81gb".
+_RUNTIME_NOISE_RE = re.compile(r"\b\d{1,3}[.:]\d{2}[.:]\d{2}\b")
+_SIZE_NOISE_RE = re.compile(r"\b\d+(?:\.\d+)?\s*(?:kb|mb|gb)\b", re.IGNORECASE)
+_TRAILING_FORMAT_NOISE_RE = re.compile(
+    r"[\s_-]+(?:m4b|m4a|mp3|aac|flac|epub|mobi|azw3)\s*$", re.IGNORECASE
+)
+# "1992 - Author - Title": a release year in front of an Author - Title name.
+_LEADING_YEAR_RE = re.compile(r"^(?:19|20)\d{2}\s*[-–—]\s+(?=.+\s[-–—]\s)")
+# "Earthsea 01 - A Wizard of Earthsea" or
+# "Matt Dinniman - Dungeon Crawler Carl 01 - Dungeon Crawler Carl": a series
+# name and number in front of the title, optionally after an author.
+_SERIES_NUMBER_TITLE_RE = re.compile(
+    r"^(?:(?P<author>[^-–—]+?)\s+[-–—]\s+)?"
+    r"(?P<series>[^-–—]*?[A-Za-z][^-–—]*?)[\s_-]*#?(?P<number>\d{1,3})"
+    r"\s*[-–—]\s*(?P<title>.+)$"
+)
+_JUNK_SIDECAR_SERIES = {"unabridged", "abridged", "adult", "audiobook"}
+_SIDECAR_ASIN_RE = re.compile(r"^[A-Z0-9]{10}$")
 # "Last, First" shaped folder names (bookbot's own {AuthorLastFirst} output).
 # Digits are rejected on either side so series artifacts like
 # "05, Encyclopedia Brown" never read as authors.
@@ -53,6 +80,184 @@ _PERSONAL_NAME_STOPWORDS = {
     "with",
 }
 QUARANTINE_DIRNAME = ".bookbot-quarantine"
+
+# Operating-system litter that is never part of a book: macOS AppleDouble
+# resource forks ("._name", which keep the audio extension of the file they
+# shadow), Finder and Explorer metadata.
+_IGNORED_FILE_NAMES = {".ds_store", "desktop.ini", "thumbs.db", "ehthumbs.db"}
+
+# Words that say nothing about which book a folder or file holds:
+# "audiobook_final_FINAL", "New Folder (3)", "audio.m4b", "book.m4b".
+_GENERIC_NAME_WORDS = {
+    "audio",
+    "audiobook",
+    "audiobooks",
+    "book",
+    "books",
+    "cd",
+    "complete",
+    "copy",
+    "disc",
+    "disk",
+    "done",
+    "download",
+    "downloads",
+    "edit",
+    "file",
+    "files",
+    "final",
+    "fixed",
+    "folder",
+    "m4a",
+    "m4b",
+    "misc",
+    "mp3",
+    "new",
+    "part",
+    "rip",
+    "temp",
+    "test",
+    "tmp",
+    "track",
+    "tracks",
+    "unknown",
+    "untitled",
+    "v",
+    "version",
+}
+_HEX_NAME_RE = re.compile(r"^[0-9a-f]{8,}$", re.IGNORECASE)
+# Tag values rippers and players fill in when they know nothing:
+# "Unknown Book-Part1", "Unknown", "Unknown Album", "Track 01", "Untitled".
+_PLACEHOLDER_TAG_RE = re.compile(
+    r"^(?:unknown(?:\s+(?:book|title|album|artist|author))?|untitled|no\s+title|"
+    r"track|chapter|title|album|audio(?:book)?|various(?:\s+artists)?)"
+    r"(?:[\s_.:#-]*(?:part|pt|disc|cd|track)?[\s_.-]*\d*)?$",
+    re.IGNORECASE,
+)
+# Release noise inside tag values: "Extreme Ownership (Unabridged)".
+_TAG_NOISE_RE = re.compile(
+    r"\s*[\(\[]\s*(?:un)?abridged(?:\s+edition)?\s*[\)\]]"
+    r"|\s*[\(\[]\s*(?:audio(?:book)?|retail|mp3|m4b)\s*[\)\]]",
+    re.IGNORECASE,
+)
+# "NOS4A2 (Disc 01)", "NOS4A2 [CD 3]", "NOS4A2 (Disc 2 of 17)".
+_BRACKETED_DISC_RE = re.compile(
+    r"^(?P<stem>.+?)\s*[\(\[]\s*(?:disc|disk|cd)\.?\s*(?P<num>\d+)"
+    r"(?:\s*(?:of|/)\s*\d+)?\s*[\)\]]$",
+    re.IGNORECASE,
+)
+# "Title by Author" folder names.
+_TITLE_BY_AUTHOR_RE = re.compile(r"^(?P<title>.+)\s+by\s+(?P<author>.+?)$")
+# "Alex Cross 01" as an album tag: a series name and number, not a title.
+_SERIES_NUMBER_ONLY_RE = re.compile(
+    r"^(?P<series>.*[A-Za-z].*?)\s+#?(?P<number>\d{1,3})$"
+)
+# Track order hidden in title tags when the track-number tag is missing.
+_TITLE_PART_OF_RE = re.compile(
+    r"\b(?:pt|part)\.?\s*(\d{1,4})\s*(?:of|/)\s*\d{1,4}\b", re.IGNORECASE
+)
+_TITLE_N_OF_M_RE = re.compile(r"\b(\d{1,4})\s+of\s+\d{1,4}\b", re.IGNORECASE)
+_TITLE_N_DASH_M_RE = re.compile(r"^(\d{1,4})-(\d{1,4})\s")
+_TITLE_PART_RE = re.compile(r"\b(?:pt|part)\.?\s*(\d{1,4})\b", re.IGNORECASE)
+# "... - 012.mp3": a numeric suffix after a separator.
+_TRAILING_TRACK_NUMBER_RE = re.compile(r"[\s_.-](\d{1,4})$")
+# Comment tags such as "Read by Pam Ward" name the narrator.
+_COMMENT_NARRATOR_RE = re.compile(
+    r"\b(?:read|narrated|performed)\s+by\s*:?\s*(?P<name>[^.;\n(]+)",
+    re.IGNORECASE,
+)
+_SMALL_TITLE_WORDS = {
+    "a",
+    "an",
+    "and",
+    "as",
+    "at",
+    "but",
+    "by",
+    "for",
+    "in",
+    "nor",
+    "of",
+    "on",
+    "or",
+    "the",
+    "to",
+    "with",
+}
+
+
+def _split_people(value: str) -> list[str]:
+    """Split "A, B & C" / "A and B" into individual names."""
+    return [
+        part.strip()
+        for part in re.split(r"\s*(?:,|;|&|\band\b)\s*", value)
+        if part.strip()
+    ]
+
+
+def is_ignored_file(path: Path) -> bool:
+    """Whether a file is operating-system litter rather than book content."""
+    name = path.name
+    return name.startswith("._") or name.lower() in _IGNORED_FILE_NAMES
+
+
+def natural_sort_key(path: Path) -> tuple[tuple[int, int, str], ...]:
+    """Sort key that orders "CD 2" before "CD 10" and "a2" before "a10"."""
+    return tuple(
+        (0, int(part), "") if part.isdigit() else (1, 0, part.casefold())
+        for part in re.split(r"(\d+)", str(path))
+        if part
+    )
+
+
+def is_generic_name(name: str) -> bool:
+    """Whether a folder/file name carries no book identity.
+
+    "audiobook_final_FINAL", "New Folder (3)", "audio", "book", "001" and
+    random hex names ("3fa2c91e") are generic.
+    """
+    cleaned = name.strip()
+    if not cleaned or _HEX_NAME_RE.fullmatch(cleaned):
+        return True
+    words = re.findall(r"[^\W\d_]+", cleaned.casefold())
+    if not words:
+        # "01" / "001" are track numbers; "1984" or "11/22/63" are titles.
+        return bool(re.fullmatch(r"\W*\d{1,3}\W*", cleaned))
+    return all(word in _GENERIC_NAME_WORDS for word in words)
+
+
+def is_placeholder_tag(value: str | None) -> bool:
+    """Whether a tag value is filler such as "Unknown" or "Track 01"."""
+    if value is None:
+        return True
+    cleaned = value.strip()
+    return (
+        not cleaned
+        or bool(_PLACEHOLDER_TAG_RE.fullmatch(cleaned))
+        or is_generic_name(cleaned)
+    )
+
+
+def tidy_name_title(name: str) -> str:
+    """Title-case a name that was written all in lower case ("the inmate")."""
+    if not name or name != name.lower() or not re.search(r"[a-z]", name):
+        return name
+    words = name.split(" ")
+    tidied = []
+    for index, word in enumerate(words):
+        if index > 0 and word in _SMALL_TITLE_WORDS:
+            tidied.append(word)
+        else:
+            tidied.append(word[:1].upper() + word[1:])
+    return " ".join(tidied)
+
+
+def strip_decorations(text: str) -> str:
+    """Fold full-width forms and drop decorative symbols ("★", "♥", emoji)."""
+    folded = unicodedata.normalize("NFKC", text)
+    return "".join(
+        char for char in folded if unicodedata.category(char) not in {"So", "Cs"}
+    )
 
 
 def is_within_quarantine_tree(path: Path) -> bool:
@@ -132,22 +337,37 @@ class AudioFileScanner:
         """
         if album is None:
             return None, None
-        match = self.SUFFIX_DISC_PATTERN.match(album.strip())
-        if match is None:
+        split = self._disc_suffix_split(album.strip())
+        if split is None:
             return album, None
+        stem, number = split
+        return (stem or album), number
+
+    def _disc_suffix_split(self, name: str) -> tuple[str, int] | None:
+        """Split "Stem Disc 3" / "Stem (Disc 03)" into ("Stem", 3)."""
+        match = self.SUFFIX_DISC_PATTERN.match(name) or _BRACKETED_DISC_RE.match(name)
+        if match is None:
+            return None
         try:
             number = int(match.group("num"))
         except ValueError:
-            return album, None
-        stem = match.group("stem").strip()
-        return (stem or album), number
+            return None
+        return match.group("stem").strip(), number
 
     def __init__(self, recursive: bool = True, max_depth: int = 5):
         self.recursive = recursive
         self.max_depth = max_depth
 
-    def scan_directory(self, path: Path) -> list[AudiobookSet]:
-        """Scan a directory for audio files and group them into audiobook sets."""
+    def scan_directory(
+        self,
+        path: Path,
+        progress: Callable[[int, int, str], None] | None = None,
+    ) -> list[AudiobookSet]:
+        """Scan a directory for audio files and group them into audiobook sets.
+
+        ``progress`` is called as ``progress(done, total, name)`` before each
+        audiobook set is read, so long scans can report how far along they are.
+        """
         if not path.exists() or not path.is_dir():
             raise ValueError(f"Path does not exist or is not a directory: {path}")
 
@@ -160,13 +380,35 @@ class AudioFileScanner:
 
         # Convert groups to AudiobookSet objects
         audiobook_sets = []
-        for group_path, files in grouped_files.items():
-            source_path = (
+        total = len(grouped_files)
+        source_paths = {
+            group_path: (
                 group_path
                 if group_path.exists() and group_path.is_dir()
                 else group_path.parent
             )
-            audiobook_set = self._create_audiobook_set(source_path, files)
+            for group_path in grouped_files
+        }
+        sets_per_folder = Counter(source_paths.values())
+        for index, (group_path, files) in enumerate(grouped_files.items()):
+            source_path = source_paths[group_path]
+            if progress is not None:
+                progress(index, total, source_path.name)
+            # Files lying directly in a folder that also holds other books
+            # (the library root, usually) are "loose": that folder's name is
+            # not theirs.
+            loose = all(file.parent == source_path for file in files) and (
+                sets_per_folder[source_path] > 1
+                or (source_path == path and len(grouped_files) > 1)
+            )
+            audiobook_set = self._create_audiobook_set(
+                source_path,
+                files,
+                # A metadata.json describes one book; loose files sharing a
+                # folder must not all inherit it.
+                read_sidecar=sets_per_folder[source_path] == 1 and not loose,
+                loose=loose,
+            )
             audiobook_sets.append(audiobook_set)
 
         return audiobook_sets
@@ -180,6 +422,8 @@ class AudioFileScanner:
 
         try:
             for item in path.iterdir():
+                if is_ignored_file(item):
+                    continue
                 if item.is_file() and item.suffix.lower() in self.SUPPORTED_EXTENSIONS:
                     audio_files.append(item)
                 elif item.is_dir():
@@ -197,7 +441,7 @@ class AudioFileScanner:
             # Skip directories we can't read
             pass
 
-        return sorted(audio_files)
+        return sorted(audio_files, key=natural_sort_key)
 
     def _group_files_by_audiobook(self, files: list[Path]) -> dict[Path, list[Path]]:
         """Group audio files by their likely audiobook sets."""
@@ -337,15 +581,12 @@ class AudioFileScanner:
         if exact_match is not None:
             return exact_match
 
-        suffix_match = self.SUFFIX_DISC_PATTERN.match(folder.name)
-        if suffix_match is None:
+        suffix_split = self._disc_suffix_split(folder.name)
+        if suffix_split is None:
             return None
 
-        stem = self._clean_metadata_name(suffix_match.group("stem"))
-        try:
-            number = int(suffix_match.group("num"))
-        except ValueError:
-            return None
+        stem = self._clean_metadata_name(suffix_split[0])
+        number = suffix_split[1]
 
         if not self._suffix_disc_folder_qualifies(folder, stem, number):
             return None
@@ -376,23 +617,24 @@ class AudioFileScanner:
         for sibling in folder.parent.iterdir():
             if not sibling.is_dir() or sibling == folder:
                 continue
-            sibling_match = self.SUFFIX_DISC_PATTERN.match(sibling.name)
-            if sibling_match is None:
+            sibling_split = self._disc_suffix_split(sibling.name)
+            if sibling_split is None:
                 continue
-            sibling_stem = self._clean_metadata_name(sibling_match.group("stem"))
+            sibling_stem = self._clean_metadata_name(sibling_split[0])
             if sibling_stem.lower() != stem_name:
                 continue
-            try:
-                sibling_number = int(sibling_match.group("num"))
-            except ValueError:
-                continue
-            if sibling_number != number:
+            if sibling_split[1] != number:
                 return True
 
         return False
 
     def _create_audiobook_set(
-        self, source_path: Path, files: list[Path]
+        self,
+        source_path: Path,
+        files: list[Path],
+        *,
+        read_sidecar: bool = True,
+        loose: bool = False,
     ) -> AudiobookSet:
         """Create an AudiobookSet from a group of files."""
         tracks = []
@@ -407,13 +649,16 @@ class AudioFileScanner:
                 if track.duration:
                     total_duration += track.duration
 
-        # Sort tracks by disc, then by track index
-        tracks.sort(key=lambda t: (t.disc, t.track_index))
+        # Sort tracks by disc, then by track index; files without any order
+        # evidence keep a natural filename order ("CD 2" before "CD 10").
+        tracks.sort(key=lambda t: (t.disc, t.track_index, natural_sort_key(t.src_path)))
 
         # Extract metadata guesses from folder name and tracks
         title_guess, author_guess, series_guess, volume_guess = (
-            self._extract_metadata_guesses(source_path, tracks)
+            self._extract_metadata_guesses(source_path, tracks, loose=loose)
         )
+        if title_guess:
+            title_guess = tidy_name_title(title_guess)
 
         disc_count = len(disc_numbers) if disc_numbers else 1
 
@@ -421,8 +666,11 @@ class AudioFileScanner:
         isbn_guess = self._majority_identifier(tracks, "isbn")
         asin_guess = self._majority_identifier(tracks, "asin")
         narrator_guess = self._consistent_track_tag_value(tracks, "narrator")
-        if narrator_guess is None:
+        if narrator_guess is None and not loose:
             narrator_guess = self._nfo_narrator_guess(source_path)
+        if narrator_guess is None:
+            comment_narrators = self._comment_narrators(tracks[:5])
+            narrator_guess = ", ".join(comment_narrators) or None
 
         audiobook_set = AudiobookSet(
             source_path=source_path,
@@ -437,13 +685,118 @@ class AudioFileScanner:
             total_tracks=len(tracks),
             total_duration=total_duration if total_duration > 0 else None,
             tracks=tracks,
+            loose_files=loose,
         )
+
+        if read_sidecar:
+            self._apply_sidecar_evidence(audiobook_set)
+
+        if not audiobook_set.raw_title_guess:
+            # "New Folder (3)/audio.m4b" with empty tags: guessing a title
+            # (or borrowing one from a stray cover) files the book wrong.
+            audiobook_set.needs_review = True
+            audiobook_set.review_reason = (
+                "No usable title: the folder and file names are generic "
+                f"({self._describe_names(source_path, tracks)}) and the tags "
+                "name no book. Identify it manually."
+            )
 
         # Validate track ordering and add warnings
         validation_issues = audiobook_set.validate_track_order()
         audiobook_set.warnings.extend(validation_issues)
 
         return audiobook_set
+
+    @staticmethod
+    def _describe_names(source_path: Path, tracks: list[Track]) -> str:
+        names = [f"'{source_path.name}'"]
+        names.extend(f"'{track.src_path.name}'" for track in tracks[:2])
+        if len(tracks) > 2:
+            names.append("...")
+        return ", ".join(names)
+
+    def _apply_sidecar_evidence(self, audiobook_set: AudiobookSet) -> None:
+        """Fold a metadata.json/OPF/NFO sidecar into the set's guesses.
+
+        Library managers such as Audiobookshelf leave a curated
+        ``metadata.json`` next to each book; its title, authors, narrators,
+        identifiers and series are far better search evidence than rip-group
+        folder names. Audiobookshelf data is not always clean either
+        (narrators listed as authors, "Unabridged" as a series), so obvious
+        junk is dropped rather than trusted.
+        """
+        source_path = audiobook_set.source_path
+        if not source_path.is_dir():
+            return
+        try:
+            from ..io.sidecar import SidecarManager
+
+            sidecar = SidecarManager().auto_detect_sidecar(source_path)
+        except Exception:
+            return
+        if sidecar is None:
+            return
+
+        narrators = [
+            name.strip()
+            for name in re.split(r"\s*[,;&]\s*", sidecar.narrator or "")
+            if name.strip()
+        ]
+        narrator_keys = {name.casefold() for name in narrators}
+        authors = [
+            author
+            for author in sidecar.authors
+            if author.casefold() not in narrator_keys
+            and not self._is_implausible_author_guess(author)
+        ]
+
+        title = clean_query_title(sidecar.title)
+        if title:
+            audiobook_set.raw_title_guess = title
+
+        if authors:
+            current = audiobook_set.author_guess
+            matcher = AdvancedMatcher()
+            agreeing = (
+                [a for a in authors if matcher.match_author(current, a) >= 0.85]
+                if current
+                else []
+            )
+            audiobook_set.author_guess = agreeing[0] if agreeing else authors[0]
+
+        series = sidecar.series_name
+        series_index = sidecar.series_index
+        if series and not series_index:
+            # NFO files write "Series: Alex Cross, Book 1".
+            numbered = re.match(
+                r"^(?P<name>.+?)[\s,]+(?:book|vol(?:ume)?|#)\.?\s*(?P<num>\d+)\s*$",
+                series,
+                re.IGNORECASE,
+            )
+            if numbered:
+                series = numbered.group("name").strip()
+                series_index = numbered.group("num")
+        if series and audiobook_set.series_guess is None:
+            series_key = series.casefold()
+            known_people = {a.casefold() for a in sidecar.authors} | narrator_keys
+            if (
+                series_key not in _JUNK_SIDECAR_SERIES
+                and series_key not in known_people
+                and series_key != (audiobook_set.author_guess or "").casefold()
+            ):
+                audiobook_set.series_guess = series
+                audiobook_set.volume_guess = series_index or audiobook_set.volume_guess
+
+        if audiobook_set.narrator_guess is None and narrators:
+            audiobook_set.narrator_guess = narrators[0]
+        if audiobook_set.asin_guess is None and sidecar.asin:
+            asin = sidecar.asin.strip().upper()
+            if _SIDECAR_ASIN_RE.fullmatch(asin):
+                audiobook_set.asin_guess = asin
+        if audiobook_set.isbn_guess is None:
+            audiobook_set.isbn_guess = sidecar.isbn_13 or sidecar.isbn_10
+        if audiobook_set.year_guess is None and sidecar.year:
+            audiobook_set.year_guess = sidecar.year
 
     def _nfo_narrator_guess(self, source_path: Path) -> str | None:
         """Read nearby NFO sidecars for narrator labels when tags are absent."""
@@ -599,6 +952,8 @@ class AudioFileScanner:
 
             if tags.asin is None:
                 tags.asin = self._extract_asin_from_url_tags(audio_file)
+            if tags.comment is None:
+                tags.comment = self._extract_comment_tag(audio_file)
 
             # Store raw tags for preservation
             try:
@@ -690,6 +1045,23 @@ class AudioFileScanner:
         candidate = match.group(1).upper()
         return candidate if _ASIN_RE.match(candidate) else None
 
+    def _extract_comment_tag(self, audio_file: Mapping[Any, Any]) -> str | None:
+        """Read a comment tag (ID3 COMM frames carry a language suffix)."""
+        try:
+            keys = list(audio_file.keys())
+        except Exception:
+            return None
+        for key in keys:
+            name = str(key)
+            if name.startswith("COMM") or name in {"COMMENT", "comment", "\xa9cmt"}:
+                try:
+                    value = self._normalize_text_tag(audio_file[key])
+                except Exception:
+                    continue
+                if value:
+                    return value
+        return None
+
     def _extract_asin_from_url_tags(self, audio_file: Mapping[Any, Any]) -> str | None:
         """Search URL-style tag frames for Audible product links."""
         try:
@@ -758,6 +1130,14 @@ class AudioFileScanner:
         if from_tags is not None:
             return from_tags
 
+        # Title tags that spell the position out ("The Inmate Pt07 of 58",
+        # "21-91 Along Came a Spider") beat file names, which are often
+        # renamed or shuffled.
+        title = str(tags.title or "")
+        explicit = self._explicit_title_position(title)
+        if explicit is not None:
+            return explicit
+
         # Try filename patterns
         filename = file_path.stem
         for pattern in self.TRACK_PATTERNS:
@@ -768,8 +1148,30 @@ class AudioFileScanner:
                 except ValueError:
                     continue
 
+        # "... (Unabridged) - 012.mp3": a numeric suffix after a separator.
+        trailing = _TRAILING_TRACK_NUMBER_RE.search(filename)
+        if trailing:
+            return int(trailing.group(1))
+
+        # A bare "Part 12" in the title tag.
+        part = _TITLE_PART_RE.search(title)
+        if part:
+            return int(part.group(1))
+
         # Default to 1 if no track number found
         return 1
+
+    @staticmethod
+    def _explicit_title_position(title: str) -> int | None:
+        """Position spelled out with its total in a title tag, if any."""
+        for pattern in (_TITLE_PART_OF_RE, _TITLE_N_OF_M_RE):
+            match = pattern.search(title)
+            if match:
+                return int(match.group(1))
+        dashed = _TITLE_N_DASH_M_RE.match(title)
+        if dashed and int(dashed.group(1)) <= int(dashed.group(2)):
+            return int(dashed.group(1))
+        return None
 
     def _get_disc_number(self, file_path: Path, tags: AudioTags) -> int:
         """Extract disc number from tags, filename, or directory structure."""
@@ -807,14 +1209,8 @@ class AudioFileScanner:
         if exact_match is not None:
             return exact_match.number
 
-        suffix_match = self.SUFFIX_DISC_PATTERN.match(folder_name)
-        if suffix_match is None:
-            return None
-
-        try:
-            return int(suffix_match.group("num"))
-        except ValueError:
-            return None
+        suffix_split = self._disc_suffix_split(folder_name)
+        return suffix_split[1] if suffix_split is not None else None
 
     @staticmethod
     def _majority_identifier(tracks: list[Track], field: str) -> str | None:
@@ -849,52 +1245,78 @@ class AudioFileScanner:
         return next(iter(values)) if len(values) == 1 else None
 
     def _extract_metadata_guesses(
-        self, source_path: Path, tracks: list[Track]
+        self, source_path: Path, tracks: list[Track], *, loose: bool = False
     ) -> tuple[str | None, str | None, str | None, str | None]:
-        """Extract title, author, series, and volume guesses from path and tracks."""
-        if len(tracks) == 1:
-            title_guess, author_guess, series_guess, volume_guess = (
-                self._extract_single_track_guesses(tracks[0])
-            )
-            return title_guess, author_guess, series_guess, volume_guess
+        """Extract title, author, series, and volume guesses from path and tracks.
 
-        folder_name, prefer_folder_title, collapsed_disc_group = (
+        ``loose`` marks files lying directly in a folder shared with other
+        books (typically the library root); that folder's name says nothing
+        about them.
+        """
+        if len(tracks) == 1:
+            return self._extract_single_track_guesses(tracks[0], loose=loose)
+
+        tag_author = self._tag_author_guess(tracks)
+        tag_title = self._tag_title_guess(tracks)
+        folder_name, prefer_folder_title, _collapsed_disc_group = (
             self._group_title_source(source_path, tracks)
         )
+
+        if loose or is_generic_name(folder_name):
+            # "audiobook_final_FINAL", "New Folder (3)" or the library root:
+            # only the tags know which book this is.
+            return self._guesses_from_tags(tracks, tag_title, tag_author)
+
+        folder_volume: str | None = None
+        volume_prefix = _VOLUME_PREFIX_RE.match(folder_name)
+        if volume_prefix:
+            folder_volume = volume_prefix.group(1)
+            folder_name = volume_prefix.group(2).strip()
+        else:
+            series_split = self._series_number_title_guess(folder_name)
+            if series_split is not None:
+                series_name, volume, title, folder_author = series_split
+                author = (
+                    folder_author
+                    or tag_author
+                    or self._parent_author_guess(source_path.parent)
+                )
+                return title, author, series_name, volume
+
+        # "Along Came a Spider by James Patterson"
+        title_by_author = self._title_by_author_guess(folder_name, tag_author)
+        if title_by_author is not None:
+            by_title, by_author = title_by_author
+            by_series, by_volume = self._album_series_guess(tracks, by_title)
+            return by_title, by_author, by_series, by_volume or folder_volume
 
         # Try to extract series and volume info
         series_match = re.search(
             r"(.+?)\s+(?:book|vol|volume)\s*(\d+)", folder_name, re.IGNORECASE
         )
         if series_match:
-            series_name = series_match.group(1).strip()
-            volume = series_match.group(2)
-            title_guess = folder_name
-            return title_guess, None, series_name, volume
+            return (
+                folder_name,
+                None,
+                series_match.group(1).strip(),
+                series_match.group(2),
+            )
 
-        # Try author - title pattern
-        title_guess, author_guess = (
-            self._collapsed_group_author_title_guess(folder_name)
-            if collapsed_disc_group
-            else self._author_title_guess(folder_name)
-        )
+        # Author - Title, or Title - Author when the tags or the shape of
+        # the names say so.
+        title_guess, author_guess = self._oriented_title_author(folder_name, tag_author)
         if title_guess is not None:
             if author_guess is not None:
-                return title_guess, author_guess, None, None
+                album_series, album_volume = self._album_series_guess(
+                    tracks, title_guess
+                )
+                return (
+                    title_guess,
+                    author_guess,
+                    album_series,
+                    album_volume or folder_volume,
+                )
             folder_name = title_guess
-
-        # Look for consistent album/artist info in track tags
-        albums = set()
-        artists = set()
-        albumartists = set()
-
-        for track in tracks[:5]:  # Check first 5 tracks for consistency
-            if track.existing_tags.album:
-                albums.add(str(track.existing_tags.album))
-            if track.existing_tags.artist:
-                artists.add(str(track.existing_tags.artist))
-            if track.existing_tags.albumartist:
-                albumartists.add(str(track.existing_tags.albumartist))
 
         parent_author = self._parent_author_guess(source_path.parent)
         # Inside an Author/Title layout (e.g. bookbot's own output), the
@@ -908,20 +1330,44 @@ class AudioFileScanner:
 
         title_guess = (
             folder_name
-            if prefer_folder_title or in_author_title_layout
-            else albums.pop()
-            if len(albums) == 1
-            else folder_name
+            if prefer_folder_title or in_author_title_layout or tag_title is None
+            else tag_title
         )
-        author_guess = (
-            albumartists.pop()
-            if len(albumartists) == 1
-            else artists.pop()
-            if len(artists) == 1
-            else parent_author
-        )
+        author_guess = tag_author or parent_author
 
-        return title_guess, author_guess, None, None
+        if folder_volume is None and title_guess:
+            series_split = self._series_number_title_guess(title_guess)
+            if series_split is not None:
+                series_name, volume, title, split_author = series_split
+                return title, author_guess or split_author, series_name, volume
+
+        return title_guess, author_guess, None, folder_volume
+
+    def _guesses_from_tags(
+        self, tracks: list[Track], tag_title: str | None, tag_author: str | None
+    ) -> tuple[str | None, str | None, str | None, str | None]:
+        """Guesses for a set whose folder name is useless."""
+        author = tag_author
+        if tag_title is not None:
+            series_split = self._series_number_title_guess(tag_title)
+            if series_split is not None:
+                series_name, volume, title, split_author = series_split
+                return title, author or split_author, series_name, volume
+            album_series, album_volume = self._album_series_guess(tracks, tag_title)
+            return tag_title, author, album_series, album_volume
+
+        stem = self._track_title_stem(tracks)
+        if stem is None:
+            return None, author, None, None
+        series_split = self._series_number_title_guess(stem)
+        if series_split is not None:
+            series_name, volume, title, split_author = series_split
+            return title, author or split_author, series_name, volume
+        # Track titles such as "Freida McFadden - The Inmate Pt01 of 58".
+        stem_title, stem_author = self._oriented_title_author(stem, tag_author)
+        if stem_title is not None and stem_author is not None:
+            return stem_title, author or stem_author, None, None
+        return stem, author, None, None
 
     def _group_title_source(
         self, source_path: Path, tracks: list[Track]
@@ -959,29 +1405,75 @@ class AudioFileScanner:
         return folder_name, True, True
 
     def _extract_single_track_guesses(
-        self, track: Track
+        self, track: Track, *, loose: bool = False
     ) -> tuple[str | None, str | None, str | None, str | None]:
-        """Prefer file-level metadata for single-file audiobook sets."""
+        """Prefer file-level metadata for single-file audiobook sets.
+
+        Placeholder tags ("Unknown Book-Part1", "Track 01") are ignored, and
+        a generic file name ("audio.m4b") falls back to the folder name
+        unless the file lies loose in a folder shared with other books.
+        """
         tags = track.existing_tags
-        title_guess = tags.album or tags.title
-        author_guess = tags.albumartist or tags.artist
-        filename_title, filename_author, series_guess, volume_guess = (
-            self._extract_name_guesses(track.src_path.stem)
+        tag_author = self._tag_author_guess([track])
+        tag_title: str | None = None
+        for value in (tags.album, tags.title):
+            if not value:
+                continue
+            candidate = self._clean_tag_value(str(value))
+            candidate = self._album_disc_split(candidate)[0] or candidate
+            if not is_placeholder_tag(candidate):
+                tag_title = candidate
+                break
+
+        folder = track.src_path.parent
+        name_title, name_author, series_guess, volume_guess = (
+            None,
+            None,
+            None,
+            None,
         )
-        parent_author = self._parent_author_guess(track.src_path.parent)
+        if not is_generic_name(self._clean_metadata_name(track.src_path.stem)):
+            name_title, name_author, series_guess, volume_guess = (
+                self._extract_name_guesses(track.src_path.stem, tag_author)
+            )
+        if name_title is None and not loose:
+            if not is_generic_name(self._clean_metadata_name(folder.name)):
+                name_title, name_author, series_guess, volume_guess = (
+                    self._extract_name_guesses(folder.name, tag_author)
+                )
+        parent_author = None if loose else self._parent_author_guess(folder)
+
+        title_guess = tag_title
+        author_guess = tag_author
+        if title_guess:
+            series_split = self._series_number_title_guess(
+                self._clean_metadata_name(title_guess)
+            )
+            if series_split is not None:
+                series_guess, volume_guess, title_guess, split_author = series_split
+                author_guess = author_guess or split_author
 
         return (
-            title_guess or filename_title,
-            author_guess or filename_author or parent_author,
+            title_guess or name_title,
+            author_guess or name_author or parent_author,
             series_guess,
             volume_guess,
         )
 
     def _extract_name_guesses(
-        self, raw_name: str
+        self, raw_name: str, tag_author: str | None = None
     ) -> tuple[str | None, str | None, str | None, str | None]:
         """Extract metadata guesses from a folder or filename stem."""
         cleaned_name = self._clean_metadata_name(raw_name)
+
+        series_split = self._series_number_title_guess(cleaned_name)
+        if series_split is not None:
+            series_name, volume, title, author = series_split
+            return title, author or tag_author, series_name, volume
+
+        title_by_author = self._title_by_author_guess(cleaned_name, tag_author)
+        if title_by_author is not None:
+            return title_by_author[0], title_by_author[1], None, None
 
         series_match = re.search(
             r"(.+?)\s+(?:book|vol|volume)\s*(\d+)", cleaned_name, re.IGNORECASE
@@ -991,7 +1483,9 @@ class AudioFileScanner:
             volume = series_match.group(2)
             return cleaned_name, None, series_name, volume
 
-        title_guess, author_guess = self._author_title_guess(cleaned_name)
+        title_guess, author_guess = self._oriented_title_author(
+            cleaned_name, tag_author
+        )
         if title_guess is not None:
             return title_guess, author_guess, None, None
 
@@ -1008,24 +1502,60 @@ class AudioFileScanner:
             author_title_match.group(2).strip(),
         )
 
-    def _collapsed_group_author_title_guess(
-        self, cleaned_name: str
+    def _oriented_title_author(
+        self, cleaned_name: str, tag_author: str | None = None
     ) -> tuple[str | None, str | None]:
-        """Prefer the personal-name side when collapsed disc groups use `X - Y`."""
+        """Split "X - Y" into (title, author), deciding which side is which.
+
+        The artist/album-artist tag decides first ("The Silent Patient -
+        Alex Michaelides" with artist Alex Michaelides). Without tag
+        evidence, a personal name on exactly one side marks the author;
+        otherwise the usual "Author - Title" order applies.
+        """
         split_name = self._split_dash_name(cleaned_name)
         if split_name is None:
             return None, None
 
         left, right = split_name
-        left_is_personal_name = self._looks_like_personal_name(left)
-        right_is_personal_name = self._looks_like_personal_name(right)
+        if tag_author:
+            left_is_author = self._names_match(tag_author, left)
+            right_is_author = self._names_match(tag_author, right)
+            if right_is_author and not left_is_author:
+                return left, right
+            if left_is_author and not right_is_author:
+                return right, left
 
-        if left_is_personal_name and not right_is_personal_name:
-            return right, left
+        left_is_personal_name = self._looks_like_author(left)
+        right_is_personal_name = self._looks_like_author(right)
         if right_is_personal_name and not left_is_personal_name:
             return left, right
+        if left_is_personal_name and not right_is_personal_name:
+            return right, left
 
         return self._author_title_guess(cleaned_name)
+
+    def _collapsed_group_author_title_guess(
+        self, cleaned_name: str
+    ) -> tuple[str | None, str | None]:
+        """Prefer the personal-name side when collapsed disc groups use `X - Y`."""
+        return self._oriented_title_author(cleaned_name)
+
+    def _title_by_author_guess(
+        self, cleaned_name: str, tag_author: str | None = None
+    ) -> tuple[str, str] | None:
+        """Parse "Title by Author" when the part after "by" is a person."""
+        match = _TITLE_BY_AUTHOR_RE.match(cleaned_name)
+        if match is None:
+            return None
+        title = match.group("title").strip(" -")
+        author = match.group("author").strip(" -")
+        if not title or not author:
+            return None
+        if tag_author and self._names_match(tag_author, author):
+            return title, author
+        if self._looks_like_author(author):
+            return title, author
+        return None
 
     def _author_title_guess(self, cleaned_name: str) -> tuple[str | None, str | None]:
         """Split `Author - Title` names while rejecting implausible authors."""
@@ -1063,6 +1593,8 @@ class AudioFileScanner:
 
         if _IMPLAUSIBLE_AUTHOR_RE.fullmatch(cleaned_author):
             return True
+        if _VOLUME_ONLY_RE.fullmatch(cleaned_author):
+            return True
 
         non_space = [char for char in cleaned_author if not char.isspace()]
         if non_space:
@@ -1095,6 +1627,168 @@ class AudioFileScanner:
 
     def _clean_metadata_name(self, raw_name: str) -> str:
         """Remove common noise from folder names and filename stems."""
-        cleaned_name = re.sub(r"\s*\[.*?\]\s*", "", raw_name)
-        cleaned_name = re.sub(r"\s*\(.*?\)\s*", "", cleaned_name)
-        return cleaned_name.strip()
+        # Replace noise with a space (not "") so neighbouring words never fuse:
+        # "dune (unabridged) [2007] 128kbps" used to become "dune128kbps".
+        cleaned_name = re.sub(r"\[.*?\]", " ", strip_decorations(raw_name))
+        cleaned_name = re.sub(r"\{.*?\}", " ", cleaned_name)
+        cleaned_name = re.sub(r"\(.*?\)", " ", cleaned_name)
+        cleaned_name = _BITRATE_NOISE_RE.sub(" ", cleaned_name)
+        cleaned_name = _RUNTIME_NOISE_RE.sub(" ", cleaned_name)
+        cleaned_name = _SIZE_NOISE_RE.sub(" ", cleaned_name)
+        cleaned_name = re.sub(r"[\s_]+", " ", cleaned_name).strip()
+        cleaned_name = _TRAILING_FORMAT_NOISE_RE.sub("", cleaned_name)
+        cleaned_name = _LEADING_YEAR_RE.sub("", cleaned_name)
+        cleaned_name = re.sub(r"\s*(?:\.{3,})$", "", cleaned_name)
+        return re.sub(r"[\s~@\-\u2013\u2014]+$", "", cleaned_name).strip()
+
+    def _series_number_title_guess(
+        self, name: str
+    ) -> tuple[str, str, str, str | None] | None:
+        """Split "[Author - ]Series NN - Title" into (series, volume, title, author).
+
+        "Earthsea 01 - A Wizard of Earthsea" is a series and book number, not
+        an author named "Earthsea 01". Names such as "Catch 22 - Joseph
+        Heller" (an unpadded number followed by a personal name) are left for
+        the plain Title - Author handling.
+        """
+        match = _SERIES_NUMBER_TITLE_RE.match(name)
+        if match is None:
+            return None
+        series = match.group("series").strip(" _-#")
+        title = match.group("title").strip()
+        number = match.group("number")
+        author = match.group("author")
+        if not series or not title or _VOLUME_ONLY_RE.fullmatch(f"{series} 1"):
+            return None
+        if not number.startswith("0") and self._looks_like_personal_name(title):
+            return None
+        if author is not None:
+            author = author.strip()
+            if not author or self._is_implausible_author_guess(author):
+                author = None
+        return series, str(int(number)), title, author
+
+    def _tag_author_guess(self, tracks: list[Track]) -> str | None:
+        """Album artist, else artist, when the first tracks agree on it.
+
+        Placeholders ("Unknown Artist") are ignored, and so is an artist the
+        comment tag names as the reader ("Read by Wil Wheaton"): rippers
+        often put the narrator in the artist field.
+        """
+        narrators = {name.casefold() for name in self._comment_narrators(tracks[:5])}
+        for field in ("albumartist", "artist"):
+            values = {
+                str(value).strip()
+                for track in tracks[:5]
+                if (value := getattr(track.existing_tags, field, None))
+            }
+            if len(values) != 1:
+                continue
+            value = values.pop()
+            if is_placeholder_tag(value):
+                continue
+            people = {person.casefold() for person in _split_people(value)}
+            if people and people <= narrators:
+                continue
+            return value
+        return None
+
+    def _comment_narrators(self, tracks: list[Track]) -> list[str]:
+        """Narrators named in comment tags ("Read by Pam Ward")."""
+        names: list[str] = []
+        for track in tracks:
+            comment = track.existing_tags.comment
+            if not comment:
+                continue
+            match = _COMMENT_NARRATOR_RE.search(str(comment))
+            if match is None:
+                continue
+            for name in _split_people(match.group("name")):
+                if self._looks_like_personal_name(name) and name not in names:
+                    names.append(name)
+        return names
+
+    def _tag_title_guess(self, tracks: list[Track]) -> str | None:
+        """The album tag shared by every track, minus disc suffix and noise."""
+        albums: set[str] = set()
+        for track in tracks:
+            album = track.existing_tags.album
+            if not album:
+                continue
+            cleaned = self._clean_tag_value(str(album))
+            stem = self._album_disc_split(cleaned)[0] or cleaned
+            albums.add(stem)
+        if len(albums) != 1:
+            return None
+        album = albums.pop()
+        return None if is_placeholder_tag(album) else album
+
+    def _track_title_stem(self, tracks: list[Track]) -> str | None:
+        """Common title-tag stem once part numbers are removed.
+
+        "Freida McFadden - The Inmate Pt01 of 58" and "...Pt02 of 58" share
+        the stem "Freida McFadden - The Inmate".
+        """
+        stems: set[str] = set()
+        for track in tracks:
+            title = track.existing_tags.title
+            if not title:
+                return None
+            stem = re.sub(r"^\d{1,4}-\d{1,4}\s+", "", str(title))
+            stem = re.sub(
+                r"[\s_-]*\b(?:pt|part)\.?\s*\d{1,4}(?:\s*(?:of|/)\s*\d{1,4})?\s*$",
+                "",
+                stem,
+                flags=re.IGNORECASE,
+            )
+            stem = re.sub(r"[\s_-]+\d{1,4}$", "", stem)
+            stems.add(self._clean_tag_value(stem))
+        if len(stems) != 1:
+            return None
+        stem = stems.pop()
+        return None if is_placeholder_tag(stem) else stem
+
+    def _album_series_guess(
+        self, tracks: list[Track], title: str
+    ) -> tuple[str | None, str | None]:
+        """Series from an album tag such as "Alex Cross 01" next to a real title."""
+        albums = {
+            self._clean_tag_value(str(track.existing_tags.album))
+            for track in tracks
+            if track.existing_tags.album
+        }
+        if len(albums) != 1:
+            return None, None
+        album = albums.pop()
+        match = _SERIES_NUMBER_ONLY_RE.fullmatch(album)
+        if match is None or album.casefold() == title.casefold():
+            return None, None
+        series = match.group("series").strip(" -#,")
+        if not series or is_placeholder_tag(series):
+            return None, None
+        return series, str(int(match.group("number")))
+
+    @staticmethod
+    def _clean_tag_value(value: str) -> str:
+        """Drop release noise such as "(Unabridged)" from a tag value."""
+        cleaned = _TAG_NOISE_RE.sub("", strip_decorations(value))
+        return " ".join(cleaned.split())
+
+    def _names_match(self, first: str, second: str) -> bool:
+        """Whether two author strings name the same people."""
+        matcher = getattr(self, "_matcher", None)
+        if matcher is None:
+            matcher = AdvancedMatcher()
+            self._matcher = matcher
+        if matcher.match_author(first, second) >= 0.85:
+            return True
+        first_people = {p.casefold() for p in _split_people(first)}
+        second_people = {p.casefold() for p in _split_people(second)}
+        return bool(first_people) and first_people == second_people
+
+    def _looks_like_author(self, value: str) -> bool:
+        """A personal name, or a list of them ("Jocko Willink, Leif Babin")."""
+        people = _split_people(value)
+        return bool(people) and all(
+            self._looks_like_personal_name(person) for person in people
+        )

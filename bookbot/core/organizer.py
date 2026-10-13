@@ -4,8 +4,17 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field
 
+from ..config.models import Config
 from .logging import get_logger
-from .models import AudiobookSet
+from .models import AudiobookSet, ProviderIdentity
+from .planning import (
+    PlanBuilder,
+    collision_skip_order,
+    duplicate_reason,
+    self_collision_reason,
+    set_is_planned,
+    unplanned_reason,
+)
 from .templates import TemplateEngine
 
 logger = get_logger("organizer")
@@ -23,8 +32,12 @@ class ReorganizationPlan(BaseModel):
     """Complete plan for reorganizing a library."""
 
     operations: list[MoveOperation] = Field(default_factory=list)
+    source_root: Path | None = None
     conflicts: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
+    # Books left in place, as {"source_path", "reason"}: duplicates whose
+    # destination another book already claims, and books awaiting review.
+    skipped: list[dict[str, str]] = Field(default_factory=list)
 
     @property
     def total_moves(self) -> int:
@@ -58,6 +71,8 @@ class SmartOrganizer:
     def __init__(self, max_path_length: int = 255) -> None:
         self.max_path_length = max_path_length
         self.template_engine = TemplateEngine(max_path_length=max_path_length)
+        # Reused so covers/.opf/.nfo travel with their book like `apply` does.
+        self._plan_builder = PlanBuilder(Config())
 
     def propose_reorganization(
         self,
@@ -83,10 +98,21 @@ class SmartOrganizer:
         folder_template = preset["folder_template"]
         file_template = preset["file_template"]
 
-        plan = ReorganizationPlan()
+        plan = ReorganizationPlan(source_root=source_path)
         used_destinations: dict[str, str] = {}
+        claimed_by: dict[str, AudiobookSet] = {}
+        planned: dict[int, list[MoveOperation]] = {}
 
-        for ab_set in audiobook_sets:
+        for set_index in collision_skip_order(audiobook_sets):
+            ab_set = audiobook_sets[set_index]
+            if not set_is_planned(ab_set):
+                plan.skipped.append(
+                    {
+                        "source_path": str(ab_set.source_path),
+                        "reason": unplanned_reason(ab_set),
+                    }
+                )
+                continue
             identity = ab_set.chosen_identity
 
             # Generate folder name
@@ -100,44 +126,93 @@ class SmartOrganizer:
                 )
                 continue
 
-            for track in sorted(ab_set.tracks, key=lambda t: (t.disc, t.track_index)):
-                # Generate filename
-                filename = self.template_engine.generate_filename(
-                    track, ab_set, identity, template=file_template
+            moves = self._track_moves(
+                ab_set, target / folder_name, identity, file_template
+            )
+            track_keys = [str(dest).lower() for _, dest in moves]
+            if len(set(track_keys)) != len(track_keys):
+                # Presets such as "abs" name files "{Author} - {Title}",
+                # which only works for single-file books; number the tracks
+                # of a multi-file book instead of colliding.
+                moves = self._track_moves(
+                    ab_set,
+                    target / folder_name,
+                    identity,
+                    PlanBuilder.TRACK_SAFE_FILE_TEMPLATE,
                 )
+            moves.extend(
+                (companion.old_path, companion.new_path)
+                for companion in self._plan_builder._companion_operations(
+                    ab_set, target / folder_name
+                )
+            )
 
-                dest = target / folder_name / filename
+            # A book whose destinations collide with a book already planned
+            # (an exact duplicate such as "gone girl - Copy"), or with its
+            # own tracks, is left in place instead of blocking every move.
+            dest_keys = [str(dest).lower() for _, dest in moves]
+            own_duplicates = [key for key in dest_keys if dest_keys.count(key) > 1]
+            if own_duplicates:
+                reason = self_collision_reason(Path(own_duplicates[0]))
+            elif taken := [key for key in dest_keys if key in claimed_by]:
+                reason = duplicate_reason(claimed_by[taken[0]], Path(taken[0]).parent)
+            else:
+                reason = None
+            if reason is not None:
+                ab_set.needs_review = True
+                ab_set.review_reason = reason
+                plan.skipped.append(
+                    {"source_path": str(ab_set.source_path), "reason": reason}
+                )
+                continue
 
+            set_operations = planned.setdefault(set_index, [])
+            for src_path, dest in moves:
                 # Check path length
                 if len(str(dest)) > self.max_path_length:
                     plan.warnings.append(
                         f"Path too long ({len(str(dest))} chars): {dest}"
                     )
 
-                # Check for collisions
                 dest_key = str(dest).lower()
-                if dest_key in used_destinations:
-                    plan.conflicts.append(
-                        f"Path collision: {dest} (conflicts with "
-                        f"{used_destinations[dest_key]})"
-                    )
-                else:
-                    used_destinations[dest_key] = str(track.src_path)
+                used_destinations[dest_key] = str(src_path)
+                claimed_by[dest_key] = ab_set
 
                 # Check for overwriting existing files
-                if dest.exists() and dest != track.src_path:
+                if dest.exists() and dest != src_path:
                     plan.conflicts.append(f"Would overwrite existing file: {dest}")
 
-                plan.operations.append(
+                set_operations.append(
                     MoveOperation(
-                        source=track.src_path,
+                        source=src_path,
                         destination=dest,
                         audiobook_title=ab_set.raw_title_guess
                         or ab_set.source_path.name,
                     )
                 )
 
+        # Keep the scan order for the moves themselves.
+        for set_index in sorted(planned):
+            plan.operations.extend(planned[set_index])
         return plan
+
+    def _track_moves(
+        self,
+        ab_set: AudiobookSet,
+        folder: Path,
+        identity: ProviderIdentity | None,
+        file_template: str,
+    ) -> list[tuple[Path, Path]]:
+        return [
+            (
+                track.src_path,
+                folder
+                / self.template_engine.generate_filename(
+                    track, ab_set, identity, template=file_template
+                ),
+            )
+            for track in sorted(ab_set.tracks, key=lambda t: (t.disc, t.track_index))
+        ]
 
     def execute_plan(self, plan: ReorganizationPlan, dry_run: bool = True) -> bool:
         """Execute a reorganization plan.
@@ -164,6 +239,7 @@ class SmartOrganizer:
                 op.source.rename(op.destination)
                 completed.append((op.destination, op.source))
 
+            self._prune_empty_source_dirs(plan, completed)
             return True
 
         except OSError as e:
@@ -177,3 +253,20 @@ class SmartOrganizer:
                 except OSError:
                     pass
             return False
+
+    @staticmethod
+    def _prune_empty_source_dirs(
+        plan: ReorganizationPlan, completed: list[tuple[Path, Path]]
+    ) -> None:
+        """Remove source folders emptied by the move, never the library root."""
+        root = plan.source_root.resolve() if plan.source_root else None
+        for _dest, orig in completed:
+            folder = orig.parent
+            while root is not None and folder.resolve() != root:
+                if root not in folder.resolve().parents:
+                    break
+                try:
+                    folder.rmdir()
+                except OSError:
+                    break
+                folder = folder.parent

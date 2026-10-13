@@ -124,15 +124,20 @@ class SidecarManager:
                 return None
 
             authors = []
-            for creator in metadata.findall(f"{{{NS_DC}}}creator"):
+            creator_narrators = []
+            creators = metadata.findall(f"{{{NS_DC}}}creator") or metadata.findall(
+                "creator"
+            )
+            for creator in creators:
                 text = creator.text
-                if text:
+                if not text:
+                    continue
+                role = creator.get(f"{{{NS_OPF}}}role") or creator.get("role") or ""
+                # Calibre/ABS list narrators as creators with role "nrt".
+                if role.lower() == "nrt":
+                    creator_narrators.append(text.strip())
+                else:
                     authors.append(text.strip())
-            if not authors:
-                for creator in metadata.findall("creator"):
-                    text = creator.text
-                    if text:
-                        authors.append(text.strip())
 
             language = self._find_dc_text(metadata, "language")
             description = self._find_dc_text(metadata, "description")
@@ -184,6 +189,9 @@ class SidecarManager:
                     series_index = content
                 elif name == "calibre:narrator":
                     narrator = content
+
+            if narrator is None and creator_narrators:
+                narrator = ", ".join(creator_narrators)
 
             return ProviderIdentity(
                 provider="sidecar_opf",
@@ -289,7 +297,7 @@ class SidecarManager:
         tree.write(path, encoding="utf-8", xml_declaration=True)
 
     def read_metadata_json(self, path: Path) -> ProviderIdentity | None:
-        """Parse a BookLore-style .metadata.json file."""
+        """Parse a BookLore- or Audiobookshelf-style metadata.json file."""
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
             if not isinstance(data, dict):
@@ -317,16 +325,35 @@ class SidecarManager:
 
             cover_url = _coerce_scalar(data.get("coverUrl"))
 
+            # Audiobookshelf writes "series": ["Name #2"] and a "narrators"
+            # list; BookLore uses "series"/"seriesIndex" and "narrator".
+            series_name = _coerce_scalar(data.get("series"))
+            series_index = _coerce_scalar(data.get("seriesIndex"))
+            if series_name and series_index is None:
+                sequence = re.match(r"^(.*?)\s*#\s*([\d.]+)\s*$", series_name)
+                if sequence and sequence.group(1).strip():
+                    series_name = sequence.group(1).strip()
+                    series_index = sequence.group(2)
+
+            narrators = _coerce_str_list(data.get("narrators"))
+            narrator = _coerce_scalar(data.get("narrator")) or (
+                ", ".join(narrators) if narrators else None
+            )
+
+            year = _coerce_int(data.get("year"))
+            if year is None:
+                year = _coerce_int(data.get("publishedYear"))
+
             return ProviderIdentity(
                 provider="sidecar_json",
                 external_id=str(path),
                 title=title,
                 authors=authors,
-                series_name=_coerce_scalar(data.get("series")),
-                series_index=_coerce_scalar(data.get("seriesIndex")),
-                year=_coerce_int(data.get("year")),
+                series_name=series_name,
+                series_index=series_index,
+                year=year,
                 language=_coerce_scalar(data.get("language")),
-                narrator=_coerce_scalar(data.get("narrator")),
+                narrator=narrator,
                 publisher=_coerce_scalar(data.get("publisher")),
                 isbn_10=isbn_10,
                 isbn_13=isbn_13,

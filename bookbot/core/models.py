@@ -206,6 +206,9 @@ class AudiobookSet(BaseModel):
     needs_review: bool = False
     review_skipped: bool = False
     review_reason: str | None = None
+    # True for files lying directly in a folder shared with other books
+    # (typically the library root), whose name therefore is not the book's.
+    loose_files: bool = False
 
     # Validation warnings
     warnings: list[str] = Field(default_factory=list)
@@ -213,6 +216,15 @@ class AudiobookSet(BaseModel):
     @field_validator("source_path", mode="before")
     def validate_path(cls, v: str | Path) -> Path:
         return Path(v) if isinstance(v, str) else v
+
+    @property
+    def display_name(self) -> str:
+        """Name to show for the set: its folder, or the file for loose files."""
+        if self.loose_files and self.tracks:
+            if len(self.tracks) == 1:
+                return self.tracks[0].src_path.name
+            return self.raw_title_guess or self.tracks[0].src_path.stem
+        return self.source_path.name
 
     @property
     def has_multi_disc(self) -> bool:
@@ -337,7 +349,7 @@ class RenamePlan(BaseModel):
         if len(new_paths) != len(set(new_paths)):
             duplicates = [p for p in new_paths if new_paths.count(p) > 1]
             self.conflicts.extend(
-                [f"Duplicate target path: {p}" for p in set(duplicates)]
+                [f"Duplicate target path: {p}" for p in sorted(set(duplicates))]
             )
 
         for operation in self.operations:

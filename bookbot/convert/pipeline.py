@@ -182,24 +182,23 @@ class ConversionPipeline:
 
                     current_time += duration
 
-            # Step 2: Concatenate files
-            if len(aac_files) == 1:
-                # Single file - just copy
-                aac_files[0].rename(output_path)
-            else:
-                # Multiple files - concatenate
-                success = self._get_ffmpeg().concatenate_files(
-                    aac_files,
-                    output_path,
-                    chapters=chapter_data if config.create_chapters else None,
-                )
+            # Step 2: Concatenate files. A single track goes through the same
+            # path so raw ADTS output is still remuxed into an MP4 container.
+            success = self._get_ffmpeg().concatenate_files(
+                aac_files,
+                output_path,
+                chapters=chapter_data if config.create_chapters else None,
+            )
 
-                if not success:
-                    raise RuntimeError("Failed to concatenate audio files")
+            if not success:
+                raise RuntimeError("Failed to concatenate audio files")
 
-            # Step 3: Add metadata
-            if audiobook_set.chosen_identity:
-                await self._apply_metadata(output_path, audiobook_set.chosen_identity)
+            # Step 3: Add metadata (fall back to locally discovered metadata)
+            identity = audiobook_set.chosen_identity or self._local_identity(
+                audiobook_set
+            )
+            if identity:
+                await self._apply_metadata(output_path, identity)
 
             # Step 4: Embed cover art
             if config.write_cover_art and audiobook_set.chosen_identity:
@@ -214,6 +213,22 @@ class ConversionPipeline:
             # Remove temporary directory
             if temp_dir.exists():
                 temp_dir.rmdir()
+
+    @staticmethod
+    def _local_identity(audiobook_set: AudiobookSet) -> ProviderIdentity | None:
+        """Build tag metadata from scan guesses when no provider match exists."""
+        if not audiobook_set.raw_title_guess:
+            return None
+        return ProviderIdentity(
+            provider="local",
+            external_id=str(audiobook_set.source_path),
+            title=audiobook_set.raw_title_guess,
+            authors=[audiobook_set.author_guess] if audiobook_set.author_guess else [],
+            series_name=audiobook_set.series_guess,
+            series_index=audiobook_set.volume_guess,
+            narrator=audiobook_set.narrator_guess,
+            language=audiobook_set.language_guess,
+        )
 
     def _stream_copy(self, input_path: Path, output_path: Path) -> bool:
         """Stream copy a file without re-encoding."""
@@ -331,8 +346,9 @@ class ConversionPipeline:
 
         filename = self._sanitize_filename(filename)
 
+        # The directory is created when the conversion runs, so dry runs
+        # leave the filesystem untouched.
         output_dir = config.output_directory or audiobook_set.source_path.parent
-        output_dir.mkdir(parents=True, exist_ok=True)
 
         return output_dir / f"{filename}.m4b"
 

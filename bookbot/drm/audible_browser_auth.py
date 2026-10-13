@@ -63,14 +63,14 @@ def _ensure_playwright_browsers() -> bool:
             print("[OK] Browser installation complete!")
             return True
 
-        print(f"Error:Browser installation failed with code {result.returncode}")
+        print(f"Error: Browser installation failed with code {result.returncode}")
         return False
 
     except subprocess.TimeoutExpired:
-        print("Error:Browser installation timed out")
+        print("Error: Browser installation timed out")
         return False
     except (OSError, subprocess.SubprocessError) as e:
-        print(f"Error:Browser installation error: {e}")
+        print(f"Error: Browser installation error: {e}")
         return False
 
 
@@ -127,11 +127,11 @@ class AudibleBrowserAuth:
                 print("[OK]Existing authentication is valid!")
                 return True
             else:
-                print("Warning:Existing authentication expired, re-authenticating...")
+                print("Warning: Existing authentication expired, re-authenticating...")
 
         # Ensure browsers are installed before attempting authentication
         if not _ensure_playwright_browsers():
-            print("Error:Failed to install browser dependencies")
+            print("Error: Failed to install browser dependencies")
             return False
 
         print("\nOpening browser for Audible authentication...")
@@ -158,7 +158,7 @@ class AudibleBrowserAuth:
                     login_successful = self._wait_for_login(page)
 
                     if not login_successful:
-                        print("Error:Login failed or timed out")
+                        print("Error: Login failed or timed out")
                         return False
 
                     self.cookies = context.cookies()
@@ -173,7 +173,7 @@ class AudibleBrowserAuth:
                     browser.close()
 
         except (RuntimeError, ValueError, OSError) as e:
-            print(f"Error:Authentication error: {e}")
+            print(f"Error: Authentication error: {e}")
             return False
 
     def _wait_for_login(self, page: "Page", timeout: int = 300) -> bool:
@@ -227,7 +227,7 @@ class AudibleBrowserAuth:
                 time.sleep(check_interval)
 
             except Exception as e:
-                print(f"Warning:Error checking login status: {e}")
+                print(f"Warning: Error checking login status: {e}")
                 time.sleep(check_interval)
 
         print("Login timeout - no login detected within timeout period")
@@ -282,7 +282,7 @@ class AudibleBrowserAuth:
             return False
 
         except Exception as e:
-            print(f"Warning:Cookie verification failed: {e}")
+            print(f"Warning: Cookie verification failed: {e}")
             return False
 
     def _save_cookies(self) -> None:
@@ -308,7 +308,7 @@ class AudibleBrowserAuth:
                 print("[OK]Cookies saved securely to system keyring")
                 return
             except Exception as e:
-                print(f"Warning:Keyring not available ({e}), using file storage")
+                print(f"Warning: Keyring not available ({e}), using file storage")
 
         # Fallback: save to config directory
         try:
@@ -319,7 +319,7 @@ class AudibleBrowserAuth:
             cookie_file.chmod(0o600)  # Read/write for owner only
             print(f"[OK]Cookies saved to {cookie_file}")
         except Exception as e:
-            print(f"Warning:Failed to save cookies: {e}")
+            print(f"Warning: Failed to save cookies: {e}")
 
     def _load_cookies(self) -> bool:
         """
@@ -361,12 +361,12 @@ class AudibleBrowserAuth:
             saved_timestamp = cookie_data.get("timestamp", 0)
             age_days = (time.time() - saved_timestamp) / 86400
             if age_days > 30:
-                print(f"Warning:Cookies are {age_days:.0f} days old, may need refresh")
+                print(f"Warning: Cookies are {age_days:.0f} days old, may need refresh")
 
             return len(self.cookies) > 0
 
         except Exception as e:
-            print(f"Warning:Failed to load cookies: {e}")
+            print(f"Warning: Failed to load cookies: {e}")
             return False
 
     def get_cookies_dict(self) -> dict[str, str]:

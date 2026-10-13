@@ -115,6 +115,11 @@ def _create_and_save_plan(
     click.echo(f"Plan saved to {output_path}")
     click.echo(f"Review: bookbot review {output_path}")
     click.echo(f"Apply:  bookbot apply {output_path}")
+    if plan.skipped:
+        click.echo("")
+        click.echo(f"Left in place ({len(plan.skipped)} book(s), not part of apply):")
+        for item in plan.skipped:
+            click.echo(f"  - {item['source_path']}: {item['reason']}")
     if plan.conflicts:
         click.echo("")
         click.echo("Plan has conflicts and must be fixed before apply.", err=True)
@@ -194,6 +199,14 @@ async def _inspect_matches(
             await provider.close_all()
         elif hasattr(provider, "close"):
             await provider.close()
+
+
+def _match_query_text(audiobook_set: Any) -> str:
+    """Describe the lookup query: the title, plus the author when known."""
+    title = audiobook_set.raw_title_guess or audiobook_set.source_path.name
+    if audiobook_set.author_guess:
+        return f"{title} / author: {audiobook_set.author_guess}"
+    return str(title)
 
 
 def _run_review_session(
@@ -476,7 +489,7 @@ def scan(
         click.echo(f"Found {len(audiobook_sets)} audiobook set(s):")
 
         for i, audiobook_set in enumerate(audiobook_sets, 1):
-            click.echo(f"\n{i}. {audiobook_set.source_path.name}")
+            click.echo(f"\n{i}. {audiobook_set.display_name}")
             click.echo(f"   Tracks: {audiobook_set.total_tracks}")
             click.echo(f"   Discs: {audiobook_set.disc_count}")
 
@@ -486,6 +499,8 @@ def scan(
                 click.echo(f"   Author: {audiobook_set.author_guess}")
             if audiobook_set.asin_guess:
                 click.echo(f"   ASIN: {audiobook_set.asin_guess}")
+            if audiobook_set.needs_review and audiobook_set.review_reason:
+                click.echo(f"   Needs review: {audiobook_set.review_reason}")
 
             if audiobook_set.warnings:
                 click.echo("   Warnings:")
@@ -567,6 +582,8 @@ def tui(
         )
         app = BookBotApp(config_manager, list(folders), provider=provider)
         app.run()
+        if app.return_code:
+            sys.exit(app.return_code)
 
     except ImportError:
         click.echo(
@@ -623,6 +640,7 @@ def match(
                             audiobook_set.raw_title_guess
                             or audiobook_set.source_path.name
                         ),
+                        "query_author": audiobook_set.author_guess,
                         "state": state,
                         "error": error_text,
                         "candidates": [],
@@ -631,10 +649,7 @@ def match(
             else:
                 click.echo("")
                 click.echo(f"Set: {audiobook_set.source_path}")
-                click.echo(
-                    "Query: "
-                    f"{audiobook_set.raw_title_guess or audiobook_set.source_path.name}"
-                )
+                click.echo(f"Query: {_match_query_text(audiobook_set)}")
                 click.echo(f"  {error_text}")
             continue
 
@@ -647,6 +662,7 @@ def match(
                             audiobook_set.raw_title_guess
                             or audiobook_set.source_path.name
                         ),
+                        "query_author": audiobook_set.author_guess,
                         "state": state,
                         "error": None,
                         "candidates": [],
@@ -655,10 +671,7 @@ def match(
             else:
                 click.echo("")
                 click.echo(f"Set: {audiobook_set.source_path}")
-                click.echo(
-                    "Query: "
-                    f"{audiobook_set.raw_title_guess or audiobook_set.source_path.name}"
-                )
+                click.echo(f"Query: {_match_query_text(audiobook_set)}")
                 click.echo("  No matches found.")
             continue
 
@@ -670,6 +683,7 @@ def match(
                     "query": (
                         audiobook_set.raw_title_guess or audiobook_set.source_path.name
                     ),
+                    "query_author": audiobook_set.author_guess,
                     "state": state,
                     "needs_review": audiobook_set.needs_review,
                     "review_skipped": audiobook_set.review_skipped,
@@ -685,9 +699,7 @@ def match(
 
         click.echo("")
         click.echo(f"Set: {audiobook_set.source_path}")
-        click.echo(
-            f"Query: {audiobook_set.raw_title_guess or audiobook_set.source_path.name}"
-        )
+        click.echo(f"Query: {_match_query_text(audiobook_set)}")
         if audiobook_set.review_skipped:
             click.echo("Decision: Skipped by reviewer")
         elif state == "accepted_saved" and selected_candidate is not None:
@@ -889,7 +901,7 @@ def accept(
     help="Output directory for converted files",
 )
 @click.option("--profile", type=str, help="Configuration profile to use")
-@click.option("--bitrate", type=str, default="128k", help="AAC bitrate (e.g., 128k)")
+@click.option("--bitrate", type=str, help="AAC bitrate (e.g., 128k); disables VBR")
 @click.option("--vbr", type=int, help="VBR quality (1-6, overrides bitrate)")
 @click.option("--normalize", is_flag=True, help="Normalize audio levels")
 @click.option(
@@ -906,7 +918,7 @@ def convert(
     folder: Path,
     output: Path,
     profile: str | None,
-    bitrate: str,
+    bitrate: str | None,
     vbr: int | None,
     normalize: bool,
     chapters: str,
@@ -917,7 +929,7 @@ def convert(
 
     # Pre-flight check: Ensure FFmpeg is installed
     if not shutil.which("ffmpeg"):
-        click.echo("Error:Error: FFmpeg not found in PATH.", err=True)
+        click.echo("Error: FFmpeg not found in PATH.", err=True)
         click.echo("\nConversion requires FFmpeg. Please install it first:", err=True)
         click.echo("  • Debian/Ubuntu: sudo apt install ffmpeg", err=True)
         click.echo("  • macOS: brew install ffmpeg", err=True)
@@ -930,7 +942,7 @@ def convert(
     if profile:
         if not config_manager.apply_profile(profile):
             profiles = config_manager.list_profiles()
-            click.echo(f"Error:Error: Profile '{profile}' not found", err=True)
+            click.echo(f"Error: Profile '{profile}' not found", err=True)
             if profiles:
                 click.echo("\nAvailable profiles:", err=True)
                 for name, prof in profiles.items():
@@ -956,14 +968,14 @@ def convert(
             )
         else:
             click.echo(
-                "Warning:M4B conversion is currently disabled in your configuration.",
+                "Warning: M4B conversion is currently disabled in your configuration.",
                 err=True,
             )
             click.echo("")
             if click.confirm("Would you like to enable it now?", default=True):
                 config.conversion.enabled = True
                 config_manager.save_config(config)
-                click.echo("Done:Conversion enabled and saved to config.")
+                click.echo("Done: Conversion enabled and saved to config.")
             else:
                 click.echo("\nTo enable conversion manually, edit:", err=True)
                 click.echo(f"  {config_manager.config_file}", err=True)
@@ -982,7 +994,10 @@ def convert(
         if vbr:
             conv_config.use_vbr = True
             conv_config.vbr_quality = vbr
-        else:
+        elif bitrate:
+            # An explicit bitrate means CBR; otherwise the configured VBR
+            # default would silently win.
+            conv_config.use_vbr = False
             conv_config.bitrate = bitrate
         conv_config.normalize_audio = normalize
         conv_config.chapter_naming = (
@@ -998,7 +1013,7 @@ def convert(
             click.echo(f"\nConversion Plan ({len(plan.operations)} operation(s)):")
             click.echo("─" * 60)
             for i, op in enumerate(plan.operations, 1):
-                click.echo(f"\n{i}. {op.audiobook_set.source_path.name}")
+                click.echo(f"\n{i}. {op.audiobook_set.display_name}")
                 click.echo(f"   Source: {op.audiobook_set.source_path}")
                 click.echo(f"   Output: {op.output_path}")
                 if op.audiobook_set.chosen_identity:
@@ -1007,7 +1022,7 @@ def convert(
                     if identity.authors:
                         click.echo(f"   Author: {', '.join(identity.authors)}")
             click.echo("\n" + "─" * 60)
-            click.echo("Done:Dry run complete. No files were modified.")
+            click.echo("Done: Dry run complete. No files were modified.")
             click.echo("\nTo execute, run the same command without --dry-run")
         else:
             # Execute conversion
@@ -1032,13 +1047,35 @@ def convert(
         sys.exit(1)
 
 
+def _resolve_transaction_id(transaction_id: str, known_ids: set[str]) -> str:
+    """Expand a unique ID prefix (as printed by `bookbot history`)."""
+    value = transaction_id.strip().rstrip(".")
+    if not value or value in known_ids:
+        return value or transaction_id
+    matches = sorted(known_id for known_id in known_ids if known_id.startswith(value))
+    if len(matches) > 1:
+        raise click.ClickException(
+            f"Transaction ID prefix '{value}' is ambiguous; it matches: "
+            + ", ".join(matches)
+        )
+    return matches[0] if matches else value
+
+
 @cli.command()
 @click.argument("transaction_id", type=str)
 @click.pass_context
 def undo(ctx: click.Context, transaction_id: str) -> None:
-    """Undo a previous operation by transaction ID."""
+    """Undo a previous operation by transaction ID (a unique prefix works)."""
     config_manager = ctx.obj["config_manager"]
     transaction_manager = TransactionManager(config_manager)
+    transaction_id = _resolve_transaction_id(
+        transaction_id,
+        {
+            transaction["id"]
+            for transaction in transaction_manager.list_transactions(days=36500)
+            if transaction["can_undo"]
+        },
+    )
 
     try:
         if transaction_manager.undo_transaction(transaction_id):
@@ -1047,7 +1084,7 @@ def undo(ctx: click.Context, transaction_id: str) -> None:
             click.echo(f"Failed to undo transaction {transaction_id}", err=True)
             click.echo(
                 "Run 'bookbot history' to list recent transactions and their "
-                "IDs, or 'bookbot history --days 30' for older ones.",
+                "IDs, or 'bookbot history --days 365' for older ones.",
                 err=True,
             )
             sys.exit(1)
@@ -1078,6 +1115,7 @@ def recover(ctx: click.Context, transaction_id: str | None) -> None:
         return
 
     matching = {transaction["id"] for transaction in incomplete}
+    transaction_id = _resolve_transaction_id(transaction_id, matching)
     if transaction_id not in matching:
         raise click.ClickException(
             f"No interrupted operation found with ID {transaction_id}"
@@ -1169,7 +1207,7 @@ def config_set(ctx: click.Context, key: str, value: str) -> None:
     # Parse the key to get section and field
     parts = key.split(".")
     if len(parts) != 2:
-        click.echo("Error:Error: Key must be in format 'section.field'", err=True)
+        click.echo("Error: Key must be in format 'section.field'", err=True)
         click.echo("\nExamples:", err=True)
         click.echo("  bookbot config set conversion.enabled true", err=True)
         click.echo("  bookbot config set conversion.bitrate 256k", err=True)
@@ -1179,7 +1217,7 @@ def config_set(ctx: click.Context, key: str, value: str) -> None:
 
     # Get the section object
     if not hasattr(config, section):
-        click.echo(f"Error:Error: Unknown section '{section}'", err=True)
+        click.echo(f"Error: Unknown section '{section}'", err=True)
         click.echo("\nAvailable sections: conversion, tagging, providers", err=True)
         sys.exit(1)
 
@@ -1187,33 +1225,41 @@ def config_set(ctx: click.Context, key: str, value: str) -> None:
 
     # Check if field exists
     if not hasattr(section_obj, field):
-        click.echo(
-            f"Error:Error: Unknown field '{field}' in section '{section}'", err=True
-        )
+        click.echo(f"Error: Unknown field '{field}' in section '{section}'", err=True)
         sys.exit(1)
 
     # Convert value to appropriate type
     original_value = getattr(section_obj, field)
     converted_value: object = value
     if isinstance(original_value, bool):
-        converted_value = value.lower() in ("true", "yes", "1", "on")
+        lowered = value.lower()
+        if lowered in ("true", "yes", "1", "on"):
+            converted_value = True
+        elif lowered in ("false", "no", "0", "off"):
+            converted_value = False
+        else:
+            click.echo(
+                f"Error: '{value}' is not a valid boolean (use true or false)",
+                err=True,
+            )
+            sys.exit(1)
     elif isinstance(original_value, int):
         try:
             converted_value = int(value)
         except ValueError:
-            click.echo(f"Error:Error: '{value}' is not a valid integer", err=True)
+            click.echo(f"Error: '{value}' is not a valid integer", err=True)
             sys.exit(1)
     elif isinstance(original_value, float):
         try:
             converted_value = float(value)
         except ValueError:
-            click.echo(f"Error:Error: '{value}' is not a valid number", err=True)
+            click.echo(f"Error: '{value}' is not a valid number", err=True)
             sys.exit(1)
 
     # Set the value
     setattr(section_obj, field, converted_value)
     config_manager.save_config(config)
-    click.echo(f"Done:Set {key} = {value}")
+    click.echo(f"Done: Set {key} = {value}")
 
 
 @config.command("get")
@@ -1231,22 +1277,20 @@ def config_get(ctx: click.Context, key: str) -> None:
     # Parse the key
     parts = key.split(".")
     if len(parts) != 2:
-        click.echo("Error:Error: Key must be in format 'section.field'", err=True)
+        click.echo("Error: Key must be in format 'section.field'", err=True)
         sys.exit(1)
 
     section, field = parts
 
     # Get the value
     if not hasattr(config, section):
-        click.echo(f"Error:Error: Unknown section '{section}'", err=True)
+        click.echo(f"Error: Unknown section '{section}'", err=True)
         sys.exit(1)
 
     section_obj = getattr(config, section)
 
     if not hasattr(section_obj, field):
-        click.echo(
-            f"Error:Error: Unknown field '{field}' in section '{section}'", err=True
-        )
+        click.echo(f"Error: Unknown field '{field}' in section '{section}'", err=True)
         sys.exit(1)
 
     value = getattr(section_obj, field)
@@ -1277,14 +1321,12 @@ def config_edit(ctx: click.Context) -> None:
 
     try:
         subprocess.run([editor, str(config_file)], check=True)
-        click.echo("Done:Configuration file closed")
+        click.echo("Done: Configuration file closed")
     except subprocess.CalledProcessError:
-        click.echo(
-            f"Error:Error opening editor. Edit manually: {config_file}", err=True
-        )
+        click.echo(f"Error opening editor. Edit manually: {config_file}", err=True)
         sys.exit(1)
     except FileNotFoundError:
-        click.echo(f"Error:Editor '{editor}' not found.", err=True)
+        click.echo(f"Error: Editor '{editor}' not found.", err=True)
         click.echo(f"\nEdit manually: {config_file}", err=True)
         sys.exit(1)
 
@@ -1392,7 +1434,7 @@ def provider_list(ctx: click.Context) -> None:
             click.echo(f"   Requires API Key: {info['requires_api_key']}")
 
             if provider_id == "googlebooks" and info.get("api_key_provided") is False:
-                click.echo("   Warning:API key not configured - provider disabled")
+                click.echo("   Warning: API key not configured - provider disabled")
             if "marketplace" in info:
                 click.echo(f"   Marketplace: {info['marketplace']}")
 
@@ -1797,17 +1839,17 @@ def audible_auth(ctx: click.Context, country: str) -> None:
             )
         else:
             click.echo(
-                "Error:Authentication failed. Please try again.",
+                "Error: Authentication failed. Please try again.",
                 err=True,
             )
             sys.exit(1)
 
     except ImportError as e:
-        click.echo(f"Error:Missing dependency: {e}", err=True)
+        click.echo(f"Error: Missing dependency: {e}", err=True)
         click.echo("Install the audible package with: pip install audible", err=True)
         sys.exit(1)
     except Exception as e:
-        click.echo(f"Error:Authentication failed: {e}", err=True)
+        click.echo(f"Error: Authentication failed: {e}", err=True)
         sys.exit(1)
 
 
@@ -1840,7 +1882,7 @@ def audible_import(
         cache_file = _audible_library_cache_file(ctx.obj["config_manager"])
         if not cache_file.exists():
             click.echo(
-                "Error:No library cache found. Run 'bookbot audible list' first.",
+                "Error: No library cache found. Run 'bookbot audible list' first.",
                 err=True,
             )
             sys.exit(1)
@@ -1852,14 +1894,14 @@ def audible_import(
         try:
             book_indices = [int(n.strip()) - 1 for n in numbers.split(",") if n.strip()]
         except ValueError:
-            click.echo("Error:Invalid book numbers. Use format: 1,2,3", err=True)
+            click.echo("Error: Invalid book numbers. Use format: 1,2,3", err=True)
             sys.exit(1)
 
         # Validate indices
         invalid = [i + 1 for i in book_indices if i < 0 or i >= len(library)]
         if invalid:
             click.echo(
-                f"Error:Invalid book numbers: {invalid}. "
+                f"Error: Invalid book numbers: {invalid}. "
                 f"Library has {len(library)} books.",
                 err=True,
             )
@@ -1875,7 +1917,7 @@ def audible_import(
         # Check if authenticated
         if not client._load_stored_auth():
             click.echo(
-                "Error:Not authenticated. Run 'bookbot audible auth' first.", err=True
+                "Error: Not authenticated. Run 'bookbot audible auth' first.", err=True
             )
             sys.exit(1)
 
@@ -1918,11 +1960,11 @@ def audible_import(
                             click.echo(f"  [OK]DRM removed: {result.output_file}")
                         else:
                             click.echo(
-                                f"  Error:DRM removal failed: {result.error_message}",
+                                f"  Error: DRM removal failed: {result.error_message}",
                                 err=True,
                             )
             else:
-                click.echo("  Error:Download failed")
+                click.echo("  Error: Download failed")
 
             click.echo("")
 
@@ -1934,8 +1976,8 @@ def audible_import(
 
 
 @audible.command("get-activation-bytes")
-@click.option("--username", prompt=True)
-@click.option("--password", prompt=True, hide_input=True)
+@click.option("--username", help="Audible username (prompted when omitted)")
+@click.option("--password", help="Audible password (prompted when omitted)")
 @click.option(
     "--credential-storage",
     type=click.Choice(["keyring", "file"]),
@@ -1949,12 +1991,33 @@ def audible_import(
     help="us (default) / au / in / de / fr / jp / uk (untested)",
 )
 def get_activation_bytes(
-    username: str,
-    password: str,
+    username: str | None,
+    password: str | None,
     credential_storage: str,
     lang: str,
 ) -> None:
     """Get activation bytes from Audible using your username and password."""
+    # Check the optional browser dependency before asking for credentials.
+    try:
+        from selenium import webdriver  # type: ignore[import-not-found]
+    except ImportError:
+        click.echo(
+            "Error: this command needs Selenium and a Chrome/Chromium chromedriver.",
+            err=True,
+        )
+        click.echo("  Install Selenium:     pip install selenium", err=True)
+        click.echo(
+            "  Install chromedriver: e.g. 'sudo apt install chromium-driver' or "
+            "'brew install chromedriver', and make sure it is on your PATH.",
+            err=True,
+        )
+        sys.exit(1)
+
+    if username is None:
+        username = click.prompt("Username")
+    if password is None:
+        password = click.prompt("Password", hide_input=True)
+
     try:
         import base64
         import binascii
@@ -1962,7 +2025,6 @@ def get_activation_bytes(
         from urllib.parse import parse_qsl, urlencode, urlparse
 
         import requests  # type: ignore[import-untyped]
-        from selenium import webdriver  # type: ignore[import-not-found]
 
         def extract_activation_bytes(data: bytes):  # type: ignore[no-untyped-def]
             if (b"BAD_LOGIN" in data or b"Whoops" in data) or b"group_id" not in data:
@@ -2026,8 +2088,15 @@ def get_activation_bytes(
         else:
             chromedriver_path = "./chromedriver"
 
+        # Selenium 4.10+ removed the executable_path argument; the driver
+        # binary is passed through a Service object instead.
+        from selenium.webdriver.chrome.service import (  # type: ignore[import-not-found]
+            Service,
+        )
+        from selenium.webdriver.common.by import By  # type: ignore[import-not-found]
+
         with webdriver.Chrome(
-            options=opts, executable_path=chromedriver_path
+            options=opts, service=Service(executable_path=chromedriver_path)
         ) as driver:
             payload = {
                 "openid.ns": "http://specs.openid.net/auth/2.0",
@@ -2059,9 +2128,9 @@ def get_activation_bytes(
             driver.get(base_url + "?ipRedirectOverride=true")
             driver.get(url)
 
-            search_box = driver.find_element_by_id("ap_email")
+            search_box = driver.find_element(By.ID, "ap_email")
             search_box.send_keys(username)
-            search_box = driver.find_element_by_id("ap_password")
+            search_box = driver.find_element(By.ID, "ap_password")
             search_box.send_keys(password)
             search_box.submit()
             import time
@@ -2140,7 +2209,7 @@ def audible_list(ctx: click.Context, limit: int | None) -> None:
         # Check if authenticated
         if not client._load_stored_auth():
             click.echo(
-                "Error:Not authenticated. Run 'bookbot audible auth' first.",
+                "Error: Not authenticated. Run 'bookbot audible auth' first.",
                 err=True,
             )
             sys.exit(1)
@@ -2331,7 +2400,7 @@ def drm_remove(
                     click.echo("[OK]Activation bytes fetched successfully!")
                 else:
                     click.echo(
-                        "Warning:Could not automatically fetch activation bytes."
+                        "Warning: Could not automatically fetch activation bytes."
                     )
         except ImportError:
             pass
@@ -2577,6 +2646,11 @@ def organize(
         for warning in plan.warnings:
             click.echo(f"  [?] {warning}")
 
+    if plan.skipped:
+        click.echo(f"\nLeft in place ({len(plan.skipped)} book(s)):")
+        for item in plan.skipped:
+            click.echo(f"  [-] {item['source_path']}: {item['reason']}")
+
     # Show sample of moves
     shown = 0
     for op in plan.operations[:20]:
@@ -2787,15 +2861,25 @@ def m4b_merge(
     from .convert.ffmpeg import FFmpegWrapper
     from .core.discovery import AudioFileScanner
 
-    scanner = AudioFileScanner(recursive=False)
+    # Recurse so multi-disc books (CD1/, Disc 2/, ...) are found as one set.
+    scanner = AudioFileScanner(recursive=True)
     audiobook_sets = scanner.scan_directory(folder)
 
     if not audiobook_sets:
         click.echo("No audio files found.")
         return
+    if len(audiobook_sets) > 1:
+        click.echo(
+            f"Found {len(audiobook_sets)} audiobooks in {folder}; "
+            "point merge at a single book folder.",
+            err=True,
+        )
+        sys.exit(1)
 
     ab_set = audiobook_sets[0]
-    input_files = sorted([t.src_path for t in ab_set.tracks], key=lambda p: p.name)
+    input_files = [
+        t.src_path for t in sorted(ab_set.tracks, key=lambda t: (t.disc, t.track_index))
+    ]
 
     click.echo(f"Merging {len(input_files)} files into {output}...")
 

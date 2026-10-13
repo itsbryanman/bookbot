@@ -1,7 +1,6 @@
 """Template engine for filename generation."""
 
 import re
-import string
 import unicodedata
 from pathlib import Path
 
@@ -11,6 +10,11 @@ from .models import AudiobookSet, ProviderIdentity, Track
 
 class TemplateEngine:
     """Generates filenames from templates and metadata."""
+
+    # Lowercase surname particles kept with the family name in "Last, First".
+    _SURNAME_PARTICLES = frozenset(
+        {"da", "de", "del", "della", "der", "des", "di", "du", "la", "le", "van", "von"}
+    )
 
     # Characters that are forbidden in filenames on various filesystems
     FORBIDDEN_CHARS = {"windows": r'<>:"/\\|?*', "unix": r"/", "common": r'<>:"/\\|?*'}
@@ -220,26 +224,90 @@ class TemplateEngine:
         else:  # AS_IS
             return text
 
+    # Articles, conjunctions, and short prepositions stay lowercase in titles
+    # unless they start or end the title or follow a colon or dash.
+    _SMALL_WORDS = frozenset(
+        {
+            "a", "an", "and", "as", "at", "but", "by", "for", "in", "nor",
+            "of", "on", "or", "per", "the", "to", "via", "vs",
+        }
+    )  # fmt: skip
+
     def _smart_title_case(self, text: str) -> str:
         """Apply smart title case that handles articles and prepositions."""
         if not text:
             return text
 
-        return string.capwords(text)
+        words = text.split()
+        result: list[str] = []
+        for index, word in enumerate(words):
+            starts_phrase = index == 0 or words[index - 1].endswith((":", "-", "—"))
+            is_last = index == len(words) - 1
+            if (
+                not starts_phrase
+                and not is_last
+                and word.lower() in self._SMALL_WORDS
+                and (word.islower() or word.istitle())
+            ):
+                result.append(word.lower())
+            else:
+                result.append(self._title_case_word(word))
+        return " ".join(result)
+
+    @staticmethod
+    def _title_case_word(word: str) -> str:
+        """Capitalize a word, keeping initials (J.R.R.) and names like McCarthy."""
+        rest = word[1:]
+        has_mixed_case = any(c.isupper() for c in rest) and any(
+            c.islower() for c in rest
+        )
+        if "." in word or has_mixed_case:
+            return word[:1].upper() + rest
+        if any(c.isdigit() for c in word) and word.upper() == word:
+            # Alphanumeric names such as "NOS4A2" are written as given.
+            return word
+        return word.capitalize()
+
+    def _primary_author(self, author: str) -> str:
+        """Pick the first name out of a list like "Jocko Willink, Leif Babin"."""
+        parts = [
+            part.strip()
+            for part in re.split(r"\s*(?:,|;|&|\band\b)\s*", author)
+            if part.strip()
+        ]
+        if len(parts) < 2:
+            return author.strip()
+        if ";" in author or "&" in author or re.search(r"\band\b", author):
+            return parts[0]
+        # "Le Guin, Ursula K." and "Tolkien, J.R.R." are one author written
+        # surname-first; "Jocko Willink, Leif Babin" is two authors.
+        first_words = parts[0].split()
+        surname_first = len(parts) == 2 and (
+            len(first_words) == 1 or first_words[0].lower() in self._SURNAME_PARTICLES
+        )
+        return author.strip() if surname_first else parts[0]
 
     def _format_author_last_first(self, author: str) -> str:
         """Format author name as 'Last, First'."""
+        author = self._primary_author(author)
         # Already in "Last, First" form (e.g. re-scanning our own output):
         # pass through unchanged instead of re-flipping into "J., Sobol, Donald".
         if "," in author:
             return author.strip()
-        # Simple heuristic: assume last word is surname
+        # Simple heuristic: assume last word is surname, keeping lowercase-able
+        # particles with it ("Le Guin", "van Beethoven", "de la Cruz").
         parts = author.strip().split()
         if len(parts) <= 1:
             return author
 
-        last_name = parts[-1]
-        first_names = " ".join(parts[:-1])
+        surname_start = len(parts) - 1
+        while (
+            surname_start > 1
+            and parts[surname_start - 1].lower() in self._SURNAME_PARTICLES
+        ):
+            surname_start -= 1
+        last_name = " ".join(parts[surname_start:])
+        first_names = " ".join(parts[:surname_start])
         return f"{last_name}, {first_names}"
 
     def _shorten_title(self, title: str, max_length: int = 30) -> str:
@@ -264,10 +332,27 @@ class TemplateEngine:
         cleaned = re.sub(r"^[\d\s._-]+", "", stem).replace("_", " ").strip()
         return cleaned or stem or "Track"
 
+    @staticmethod
+    def _soften_punctuation(text: str) -> str:
+        """Rewrite characters that filesystems reject into readable equivalents.
+
+        "What If?: Serious Answers" becomes "What If - Serious Answers" rather
+        than "What If__ Serious Answers".
+        """
+        text = re.sub(r"\s*:\s*", " - ", text)
+        text = text.replace("?", "").replace('"', "'")
+        text = re.sub(r"\s*\|\s*", " - ", text)
+        text = text.replace("<", "").replace(">", "")
+        text = re.sub(r"(?:\s+-)+\s+", " - ", text)
+        return re.sub(r"\s{2,}", " ", text).strip()
+
     def _normalize_path(self, path: str) -> str:
         """Normalize a path string for filesystem safety."""
         if self.unicode_normalize:
             path = unicodedata.normalize("NFC", path)
+        path = "/".join(
+            self._soften_punctuation(part) for part in re.split(r"[\\/]", path)
+        )
 
         parts = re.split(r"[\\/]", path)
         normalized_parts: list[str] = []
@@ -295,6 +380,7 @@ class TemplateEngine:
         """Normalize a filename for filesystem safety."""
         if self.unicode_normalize:
             filename = unicodedata.normalize("NFC", filename)
+        filename = self._soften_punctuation(filename)
 
         # Replace forbidden characters
         forbidden = self.FORBIDDEN_CHARS["common"]

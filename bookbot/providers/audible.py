@@ -1,21 +1,28 @@
 """Audible provider for audiobook metadata (metadata only, no DRM operations)."""
 
-import asyncio
 import re
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import aiohttp
-from bs4 import BeautifulSoup
 
+from ..core.matching import filter_author_names
 from ..core.models import MatchCandidate, MatchConfidence, ProviderIdentity
-from .base import MetadataProvider
+from .base import NETWORK_ERRORS, MetadataProvider
 
 if TYPE_CHECKING:
     from ..io.cache import CacheManager
 
 
 class AudibleProvider(MetadataProvider):
-    """Provider for Audible audiobook metadata."""
+    """Provider for Audible audiobook metadata.
+
+    Uses the public Audible catalog API (``api.audible.<tld>``), which needs no
+    authentication and returns structured JSON. The storefront HTML pages are
+    not used: they sit behind bot protection and answer automated requests
+    with HTTP 503.
+    """
+
+    RESPONSE_GROUPS = "contributors,product_desc,product_attrs,series,media"
 
     def __init__(
         self,
@@ -39,27 +46,20 @@ class AudibleProvider(MetadataProvider):
             "IN": "audible.in",
         }
 
-        self.base_domain = self.marketplaces.get(marketplace, "audible.com")
+        self.base_domain = self.marketplaces.get(self.marketplace, "audible.com")
+        self.api_base = f"https://api.{self.base_domain}"
         self.session: aiohttp.ClientSession | None = None
 
     async def _get_session(self) -> aiohttp.ClientSession:
         """Get or create HTTP session."""
         if self.session is None or self.session.closed:
             self.session = aiohttp.ClientSession(
-                timeout=aiohttp.ClientTimeout(total=30),
+                timeout=self._client_timeout(),
                 headers={
                     "User-Agent": (
-                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                        "AppleWebKit/537.36 (KHTML, like Gecko) "
-                        "Chrome/91.0.4472.124 Safari/537.36"
+                        "BookBot/0.3.0 (https://github.com/itsbryanman/BookBot)"
                     ),
-                    "Accept": (
-                        "text/html,application/xhtml+xml,application/xml;q=0.9,"
-                        "image/webp,*/*;q=0.8"
-                    ),
-                    "Accept-Language": "en-US,en;q=0.5",
-                    "Accept-Encoding": "gzip, deflate",
-                    "Connection": "keep-alive",
+                    "Accept": "application/json",
                 },
             )
         return self.session
@@ -68,6 +68,29 @@ class AudibleProvider(MetadataProvider):
         """Close HTTP session."""
         if self.session and not self.session.closed:
             await self.session.close()
+
+    async def _get_json(
+        self, path: str, params: dict[str, str]
+    ) -> dict[str, Any] | None:
+        """GET a catalog API path; ``None`` on any failure.
+
+        Connection failures, timeouts and 5xx answers are recorded as network
+        failures so the provider manager can tell "unreachable" from "no
+        results".
+        """
+        try:
+            session = await self._get_session()
+            async with session.get(f"{self.api_base}{path}", params=params) as resp:
+                if resp.status != 200:
+                    self._note_http_status(resp.status)
+                    return None
+                data = await resp.json(content_type=None)
+        except NETWORK_ERRORS as exc:
+            self._record_network_failure(exc)
+            return None
+        except (aiohttp.ClientError, ValueError):
+            return None
+        return data if isinstance(data, dict) else None
 
     async def search(
         self,
@@ -80,59 +103,52 @@ class AudibleProvider(MetadataProvider):
         language: str | None = None,
         limit: int = 10,
     ) -> list[ProviderIdentity]:
-        """Search for audiobooks using Audible search."""
-        session = await self._get_session()
+        """Search the Audible catalog.
 
-        # Build search query
-        query_parts = []
-        if title:
-            query_parts.append(title)
-        if author:
-            query_parts.append(author)
-        if series:
-            query_parts.append(series)
-
-        if not query_parts:
-            return []
-
-        query = " ".join(query_parts)
-
-        # Audible search URL
-        search_url = f"https://www.{self.base_domain}/search"
-        params = {
-            "keywords": query,
-            "node": "18573211011",  # Audible Books & Originals category
+        Title and author go into their dedicated fields: the catalog ranks
+        free-text ``keywords`` searches by popularity, so "Rock Paper Scissors
+        Alice Feeney" returns unrelated bestsellers first. The series name is
+        not sent; it narrows results to nothing more often than it helps.
+        """
+        params: dict[str, str] = {
+            "num_results": str(max(1, min(limit, 50))),
+            "products_sort_by": "Relevance",
+            "response_groups": self.RESPONSE_GROUPS,
         }
-
-        try:
-            async with session.get(search_url, params=params) as response:
-                if response.status != 200:
-                    return []
-
-                html = await response.text()
-                identities = self._parse_search_results(html)
-
-                return identities[:limit]
-
-        except (aiohttp.ClientError, asyncio.TimeoutError):
+        if title:
+            params["title"] = title
+        if author:
+            params["author"] = author
+        if isbn and not title and not author:
+            params["keywords"] = isbn
+        if not any(key in params for key in ("title", "author", "keywords")):
             return []
+
+        data = await self._get_json("/1.0/catalog/products", params)
+        if not data:
+            return []
+
+        identities: list[ProviderIdentity] = []
+        for product in data.get("products") or []:
+            if isinstance(product, dict):
+                identity = self._parse_product(product)
+                if identity is not None:
+                    identities.append(identity)
+        return identities[:limit]
 
     async def get_by_id(self, external_id: str) -> ProviderIdentity | None:
         """Get audiobook details by Audible ASIN."""
-        session = await self._get_session()
-
-        product_url = f"https://www.{self.base_domain}/pd/{external_id}"
-
-        try:
-            async with session.get(product_url) as response:
-                if response.status != 200:
-                    return None
-
-                html = await response.text()
-                return self._parse_product_page(html, external_id)
-
-        except (aiohttp.ClientError, asyncio.TimeoutError):
+        asin = external_id.strip().upper()
+        if not asin:
             return None
+        data = await self._get_json(
+            f"/1.0/catalog/products/{asin}",
+            {"response_groups": self.RESPONSE_GROUPS},
+        )
+        product = data.get("product") if data else None
+        if not isinstance(product, dict):
+            return None
+        return self._parse_product(product)
 
     async def _try_asin_lookup(self, asin: str) -> MatchCandidate | None:
         """Resolve an ASIN directly via get_by_id."""
@@ -146,251 +162,75 @@ class AudibleProvider(MetadataProvider):
             )
         return None
 
-    def _parse_search_results(self, html: str) -> list[ProviderIdentity]:
-        """Parse Audible search results HTML."""
-        soup = BeautifulSoup(html, "html.parser")
-        identities: list[ProviderIdentity] = []
-
-        for item in soup.select("[data-asin]"):
-            asin_raw = item.get("data-asin")
-            asin = str(asin_raw) if asin_raw else ""
-            if not asin:
-                continue
-
-            title_tag = item.select_one("h3.bc-heading")
-            if not title_tag:
-                continue
-
-            link = title_tag.find("a")
-            title = self._clean_text(link.get_text() if link else title_tag.get_text())
-            if not title:
-                continue
-
-            author_elements = item.select("li.authorLabel a")
-            if not author_elements:
-                # fallback to any text inside author label
-                author_container = item.select_one("li.authorLabel")
-                author_text = (
-                    self._clean_text(author_container.get_text())
-                    if author_container
-                    else ""
-                )
-                authors = [author_text] if author_text else []
-            else:
-                authors = [self._clean_text(a.get_text()) for a in author_elements]
-
-            cover_tag = item.select_one("img")
-            cover_urls: list[str] = []
-            if cover_tag and cover_tag.get("src"):
-                cover_url_raw = cover_tag.get("src")
-                cover_url = str(cover_url_raw) if cover_url_raw else ""
-                if cover_url.startswith("//"):
-                    cover_url = "https:" + cover_url
-                if cover_url:
-                    cover_urls.append(cover_url)
-
-            product_href_raw = link.get("href") if link else None
-            product_href = str(product_href_raw) if product_href_raw else None
-            if product_href and product_href.startswith("/"):
-                product_url = f"https://www.{self.base_domain}{product_href}"
-            else:
-                product_url = (
-                    product_href or f"https://www.{self.base_domain}/pd/{asin}"
-                )
-
-            identity = ProviderIdentity(
-                provider=self.name,
-                external_id=asin,
-                title=title,
-                authors=authors,
-                series_name=None,
-                series_index=None,
-                year=None,
-                language="en",
-                asin=asin,
-                narrator=None,
-                cover_urls=cover_urls,
-                description="",
-                raw_data={
-                    "marketplace": self.marketplace,
-                    "product_url": product_url,
-                },
-            )
-            identities.append(identity)
-
-        return identities
-
-    def _parse_product_page(self, html: str, asin: str) -> ProviderIdentity | None:
-        """Parse Audible product page for detailed information."""
-
-        soup = BeautifulSoup(html, "html.parser")
-
-        title_tag = soup.select_one("h1.bc-heading")
-        if not title_tag:
+    def _parse_product(self, product: dict[str, Any]) -> ProviderIdentity | None:
+        """Convert a catalog API product into a ProviderIdentity."""
+        asin = str(product.get("asin") or "").strip().upper()
+        title = self._clean_text(str(product.get("title") or ""))
+        if not asin or not title:
             return None
-        title = self._clean_text(title_tag.get_text())
 
-        author_elements = soup.select("li.authorLabel a")
-        authors = [
-            self._clean_text(a.get_text())
-            for a in author_elements
-            if a.get_text(strip=True)
-        ]
+        def names(key: str) -> list[str]:
+            people = product.get(key) or []
+            return [
+                self._clean_text(str(person.get("name")))
+                for person in people
+                if isinstance(person, dict) and person.get("name")
+            ]
 
-        if not authors:
-            # fallback to regex as last resort
-            authors = []
-            author_pattern = (
-                r'<span[^>]*class="[^"]*bc-text[^"]*"[^>]*>\s*By:\s*</span>.*?'
-                r"<a[^>]*>([^<]+)</a>"
-            )
-            for match in re.finditer(author_pattern, html, re.IGNORECASE):
-                author = self._clean_text(match.group(1))
-                if author:
-                    authors.append(author)
-
-        narrator_elements = soup.select("li.narratorLabel a")
-        narrator = None
-        if narrator_elements:
-            narrator = self._clean_text(narrator_elements[0].get_text())
-        else:
-            narrator_pattern = (
-                r'<span[^>]*class="[^"]*bc-text[^"]*"[^>]*>\s*Narrated by:\s*</span>.*?'
-                r"<a[^>]*>([^<]+)</a>"
-            )
-            narrator_match = re.search(narrator_pattern, html, re.IGNORECASE)
-            if narrator_match:
-                narrator = self._clean_text(narrator_match.group(1))
+        authors = filter_author_names(names("authors"))
+        narrators = names("narrators")
 
         series_name = None
         series_index = None
-        series_link = soup.select_one("li.seriesLabel a")
-        if series_link:
-            series_text = self._clean_text(series_link.get_text())
-            book_num_match = re.search(
-                r"(.+?),?\s*Book\s*(\d+)", series_text, re.IGNORECASE
-            )
-            if book_num_match:
-                series_name = book_num_match.group(1).strip()
-                try:
-                    series_index = int(book_num_match.group(2))
-                except ValueError:
-                    series_index = None
-            else:
-                series_name = series_text
-        else:
-            series_pattern = (
-                r'<span[^>]*class="[^"]*bc-text[^"]*"[^>]*>\s*Series:\s*</span>.*?'
-                r"<a[^>]*>([^<]+)</a>"
-            )
-            series_match = re.search(series_pattern, html, re.IGNORECASE)
-            if series_match:
-                series_text = self._clean_text(series_match.group(1))
-                book_num_match = re.search(
-                    r"(.+?),?\s*Book\s*(\d+)", series_text, re.IGNORECASE
-                )
-                if book_num_match:
-                    series_name = book_num_match.group(1).strip()
-                    try:
-                        series_index = int(book_num_match.group(2))
-                    except ValueError:
-                        series_index = None
-                else:
-                    series_name = series_text
+        series = product.get("series") or []
+        if isinstance(series, list) and series and isinstance(series[0], dict):
+            series_name = self._clean_text(str(series[0].get("title") or "")) or None
+            sequence = series[0].get("sequence")
+            series_index = str(sequence).strip() if sequence else None
 
-        # Release year
         year = None
-        release_element = soup.select_one(
-            "li.releaseDateLabel span[data-qa='release-date']"
+        release = str(product.get("release_date") or product.get("issue_date") or "")
+        year_match = re.match(r"(\d{4})", release)
+        if year_match:
+            year = int(year_match.group(1))
+
+        runtime = product.get("runtime_length_min")
+        runtime_minutes = runtime if isinstance(runtime, int) and runtime > 0 else None
+
+        images = product.get("product_images") or {}
+        cover_urls: list[str] = []
+        if isinstance(images, dict) and images:
+            largest = max(images, key=lambda size: int(size) if size.isdigit() else 0)
+            cover_urls.append(str(images[largest]))
+
+        format_type = product.get("format_type")
+        description = product.get("merchandising_summary") or product.get(
+            "publisher_summary"
         )
-        if release_element:
-            year_match = re.search(r"(\d{4})", release_element.get_text())
-            if year_match:
-                year = int(year_match.group(1))
-        else:
-            date_pattern = (
-                r'<span[^>]*class="[^"]*bc-text[^"]*"[^>]*>\s*Release date:\s*</span>'
-                r"\s*<span[^>]*>([^<]+)</span>"
-            )
-            date_match = re.search(date_pattern, html, re.IGNORECASE)
-            if date_match:
-                date_str = self._clean_text(date_match.group(1))
-                year_match = re.search(r"(\d{4})", date_str)
-                if year_match:
-                    year = int(year_match.group(1))
-
-        description = ""
-        description_container = soup.select_one(
-            "div.bc-section.productPublisherSummary"
-        )
-        if description_container:
-            description = self._clean_text(description_container.get_text())
-        else:
-            desc_pattern = (
-                r'<span[^>]*class="[^"]*bc-text[^"]*"[^>]*>'
-                r"\s*Publisher.?s Summary\s*</span>.*?"
-                r"<span[^>]*>([^<]+)</span>"
-            )
-            desc_match = re.search(desc_pattern, html, re.IGNORECASE | re.DOTALL)
-            if desc_match:
-                description = self._clean_text(desc_match.group(1))
-
-        cover_urls_list: list[str] = []
-        cover_img = soup.select_one("img.bc-image-inset-border")
-        if cover_img and cover_img.get("src"):
-            cover_url_raw = cover_img.get("src")
-            cover_url = str(cover_url_raw) if cover_url_raw else ""
-            if cover_url.startswith("//"):
-                cover_url = "https:" + cover_url
-            if cover_url:
-                cover_urls_list.append(cover_url)
-        else:
-            cover_pattern = (
-                r'<img[^>]*src="([^"]*audible[^"]*\.(jpg|png))"[^>]*'
-                r'class="[^"]*bc-image-inset-border[^"]*"'
-            )
-            cover_match = re.search(cover_pattern, html, re.IGNORECASE)
-            if cover_match:
-                cover_url = cover_match.group(1)
-                if cover_url.startswith("//"):
-                    cover_url = "https:" + cover_url
-                cover_urls_list.append(cover_url)
-
-        runtime = None
-        runtime_element = soup.select_one("li.runtimeLabel span")
-        if runtime_element:
-            runtime = self._clean_text(runtime_element.get_text())
-        else:
-            runtime_pattern = (
-                r'<span[^>]*class="[^"]*bc-text[^"]*"[^>]*>\s*Length:\s*</span>'
-                r"\s*<span[^>]*>([^<]+)</span>"
-            )
-            runtime_match = re.search(runtime_pattern, html, re.IGNORECASE)
-            if runtime_match:
-                runtime = self._clean_text(runtime_match.group(1))
-
-        # Parse runtime string into minutes (e.g. "16 hrs and 12 mins")
-        runtime_minutes = self._parse_runtime_to_minutes(runtime)
 
         return ProviderIdentity(
             provider=self.name,
             external_id=asin,
             title=title,
             authors=authors,
+            narrator=", ".join(narrators) if narrators else None,
             series_name=series_name,
-            series_index=str(series_index) if series_index is not None else None,
+            series_index=series_index,
             year=year,
-            language="en",  # Audible is primarily English
+            language=product.get("language") or None,
+            publisher=product.get("publisher_name") or None,
+            description=self._clean_text(re.sub(r"<[^>]+>", " ", str(description)))
+            if description
+            else None,
+            edition=str(format_type) if format_type else None,
             asin=asin,
-            narrator=narrator,
             runtime_minutes=runtime_minutes,
-            cover_urls=cover_urls_list,
-            description=description,
+            cover_urls=cover_urls,
             raw_data={
                 "marketplace": self.marketplace,
                 "product_url": f"https://www.{self.base_domain}/pd/{asin}",
-                "narrator": narrator,
-                "runtime": runtime,
+                "subtitle": product.get("subtitle"),
+                "narrator": ", ".join(narrators) if narrators else None,
             },
         )
 

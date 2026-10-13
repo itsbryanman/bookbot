@@ -4,9 +4,13 @@ import base64
 import binascii
 import hashlib
 import sys
+from typing import TYPE_CHECKING
 
 import requests
-from selenium import webdriver
+
+if TYPE_CHECKING:
+    # Selenium is an optional dependency; only the type annotation needs it.
+    from selenium import webdriver
 
 PY3 = sys.version_info[0] == 3
 
@@ -45,7 +49,7 @@ def extract_activation_bytes(data: bytes) -> tuple[str, list[str]]:
     return activation_bytes, output
 
 
-def fetch_activation_bytes(driver: webdriver.Chrome, lang: str = "us") -> str:
+def fetch_activation_bytes(driver: "webdriver.Chrome", lang: str = "us") -> str:
     """Fetches activation bytes from Audible using an authenticated selenium webdriver."""
     base_url = 'https://www.audible.com/'
     base_url_license = 'https://www.audible.com/'

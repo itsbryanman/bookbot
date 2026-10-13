@@ -5,7 +5,7 @@ import logging
 import logging.handlers
 import os
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -106,7 +106,7 @@ class StructuredLogger:
         class JSONFormatter(logging.Formatter):
             def format(self, record: logging.LogRecord) -> str:
                 data: dict[str, Any] = {
-                    "ts": datetime.utcnow().isoformat(),
+                    "ts": datetime.now(timezone.utc).isoformat(),
                     "level": record.levelname,
                     "msg": record.getMessage(),
                     "module": record.module,

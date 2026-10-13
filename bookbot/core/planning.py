@@ -4,13 +4,82 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from datetime import datetime
 from pathlib import Path
 
 from ..config.models import Config
 from ..io.sidecar import sidecar_output_paths
+from .discovery import is_ignored_file
 from .models import AudiobookSet, RenameOperation, RenamePlan
 from .templates import TemplateEngine
+
+# Folder names that mark a set as the copy of another one:
+# "gone girl - Copy", "Dune copy 2", "Dune (1)".
+_COPY_NAME_RE = re.compile(
+    r"(?:[\s_-]+copy(?:[\s_-]*\(?\d+\)?)?|\s*\(\d+\))$", re.IGNORECASE
+)
+
+
+def set_is_planned(audiobook_set: AudiobookSet) -> bool:
+    """Whether a set may be moved, or must wait for review.
+
+    Shared by rename plans and ``organize`` so both leave the same books
+    alone: sets a reviewer skipped, and sets flagged for review that have no
+    chosen metadata yet.
+    """
+    if audiobook_set.review_skipped:
+        return False
+    return not (
+        audiobook_set.chosen_identity is None
+        and (
+            audiobook_set.needs_review
+            or bool(audiobook_set.provider_candidates)
+            or audiobook_set.review_reason is not None
+        )
+    )
+
+
+def unplanned_reason(audiobook_set: AudiobookSet) -> str:
+    """Why :func:`set_is_planned` left a set out."""
+    if audiobook_set.review_skipped:
+        return audiobook_set.review_reason or "Skipped by reviewer"
+    return audiobook_set.review_reason or "No reviewed metadata match selected"
+
+
+def collision_skip_order(audiobook_sets: list[AudiobookSet]) -> list[int]:
+    """Order in which colliding sets claim a destination.
+
+    Sets whose folder looks like a copy ("gone girl - Copy") yield to the
+    original; otherwise the scan order decides.
+    """
+    return sorted(
+        range(len(audiobook_sets)),
+        key=lambda index: (
+            bool(_COPY_NAME_RE.search(audiobook_sets[index].source_path.name.strip())),
+            index,
+        ),
+    )
+
+
+def duplicate_reason(other: AudiobookSet, destination: Path) -> str:
+    return (
+        f"Duplicate of '{other.source_path.name}': both would be written to the "
+        f"same destination ({destination}). Left in place; delete or merge the "
+        "copy, then rescan."
+    )
+
+
+def self_collision_reason(destination: Path) -> str:
+    return (
+        "Tracks of this book would be written to the same destination "
+        f"({destination}): track numbers are missing or repeated. Left in "
+        "place; fix the track order, then rescan."
+    )
+
+
+# Index of the owning audiobook set for each operation and planned sidecar.
+_Owners = tuple[list[int], list[int]]
 
 
 class PlanBuilder:
@@ -78,6 +147,7 @@ class PlanBuilder:
             except OSError:
                 continue
 
+            entries = [entry for entry in entries if not is_ignored_file(entry)]
             folder_audio = [
                 entry
                 for entry in entries
@@ -171,7 +241,7 @@ class PlanBuilder:
         file_template = file_template or self.config.output.file_template
         source_roots = source_roots or [library_root]
 
-        plan = self._build_plan(
+        plan, owners = self._build_plan(
             library_root=library_root,
             audiobook_sets=audiobook_sets,
             profile_name=profile_name,
@@ -183,7 +253,7 @@ class PlanBuilder:
         if self.config.output.prefer_m4b and any(
             conflict.startswith("Duplicate target path:") for conflict in plan.conflicts
         ):
-            fallback_plan = self._build_plan(
+            fallback_plan, fallback_owners = self._build_plan(
                 library_root=library_root,
                 audiobook_sets=audiobook_sets,
                 profile_name=profile_name,
@@ -191,14 +261,95 @@ class PlanBuilder:
                 file_template=self.TRACK_SAFE_FILE_TEMPLATE,
                 source_roots=source_roots,
             )
-            if not fallback_plan.conflicts:
+            # Accept the fallback whenever it resolves collisions; one genuinely
+            # duplicated book must not leave every other book colliding.
+            fewer_collisions = self._colliding_operation_count(
+                fallback_plan
+            ) < self._colliding_operation_count(plan)
+            if fewer_collisions and len(fallback_plan.conflicts) <= len(plan.conflicts):
                 fallback_plan.warnings.append(
                     "Profile prefers single-file outputs; the rename plan kept unique "
                     "per-track names until conversion happens."
                 )
                 plan = fallback_plan
+                owners = fallback_owners
 
+        return self._skip_colliding_sets(plan, owners)
+
+    def _skip_colliding_sets(self, plan: RenamePlan, owners: _Owners) -> RenamePlan:
+        """Leave out sets whose moves collide instead of blocking the plan.
+
+        One duplicated book ("gone girl - Copy") used to put "Duplicate
+        target path" conflicts into the plan, which makes the whole plan
+        unappliable. The colliding set is now moved to ``plan.skipped``
+        (and flagged for review) with the reason, the original keeps its
+        moves, and every other book stays applicable. A set whose own
+        tracks collide is skipped the same way. Conflicts of other kinds
+        (missing sources, illegal names, paths escaping the root) are left
+        untouched.
+        """
+        operation_owners, sidecar_owners = owners
+        claims: dict[Path, list[int]] = {}
+        for index, operation in enumerate(plan.operations):
+            key = operation.new_path.resolve(strict=False)
+            claims.setdefault(key, []).append(index)
+        collisions = {key: ops for key, ops in claims.items() if len(ops) > 1}
+        if not collisions:
+            return plan
+
+        sets = plan.audiobook_sets
+        set_targets: dict[int, list[Path]] = {}
+        for key, op_indexes in collisions.items():
+            for op_index in op_indexes:
+                set_targets.setdefault(operation_owners[op_index], []).append(key)
+
+        skipped_sets: dict[int, str] = {}
+        claimed_by: dict[Path, int] = {}
+        for set_index in collision_skip_order(sets):
+            targets = set_targets.get(set_index)
+            if not targets:
+                continue
+            own_duplicates = [key for key in targets if targets.count(key) > 1]
+            if own_duplicates:
+                skipped_sets[set_index] = self_collision_reason(own_duplicates[0])
+                continue
+            taken = [key for key in targets if key in claimed_by]
+            if taken:
+                other = sets[claimed_by[taken[0]]]
+                skipped_sets[set_index] = duplicate_reason(other, taken[0].parent)
+                continue
+            for key in targets:
+                claimed_by[key] = set_index
+
+        operations = [
+            operation
+            for index, operation in enumerate(plan.operations)
+            if operation_owners[index] not in skipped_sets
+        ]
+        planned_sidecars = [
+            path
+            for index, path in enumerate(plan.planned_sidecars)
+            if sidecar_owners[index] not in skipped_sets
+        ]
+        for set_index, reason in sorted(skipped_sets.items()):
+            audiobook_set = sets[set_index]
+            audiobook_set.needs_review = True
+            audiobook_set.review_reason = reason
+            plan.skipped.append(
+                {"source_path": str(audiobook_set.source_path), "reason": reason}
+            )
+
+        plan.operations = operations
+        plan.planned_sidecars = planned_sidecars
+        plan.plan_id = self._plan_id(plan.source_path, operations, plan.profile_name)
+        plan.validate_plan()
         return plan
+
+    @staticmethod
+    def _colliding_operation_count(plan: RenamePlan) -> int:
+        """Count operations whose target is shared with another operation."""
+        targets = [operation.new_path for operation in plan.operations]
+        return sum(1 for target in targets if targets.count(target) > 1)
 
     def _build_plan(
         self,
@@ -208,34 +359,22 @@ class PlanBuilder:
         folder_template: str,
         file_template: str,
         source_roots: list[Path],
-    ) -> RenamePlan:
+    ) -> tuple[RenamePlan, _Owners]:
+        """Build a plan, and record which set each operation/sidecar is for."""
         operations: list[RenameOperation] = []
+        operation_owners: list[int] = []
         planned_sidecars: list[Path] = []
+        sidecar_owners: list[int] = []
         root = library_root.resolve(strict=False)
         resolved_source_roots = [path.resolve(strict=False) for path in source_roots]
         skipped: list[dict[str, str]] = []
 
-        for audiobook_set in audiobook_sets:
-            if audiobook_set.review_skipped:
+        for set_index, audiobook_set in enumerate(audiobook_sets):
+            if not set_is_planned(audiobook_set):
                 skipped.append(
                     {
                         "source_path": str(audiobook_set.source_path),
-                        "reason": audiobook_set.review_reason or "Skipped by reviewer",
-                    }
-                )
-                continue
-            if audiobook_set.chosen_identity is None and (
-                audiobook_set.needs_review
-                or bool(audiobook_set.provider_candidates)
-                or audiobook_set.review_reason is not None
-            ):
-                skipped.append(
-                    {
-                        "source_path": str(audiobook_set.source_path),
-                        "reason": (
-                            audiobook_set.review_reason
-                            or "No reviewed metadata match selected"
-                        ),
+                        "reason": unplanned_reason(audiobook_set),
                     }
                 )
                 continue
@@ -276,15 +415,18 @@ class PlanBuilder:
                         track=track,
                     )
                 )
+                operation_owners.append(set_index)
 
             if set_moved:
-                operations.extend(
-                    self._companion_operations(audiobook_set, destination_folder)
+                companions = self._companion_operations(
+                    audiobook_set, destination_folder
                 )
+                operations.extend(companions)
+                operation_owners.extend([set_index] * len(companions))
 
-            planned_sidecars.extend(
-                self._planned_sidecar_paths(audiobook_set, destination_folder)
-            )
+            sidecars = self._planned_sidecar_paths(audiobook_set, destination_folder)
+            planned_sidecars.extend(sidecars)
+            sidecar_owners.extend([set_index] * len(sidecars))
 
         plan = RenamePlan(
             plan_id=self._plan_id(root, operations, profile_name),
@@ -298,7 +440,7 @@ class PlanBuilder:
             planned_sidecars=planned_sidecars,
         )
         plan.validate_plan()
-        return plan
+        return plan, (operation_owners, sidecar_owners)
 
     def _destination_root(
         self, source_path: Path, default_root: Path, source_roots: list[Path]

@@ -220,7 +220,7 @@ class FFmpegWrapper:
             concat_file = Path(f.name)
             for file_path in input_files:
                 # Escape single quotes in filenames
-                escaped_path = str(file_path).replace("'", "'\\''")
+                escaped_path = str(file_path.resolve()).replace("'", "'\\''")
                 f.write(f"file '{escaped_path}'\n")
 
         try:
@@ -319,14 +319,14 @@ class FFmpegWrapper:
             str(file_path),
             "-i",
             str(cover_path),
+            # Map audio only: ffmpeg cannot remux the mp4 chapter text track
+            # (chapters are carried over from the input's metadata anyway).
             "-map",
-            "0",
+            "0:a",
             "-map",
             "1",
             "-c",
             "copy",
-            "-c:v:1",
-            "mjpeg",
             "-disposition:v:0",
             "attached_pic",
             "-y",
@@ -412,7 +412,7 @@ class FFmpegWrapper:
         with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
             concat_file = Path(f.name)
             for file_path in input_files:
-                escaped = str(file_path).replace("'", "'\\''")
+                escaped = str(file_path.resolve()).replace("'", "'\\''")
                 f.write(f"file '{escaped}'\n")
 
         try:
@@ -449,7 +449,7 @@ class FFmpegWrapper:
 
             if result.returncode != 0:
                 _safe_unlink(output)
-                raise RuntimeError(f"FFmpeg merge failed: {result.stderr[:500]}")
+                raise RuntimeError(f"FFmpeg merge failed: {result.stderr[-500:]}")
 
             # Embed cover art if provided
             if cover and cover.exists():
@@ -498,10 +498,13 @@ class FFmpegWrapper:
                 duration_sec = (chapter.end_ms - chapter.start_ms) / 1000.0
                 cmd.extend(["-t", str(duration_sec)])
 
+            if output_format == "mp3":
+                cmd.extend(["-map", "0:a", "-c:a", "libmp3lame", "-q:a", "2"])
+            else:
+                cmd.extend(["-c", "copy"])
+
             cmd.extend(
                 [
-                    "-c",
-                    "copy",
                     "-metadata",
                     f"title={chapter.title}",
                     "-metadata",
@@ -535,7 +538,9 @@ class FFmpegWrapper:
             cmd.extend(["-map", "0:a", "-map", "1:v"])
             cmd.extend(["-c:v", "mjpeg", "-disposition:v:0", "attached_pic"])
         else:
-            cmd.extend(["-map", "0"])
+            # Keep audio and any existing cover; the mp4 chapter text track
+            # cannot be remuxed, and chapters survive via input metadata.
+            cmd.extend(["-map", "0:a", "-map", "0:v?", "-c:v", "copy"])
 
         for key, value in metadata.items():
             if value:
@@ -552,7 +557,7 @@ class FFmpegWrapper:
                 return file_path
 
             _safe_unlink(temp_output)
-            raise RuntimeError(f"Failed to embed metadata: {result.stderr[:500]}")
+            raise RuntimeError(f"Failed to embed metadata: {result.stderr[-500:]}")
 
         except subprocess.TimeoutExpired as exc:
             _safe_unlink(temp_output)
