@@ -611,6 +611,7 @@ async def test_apply_requires_two_presses(tmp_path: Path) -> None:
 
     async with app.run_test() as pilot:
         await pilot.pause(0)
+        app.query_one("#apply_changes").disabled = False  # a plan was previewed
         await app.action_apply_selected()
         assert app._apply_armed is True
         assert applied == []
@@ -633,6 +634,7 @@ async def test_other_action_disarms_apply(tmp_path: Path) -> None:
 
     async with app.run_test() as pilot:
         await pilot.pause(0)
+        app.query_one("#apply_changes").disabled = False  # a plan was previewed
         await app.action_apply_selected()
         assert app._apply_armed is True
 
@@ -642,3 +644,174 @@ async def test_other_action_disarms_apply(tmp_path: Path) -> None:
         await app.action_apply_selected()
         assert applied == []  # re-armed, not applied
         assert app._apply_armed is True
+
+
+@pytest.mark.asyncio
+async def test_selecting_match_row_opens_picker_without_crashing(
+    tmp_path: Path,
+) -> None:
+    """Enter on a match row, `/` search, and Escape must work in the real app."""
+    from bookbot.tui.screens import CandidateDetailScreen, ManualSearchScreen
+
+    config_manager = ConfigManager(tmp_path / "config")
+    book = _make_tracked_audiobook(tmp_path / "rough-book", "Rough Book")
+    provider = BehaviorProvider(
+        {
+            "Rough Book": [
+                _make_candidate("Wrong Match", "Wrong Author", confidence=0.72),
+                _make_candidate("Clean Title", "Author Name", confidence=0.95),
+            ]
+        }
+    )
+
+    app = MatchHarness(config_manager, provider)
+    async with app.run_test() as pilot:
+        screen = app.query_one(MatchReviewScreen)
+        await screen.find_matches([book])
+        screen.query_one("#matches_table", DataTable).focus()
+        await pilot.press("enter")
+        await pilot.pause()
+        assert isinstance(app.screen, CandidateDetailScreen)
+
+        await pilot.press("slash")
+        await pilot.pause()
+        assert isinstance(app.screen, ManualSearchScreen)
+        await pilot.press("escape")
+        await pilot.pause()
+        assert isinstance(app.screen, CandidateDetailScreen)
+
+        await pilot.press("down", "enter")
+        await pilot.pause()
+        assert not isinstance(app.screen, CandidateDetailScreen)
+        assert book.chosen_identity is not None
+        assert book.chosen_identity.title == "Clean Title"
+        assert app.is_running
+
+
+@pytest.mark.asyncio
+async def test_apply_without_preview_does_nothing(tmp_path: Path) -> None:
+    """Pressing a twice before any preview must not report a fake success."""
+    app = BookBotApp(ConfigManager(tmp_path / "config"), [])
+    applied = []
+
+    async def fake_apply() -> None:
+        applied.append(True)
+
+    app.apply_changes = fake_apply  # type: ignore[method-assign]
+
+    async with app.run_test() as pilot:
+        await pilot.pause(0)
+        await app.action_apply_selected()
+        await app.action_apply_selected()
+        assert applied == []
+        assert app._apply_armed is False
+        assert "preview" in str(app.query_one("#status_label", Label).content)
+
+
+@pytest.mark.asyncio
+async def test_switching_tabs_disarms_apply(tmp_path: Path) -> None:
+    app = BookBotApp(ConfigManager(tmp_path / "config"), [])
+
+    async with app.run_test() as pilot:
+        await pilot.pause(0)
+        app.query_one("#apply_changes").disabled = False
+        await app.action_apply_selected()
+        assert app._apply_armed is True
+        app.query_one(TabbedContent).active = "convert"
+        await pilot.pause()
+        assert app._apply_armed is False
+
+
+@pytest.mark.asyncio
+async def test_bracketed_names_render_literally(tmp_path: Path) -> None:
+    """Folder names and tags like [unabridged] or [/] are text, not markup."""
+    from bookbot.tui.screens import ScanResultsScreen
+
+    book = _make_audiobook("Live [/] Recording")
+    book.source_path = tmp_path / "Some Book [unabridged]"
+    app = BookBotApp(ConfigManager(tmp_path / "config"), [])
+
+    async with app.run_test() as pilot:
+        await pilot.pause(0)
+        scan = app.query_one("#scan_screen", ScanResultsScreen)
+        scan.set_audiobook_sets([book])
+        await pilot.pause()
+        table = scan.query_one("#scan_results_table", DataTable)
+        assert _row_values(table, 0)[0] == "Some Book [unabridged]"
+        app.update_status("Scan failed: bad tag [/]")
+        await pilot.pause()
+
+
+@pytest.mark.asyncio
+async def test_successful_apply_disables_apply_and_rescans(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """After an apply the old plan is stale, so it can't be re-applied."""
+    from bookbot.tui.screens import PreviewScreen
+
+    app = BookBotApp(ConfigManager(tmp_path / "config"), [])
+    scans: list[str | None] = []
+
+    async with app.run_test() as pilot:
+        await pilot.pause(0)
+        preview = app.query_one("#preview_screen", PreviewScreen)
+
+        async def fake_apply() -> bool:
+            preview.last_transaction_id = "tx-123456789"
+            return True
+
+        monkeypatch.setattr(preview, "apply_changes", fake_apply)
+
+        async def record_scan(_self: BookBotApp, event: BookBotApp.StartScan) -> None:
+            scans.append(event.applied_transaction)
+
+        monkeypatch.setattr(BookBotApp, "on_book_bot_app_start_scan", record_scan)
+        app.query_one("#apply_changes").disabled = False
+        await app.action_apply_selected()
+        await app.action_apply_selected()
+        await pilot.pause()
+
+        assert app.query_one("#apply_changes").disabled is True
+        assert app.last_transaction_id == "tx-123456789"
+        assert scans == ["tx-123456789"]
+
+
+@pytest.mark.asyncio
+async def test_accept_safe_candidates_skips_blocked_and_weak_matches(
+    tmp_path: Path,
+) -> None:
+    from bookbot.core.models import ReviewFlag, ReviewFlagKind
+
+    config_manager = ConfigManager(tmp_path / "config")
+    good = _make_tracked_audiobook(tmp_path / "good", "Good Book")
+    weak = _make_tracked_audiobook(tmp_path / "weak", "Weak Book")
+    blocked = _make_tracked_audiobook(tmp_path / "blocked", "Blocked Book")
+    provider = BehaviorProvider(
+        {
+            "Good Book": [_make_candidate("Good Book", "Author", confidence=0.82)],
+            "Weak Book": [_make_candidate("Weak Book", "Author", confidence=0.6)],
+            "Blocked Book": [
+                _make_candidate("Blocked Book", "Author", confidence=0.85)
+            ],
+        }
+    )
+
+    app = MatchHarness(config_manager, provider)
+    async with app.run_test():
+        screen = app.query_one(MatchReviewScreen)
+        await screen.find_matches([good, weak, blocked])
+        blocked.provider_candidates[0].review_flags = [
+            ReviewFlag(
+                kind=ReviewFlagKind.AUTHOR_CONFLICT,
+                severity="block",
+                message="author differs",
+            )
+        ]
+        for book in (good, weak, blocked):
+            book.needs_review = True
+
+        assert screen.accept_safe_candidates() == 1
+        assert good.chosen_identity is not None
+        assert good.needs_review is False
+        assert weak.chosen_identity is None
+        assert blocked.chosen_identity is None

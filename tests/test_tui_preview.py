@@ -32,6 +32,10 @@ class PreviewHarness(App[None]):
         yield PreviewScreen(self.config_manager, id="preview")
 
 
+def _plain_row(table: DataTable, index: int) -> list[str]:
+    return [str(cell) for cell in table.get_row_at(index)]
+
+
 def _make_track(path: Path) -> Track:
     return Track(
         src_path=path,
@@ -98,7 +102,7 @@ async def test_preview_table_uses_relative_path_under_common_root(
         screen.set_audiobook_sets([audiobook_set])
 
         table = screen.query_one("#preview_table", DataTable)
-        assert table.get_row_at(0) == ["01.mp3", "Renamed/01.mp3", "✓ Ready"]
+        assert _plain_row(table, 0) == ["01.mp3", "Renamed/01.mp3", "✓ Ready"]
 
 
 @pytest.mark.asyncio
@@ -133,7 +137,7 @@ async def test_preview_table_uses_readable_relative_path_for_sibling_output_dir(
         screen.set_audiobook_sets([audiobook_set])
 
         table = screen.query_one("#preview_table", DataTable)
-        assert table.get_row_at(0) == [
+        assert _plain_row(table, 0) == [
             "01.mp3",
             "../../output/Book One/01.mp3",
             "✓ Ready",
@@ -173,7 +177,7 @@ async def test_preview_table_lists_planned_sidecar_writes(
         screen.set_audiobook_sets([audiobook_set])
 
         table = screen.query_one("#preview_table", DataTable)
-        assert table.get_row_at(1) == [
+        assert _plain_row(table, 1) == [
             "metadata.json",
             "metadata.json",
             "✎ Sidecar",
@@ -227,7 +231,7 @@ async def test_preview_apply_changes_runs_for_sidecar_only_plan(
         assert await screen.apply_changes() is True
 
         table = screen.query_one("#preview_table", DataTable)
-        assert table.get_row_at(0) == [
+        assert _plain_row(table, 0) == [
             "Applied 0 rename(s), 1 sidecar write(s)",
             "✓ Success",
             "tx-sidec...",
@@ -241,3 +245,50 @@ def test_preview_path_formatter_falls_back_to_absolute_for_far_disjoint_roots() 
     rendered = PreviewScreen._format_preview_path(disjoint_path, common_root)
 
     assert rendered == str(disjoint_path)
+
+
+@pytest.mark.asyncio
+async def test_conversion_queue_updates_status_per_book(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Statuses change as each book converts (no missing-column errors)."""
+    from textual.widgets import Input
+
+    from bookbot.tui.screens import ConversionScreen
+
+    class ConversionHarness(App[None]):
+        def __init__(self, config_manager: ConfigManager) -> None:
+            super().__init__()
+            self.config_manager = config_manager
+
+        def compose(self) -> ComposeResult:
+            yield ConversionScreen(self.config_manager, id="convert_screen")
+
+    class FakePipeline:
+        def __init__(self, _config_manager: ConfigManager) -> None:
+            pass
+
+        async def convert_audiobook_set(self, audiobook_set, _config):  # type: ignore[no-untyped-def]
+            return audiobook_set.raw_title_guess == "Book One"
+
+    monkeypatch.setattr("bookbot.convert.pipeline.ConversionPipeline", FakePipeline)
+    book_one = _make_audiobook_set(
+        tmp_path / "Book One", _make_track(tmp_path / "Book One" / "01.mp3")
+    )
+    book_one.raw_title_guess = "Book One"
+    book_two = _make_audiobook_set(
+        tmp_path / "Book Two", _make_track(tmp_path / "Book Two" / "01.mp3")
+    )
+    book_two.raw_title_guess = "Book Two"
+
+    app = ConversionHarness(ConfigManager(tmp_path / "config"))
+    async with app.run_test() as pilot:
+        screen = app.query_one(ConversionScreen)
+        screen.set_audiobook_sets([book_one, book_two])
+        screen.query_one("#output_dir", Input).value = str(tmp_path / "out")
+        await screen.start_conversion()
+        await pilot.pause()
+
+        table = screen.query_one("#conversion_results", DataTable)
+        assert _plain_row(table, 0)[3] == "Complete"
+        assert _plain_row(table, 1)[3] == "Failed"

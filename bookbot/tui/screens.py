@@ -1,8 +1,11 @@
 """TUI screens for BookBot."""
 
 import asyncio
+import contextlib
+import io
 import os
 from asyncio import to_thread
+from collections.abc import Iterable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from functools import partial
@@ -12,18 +15,20 @@ from typing import Any
 from rich.text import Text
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import Container, Horizontal
+from textual.containers import Container, Horizontal, Vertical, VerticalScroll
 from textual.message import Message
 from textual.screen import ModalScreen
 from textual.widgets import (
     Button,
     Checkbox,
     DataTable,
+    DirectoryTree,
     Input,
     Label,
     ProgressBar,
     Select,
     Static,
+    Tree,
 )
 
 from ..config.manager import ConfigManager
@@ -36,6 +41,7 @@ from ..core.planning import PlanBuilder
 from ..core.review import (
     accept_candidate_for_set,
     detect_review_flags,
+    has_flag_at_or_above,
     mark_set_needs_review,
     skip_set_from_plans,
     worst_flag_severity,
@@ -51,6 +57,40 @@ except Exception:  # pragma: no cover
     AudibleAuthClient = None  # type: ignore[assignment,misc]
 
 logger = get_logger("tui_screens")
+
+
+def _column_widths(table: DataTable, specs: Sequence[int | float]) -> list[int | None]:
+    """Resolve column widths so a table fills its pane without scrolling sideways.
+
+    Integers are fixed widths; floats are relative shares of whatever width is
+    left over. Before the table has been laid out every flexible column is
+    auto-sized instead.
+    """
+    available = table.size.width
+    if available <= 0:
+        return [spec if isinstance(spec, int) else None for spec in specs]
+    padding = 2 * table.cell_padding * len(specs)
+    fixed = sum(spec for spec in specs if isinstance(spec, int))
+    scrollbar = table.styles.scrollbar_size_vertical
+    spare = max(0, available - padding - fixed - scrollbar)
+    shares = sum(spec for spec in specs if isinstance(spec, float)) or 1.0
+    return [
+        spec if isinstance(spec, int) else max(6, int(spare * spec / shares))
+        for spec in specs
+    ]
+
+
+def _cell(value: str, style: str = "") -> Text:
+    """Render a single-line cell that ends in an ellipsis when it is too long."""
+    return Text(value, style=style, overflow="ellipsis", no_wrap=True)
+
+
+def _format_runtime(seconds: float | None) -> str:
+    """Render a runtime as a compact h:mm value."""
+    if not seconds:
+        return "-"
+    minutes = int(round(seconds / 60))
+    return f"{minutes // 60}h{minutes % 60:02d}"
 
 
 @dataclass(slots=True)
@@ -98,7 +138,6 @@ class DRMLoginScreen(Static):
 
     def compose(self) -> ComposeResult:
         yield Container(
-            Label("Protected Audiobook Access", classes="section-title"),
             Static(
                 "Authenticate with your Audible account to access books you own. "
                 "AAX output is decrypted to a temporary file, decoded for integrity, "
@@ -106,14 +145,30 @@ class DRMLoginScreen(Static):
                 "content key.",
                 classes="description",
             ),
-            Static("", id="user_code_display"),
-            Button("Begin Login", id="begin_login", variant="primary"),
+            Static(
+                "Not signed in. Login opens a browser window on this machine.",
+                id="user_code_display",
+                markup=False,
+            ),
+            Button("Begin Login", id="begin_login", variant="primary", compact=True),
             id="drm_login_container",
+            classes="pane",
         )
+
+    def on_mount(self) -> None:
+        self.query_one(
+            "#drm_login_container"
+        ).border_title = "Protected Audiobook Access"
 
     async def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "begin_login":
             await self.begin_auth()
+
+    def _authenticate_quietly(self) -> bool:
+        """Run the browser login without its console prints drawing over the UI."""
+        assert self.auth_client is not None
+        with contextlib.redirect_stdout(io.StringIO()):
+            return bool(self.auth_client.authenticate())
 
     async def begin_auth(self) -> None:
         """Start the authentication process."""
@@ -129,7 +184,7 @@ class DRMLoginScreen(Static):
             return
 
         try:
-            success = await to_thread(self.auth_client.authenticate)
+            success = await to_thread(self._authenticate_quietly)
             if success:
                 user_code_display.update("Authentication successful.")
                 self.post_message(LoginSuccess())
@@ -143,8 +198,25 @@ class DRMLoginScreen(Static):
             self.query_one("#begin_login", Button).disabled = False
 
 
+class FolderTree(DirectoryTree):
+    """Directory browser that only lists folders, hiding dot-directories."""
+
+    def filter_paths(self, paths: Iterable[Path]) -> Iterable[Path]:
+        visible: list[Path] = []
+        for path in paths:
+            try:
+                if path.is_dir() and not path.name.startswith("."):
+                    visible.append(path)
+            except OSError:
+                continue
+        return visible
+
+
 class SourceSelectionScreen(Static):
-    """Screen for selecting source directories."""
+    """Pick the library folders to scan."""
+
+    class FoldersChanged(Message):
+        """Posted when the selected library folders change."""
 
     def __init__(
         self,
@@ -156,35 +228,140 @@ class SourceSelectionScreen(Static):
         self.config_manager = config_manager
         self.source_folders = source_folders
 
-    def compose(self) -> ComposeResult:
-        yield Label("Source Folders:", classes="section-title")
-
+    def _initial_browse_root(self) -> Path:
         if self.source_folders:
-            for folder in self.source_folders:
-                yield Label(f"[DIR] {folder}")
-        else:
-            yield Label("No folders selected")
+            parent = self.source_folders[0].expanduser().resolve().parent
+            if parent.is_dir():
+                return parent
+        return Path.home()
 
-        yield Button("Add Folder", id="add_folder")
-        yield Label("", id="add_folder_hint")
+    def compose(self) -> ComposeResult:
+        root = self._initial_browse_root()
+        with Horizontal():
+            with Vertical(id="source_selected", classes="pane"):
+                yield DataTable(id="source_list", cursor_type="row")
+                with Horizontal(classes="button-row"):
+                    yield Button(
+                        "Scan", id="scan_sources", variant="primary", compact=True
+                    )
+                    yield Button("Remove", id="remove_folder", compact=True)
+            with Vertical(id="source_browser", classes="pane"):
+                yield FolderTree(root, id="source_tree")
+                yield Input(
+                    value=str(root),
+                    placeholder="Type a folder path and press Enter",
+                    id="source_path",
+                )
+                with Horizontal(classes="button-row"):
+                    yield Button(
+                        "Add Folder", id="add_folder", variant="primary", compact=True
+                    )
+                    yield Button("Up", id="browse_up", compact=True)
+                yield Label("", id="add_folder_hint", classes="hint")
+
+    def on_mount(self) -> None:
+        self.query_one("#source_selected").border_title = "Library Folders"
+        browser = self.query_one("#source_browser")
+        browser.border_title = "Browse"
+        browser.border_subtitle = "enter expands · Add Folder selects"
+        self._render_folders()
+
+    def _render_folders(self) -> None:
+        table = self.query_one("#source_list", DataTable)
+        table.clear(columns=True)
+        table.add_column("Folder")
+        for folder in self.source_folders:
+            table.add_row(_cell(str(folder)))
+        if not self.source_folders:
+            table.add_row(_cell("No folders yet - browse on the right", "dim"))
+        self.query_one("#scan_sources", Button).disabled = not self.source_folders
+        self.query_one("#remove_folder", Button).disabled = not self.source_folders
+        count = len(self.source_folders)
+        self.query_one("#source_selected").border_subtitle = (
+            f"{count} selected" if count else ""
+        )
+
+    def _set_hint(self, message: str, style: str = "") -> None:
+        self.query_one("#add_folder_hint", Label).update(Text(message, style=style))
+
+    def add_folder(self, folder: Path) -> bool:
+        """Add one folder to the scan list; returns False when rejected."""
+        folder = folder.expanduser()
+        if not folder.is_dir():
+            self._set_hint(f"Not a folder: {folder}", "yellow")
+            return False
+        folder = folder.resolve()
+        if folder in self.source_folders:
+            self._set_hint(f"Already selected: {folder.name}", "dim")
+            return False
+        for existing in self.source_folders:
+            if folder.is_relative_to(existing):
+                self._set_hint(f"Already covered by {existing}", "dim")
+                return False
+        self.source_folders[:] = [
+            existing
+            for existing in self.source_folders
+            if not existing.is_relative_to(folder)
+        ]
+        self.source_folders.append(folder)
+        self._render_folders()
+        self._set_hint(f"Added {folder}", "green")
+        self.post_message(self.FoldersChanged())
+        return True
+
+    def _browse_to(self, folder: Path) -> None:
+        tree = self.query_one("#source_tree", FolderTree)
+        tree.path = folder
+        self.query_one("#source_path", Input).value = str(folder)
+
+    def on_tree_node_highlighted(self, event: Tree.NodeHighlighted[Any]) -> None:
+        node = event.node
+        if node.data is not None and hasattr(node.data, "path"):
+            self.query_one("#source_path", Input).value = str(node.data.path)
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        if event.input.id != "source_path":
+            return
+        folder = Path(event.value.strip()).expanduser()
+        if folder.is_dir():
+            self._browse_to(folder.resolve())
+            self._set_hint("Press Add Folder to scan this folder", "dim")
+        else:
+            self._set_hint(f"Not a folder: {folder}", "yellow")
 
     async def on_button_pressed(self, event: Button.Pressed) -> None:
+        event.stop()
         if event.button.id == "add_folder":
-            hint_label = self.query_one("#add_folder_hint", Label)
-            hint_label.update(
-                "Tip: Launch BookBot with folder paths, e.g. `bookbot tui /audiobooks`."
-            )
-            try:
-                status_label = self.app.query_one("#status_label", Label)
-                status_label.update(
-                    "Add folders by restarting BookBot with target directories."
-                )
-            except Exception:
-                pass
+            value = self.query_one("#source_path", Input).value.strip()
+            if not value:
+                self._set_hint("Highlight or type a folder first", "yellow")
+                return
+            self.add_folder(Path(value))
+        elif event.button.id == "browse_up":
+            tree = self.query_one("#source_tree", FolderTree)
+            current = Path(tree.path).resolve()
+            self._browse_to(current.parent)
+        elif event.button.id == "remove_folder":
+            table = self.query_one("#source_list", DataTable)
+            row = table.cursor_row
+            if 0 <= row < len(self.source_folders):
+                removed = self.source_folders.pop(row)
+                self._render_folders()
+                self._set_hint(f"Removed {removed.name}", "dim")
+                self.post_message(self.FoldersChanged())
+        elif event.button.id == "scan_sources":
+            self.app.action_scan()  # type: ignore[attr-defined]
 
 
 class ScanResultsScreen(Static):
     """Screen showing scan results."""
+
+    COLUMNS: tuple[tuple[str, int | float], ...] = (
+        ("Folder", 1.0),
+        ("Tracks", 6),
+        ("Runtime", 7),
+        ("Warnings", 8),
+    )
 
     def __init__(self, config_manager: ConfigManager, **kwargs: Any) -> None:
         super().__init__(**kwargs)
@@ -194,33 +371,52 @@ class ScanResultsScreen(Static):
         self.source_roots: list[Path] = []
 
     def compose(self) -> ComposeResult:
-        yield Label("Scan Results", classes="section-title")
-        yield DataTable(id="scan_results_table")
+        yield DataTable(id="scan_results_table", cursor_type="row", zebra_stripes=True)
+
+    def on_mount(self) -> None:
+        self.border_title = "Library"
+        self._render_table()
+
+    def on_resize(self) -> None:
+        self.call_after_refresh(self._render_table)
 
     def set_audiobook_sets(self, audiobook_sets: list[AudiobookSet]) -> None:
         """Set the audiobook sets to display."""
         self.audiobook_sets = audiobook_sets
+        self._render_table()
 
+    def _render_table(self) -> None:
         table = self.query_one("#scan_results_table", DataTable)
+        cursor_row = table.cursor_row
         table.clear(columns=True)
+        widths = _column_widths(table, [spec for _, spec in self.COLUMNS])
+        for (label, _), width in zip(self.COLUMNS, widths, strict=True):
+            table.add_column(label, width=width)
 
-        # Add columns
-        table.add_columns("Folder", "Tracks", "Discs", "Title Guess", "Warnings")
-
-        # Add rows
-        for audiobook_set in audiobook_sets:
+        warning_total = 0
+        for audiobook_set in self.audiobook_sets:
+            warning_count = len(audiobook_set.warnings)
+            warning_total += warning_count
             warnings = (
-                f"{len(audiobook_set.warnings)} warning(s)"
-                if audiobook_set.warnings
-                else "None"
+                _cell(f"⚠ {warning_count}", "yellow")
+                if warning_count
+                else _cell("✓", "green")
             )
+            name = audiobook_set.display_name
+            if audiobook_set.disc_count > 1:
+                name = f"{name}  ({audiobook_set.disc_count} discs)"
             table.add_row(
-                audiobook_set.source_path.name,
-                str(audiobook_set.total_tracks),
-                str(audiobook_set.disc_count),
-                audiobook_set.raw_title_guess or "Unknown",
+                _cell(name),
+                Text(str(audiobook_set.total_tracks), justify="right"),
+                Text(_format_runtime(audiobook_set.total_duration), justify="right"),
                 warnings,
             )
+        if self.audiobook_sets:
+            table.move_cursor(row=min(cursor_row, len(self.audiobook_sets) - 1))
+
+        count = len(self.audiobook_sets)
+        self.border_title = f"Library · {count} book{'s' if count != 1 else ''}"
+        self.border_subtitle = f"{warning_total} warning(s)" if warning_total else ""
 
 
 class MatchReviewScreen(Static):
@@ -241,9 +437,45 @@ class MatchReviewScreen(Static):
         self._row_states: list[str] = []
         self._row_errors: list[str | None] = []
 
+    MATCH_CONCURRENCY = 8
+
+    class MatchProgress(Message):
+        """Posted as each book finishes matching."""
+
+        def __init__(self, done: int, total: int, matched: int) -> None:
+            super().__init__()
+            self.done = done
+            self.total = total
+            self.matched = matched
+
+    COLUMNS: tuple[tuple[str, int | float], ...] = (
+        ("Audiobook", 1.0),
+        ("Best Match", 1.3),
+        ("Conf", 4),
+        ("Flags", 6),
+        ("Action", 7),
+        ("Reasons", 0.7),
+    )
+
     def compose(self) -> ComposeResult:
-        yield Label("Metadata Matches", classes="section-title")
-        yield DataTable(id="matches_table")
+        yield DataTable(id="matches_table", cursor_type="row", zebra_stripes=True)
+
+    def on_mount(self) -> None:
+        self.border_title = "Matches"
+        self.border_subtitle = "m to match · enter to review"
+        self._render_table()
+
+    def on_resize(self) -> None:
+        self.call_after_refresh(self._render_table)
+
+    def reset(self) -> None:
+        """Forget match results after the library is rescanned."""
+        self.audiobook_sets = []
+        self._row_states = []
+        self._row_errors = []
+        self.border_title = "Matches"
+        self.border_subtitle = "m to match · enter to review"
+        self._render_table()
 
     @staticmethod
     def _format_reasons(candidate: MatchCandidate) -> str:
@@ -269,7 +501,7 @@ class MatchReviewScreen(Static):
             style = "bold yellow"
         elif audiobook_set.review_skipped:
             style = "yellow"
-        return Text(audiobook_set.raw_title_guess or "Unknown", style=style)
+        return _cell(audiobook_set.raw_title_guess or "Unknown", style)
 
     @staticmethod
     def _best_match_cell(
@@ -279,15 +511,25 @@ class MatchReviewScreen(Static):
     ) -> Text:
         """Render the best current candidate or an error state."""
         if error:
-            return Text("No matches", style="red")
+            return _cell("No matches", "red")
         if not candidates:
-            return Text("No matches", style="dim")
-        best_match = candidates[0]
+            return _cell("No matches", "dim")
+        best_match = MatchReviewScreen._displayed_candidate(audiobook_set)
         style = "yellow" if audiobook_set.needs_review else "green"
-        return Text(
+        return _cell(
             f"{best_match.identity.title} - {', '.join(best_match.identity.authors)}",
-            style=style,
+            style,
         )
+
+    @staticmethod
+    def _displayed_candidate(audiobook_set: AudiobookSet) -> MatchCandidate:
+        """The candidate the user chose, falling back to the top-ranked one."""
+        chosen = audiobook_set.chosen_identity
+        if chosen is not None:
+            for candidate in audiobook_set.provider_candidates:
+                if candidate.identity == chosen:
+                    return candidate
+        return audiobook_set.provider_candidates[0]
 
     @staticmethod
     def _action_cell(audiobook_set: AudiobookSet, state: str) -> Text:
@@ -307,16 +549,12 @@ class MatchReviewScreen(Static):
     def _render_table(self) -> None:
         """Refresh the matches table from current state."""
         table = self.query_one("#matches_table", DataTable)
+        cursor_row = table.cursor_row
         table.clear(columns=True)
         table.cursor_type = "row"
-        table.add_columns(
-            "Audiobook",
-            "Best Match",
-            "Confidence",
-            "Flags",
-            "Action",
-            "Reasons",
-        )
+        widths = _column_widths(table, [spec for _, spec in self.COLUMNS])
+        for (label, _), width in zip(self.COLUMNS, widths, strict=True):
+            table.add_column(label, width=width)
 
         for index, audiobook_set in enumerate(self.audiobook_sets):
             candidates = audiobook_set.provider_candidates
@@ -324,7 +562,7 @@ class MatchReviewScreen(Static):
             state = self._row_states[index] if index < len(self._row_states) else ""
 
             if candidates:
-                best_match = candidates[0]
+                best_match = self._displayed_candidate(audiobook_set)
                 confidence = f"{best_match.confidence:.2f}"
                 flags = self._flag_cell(best_match)
                 reasons = self._format_reasons(best_match)
@@ -339,7 +577,27 @@ class MatchReviewScreen(Static):
                 confidence,
                 flags,
                 self._action_cell(audiobook_set, state),
-                reasons,
+                _cell(reasons, "dim"),
+            )
+        if self.audiobook_sets:
+            table.move_cursor(row=min(cursor_row, len(self.audiobook_sets) - 1))
+
+        if self._row_states:
+            review = sum(
+                1
+                for book, state in zip(
+                    self.audiobook_sets, self._row_states, strict=False
+                )
+                if book.needs_review or state in {"error", "unmatched"}
+            )
+            self.border_title = (
+                f"Matches · {len(self.audiobook_sets) - review}/"
+                f"{len(self.audiobook_sets)} ready"
+            )
+            self.border_subtitle = (
+                f"{review} need review · c or enter to choose"
+                if review
+                else "enter to review a match"
             )
 
     def _request_timeout_seconds(self) -> float:
@@ -468,7 +726,7 @@ class MatchReviewScreen(Static):
     def _local_evidence_text(self, audiobook_set: AudiobookSet) -> str:
         """Render the local evidence shown beside a provider candidate."""
         lines = [
-            f"Folder: {audiobook_set.source_path.name}",
+            f"Folder: {audiobook_set.display_name}",
             f"Source: {audiobook_set.source_path}",
             f"Tracks: {audiobook_set.total_tracks}",
             (
@@ -573,16 +831,51 @@ class MatchReviewScreen(Static):
 
         self._render_table()
 
+    SAFE_ACCEPT_FLOOR = 0.75
+
+    def accept_safe_candidates(self) -> int:
+        """Accept every top candidate that has no blocking flag and decent confidence.
+
+        Returns how many books were accepted. Nothing touches the disk; the
+        choices only feed the next preview and are saved like manual picks.
+        """
+        accepted = 0
+        for index, audiobook_set in enumerate(self.audiobook_sets):
+            if not audiobook_set.needs_review or not audiobook_set.provider_candidates:
+                continue
+            best = audiobook_set.provider_candidates[0]
+            if best.confidence < self.SAFE_ACCEPT_FLOOR:
+                continue
+            if has_flag_at_or_above(best.review_flags, "block"):
+                continue
+            accept_candidate_for_set(audiobook_set, best)
+            self.review_store.set_accept(audiobook_set, best, candidate_index=1)
+            if index < len(self._row_states):
+                self._row_states[index] = "accepted_saved"
+                self._row_errors[index] = None
+            accepted += 1
+        if accepted:
+            self._render_table()
+        return accepted
+
+    def _start_candidate_picker(self, row_index: int) -> None:
+        """Run the picker in a worker so it can wait for the modal to close."""
+        self.run_worker(
+            self.open_candidate_picker(row_index),
+            group="candidate-picker",
+            exclusive=True,
+        )
+
     async def open_focused_candidate_picker(self) -> None:
         """Open the picker for the currently highlighted match row."""
         table = self.query_one("#matches_table", DataTable)
-        await self.open_candidate_picker(table.cursor_row)
+        self._start_candidate_picker(table.cursor_row)
 
     async def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         """Open the picker when a match row is selected."""
         if event.data_table.id != "matches_table":
             return
-        await self.open_candidate_picker(event.cursor_row)
+        self._start_candidate_picker(event.cursor_row)
 
     async def find_matches(self, audiobook_sets: list[AudiobookSet]) -> MatchSummary:
         """Find matches for audiobook sets using merged multi-provider results."""
@@ -592,11 +885,32 @@ class MatchReviewScreen(Static):
         summary = MatchSummary()
         matching = self.config_manager.load_config().matching
 
-        if isinstance(self.provider, ProviderManager):
-            match_tasks = [self.provider.find_matches_merged(a) for a in audiobook_sets]
-        else:
-            match_tasks = [self._find_matches_with_timeout(a) for a in audiobook_sets]
-        results = await asyncio.gather(*match_tasks, return_exceptions=True)
+        # Query a few books at a time: firing hundreds of lookups at once gets
+        # throttled by the providers and turns into timeouts.
+        limit = asyncio.Semaphore(self.MATCH_CONCURRENCY)
+        total = len(audiobook_sets)
+        done = 0
+        matched = 0
+
+        async def match_one(audiobook_set: AudiobookSet) -> list[MatchCandidate]:
+            nonlocal done, matched
+            async with limit:
+                try:
+                    if isinstance(self.provider, ProviderManager):
+                        result = await self.provider.find_matches_merged(audiobook_set)
+                    else:
+                        result = await self._find_matches_with_timeout(audiobook_set)
+                    if result:
+                        matched += 1
+                    return result
+                finally:
+                    done += 1
+                    self.post_message(self.MatchProgress(done, total, matched))
+
+        results = await asyncio.gather(
+            *(match_one(audiobook_set) for audiobook_set in audiobook_sets),
+            return_exceptions=True,
+        )
 
         for audiobook_set, result in zip(audiobook_sets, results, strict=False):
             state = "unmatched"
@@ -641,6 +955,32 @@ class MatchReviewScreen(Static):
         return summary
 
 
+class TextDialog(ModalScreen[None]):
+    """Scrollable read-only dialog for help, diffs, and warning lists."""
+
+    BINDINGS = [
+        Binding("escape", "close", "Close", show=True),
+        Binding("q", "close", "Close", show=False),
+    ]
+
+    def __init__(self, title: str, body: str | Text) -> None:
+        super().__init__()
+        self.dialog_title = title
+        self.body = body
+
+    def compose(self) -> ComposeResult:
+        with VerticalScroll(classes="candidate-modal text-dialog") as modal:
+            modal.border_title = self.dialog_title
+            modal.border_subtitle = "esc to close"
+            yield Static(self.body, markup=False, id="text_dialog_body")
+
+    def on_mount(self) -> None:
+        self.query_one(VerticalScroll).focus()
+
+    def action_close(self) -> None:
+        self.dismiss(None)
+
+
 class ManualSearchScreen(ModalScreen[dict[str, str] | None]):
     """Prompt for a manual provider query."""
 
@@ -654,22 +994,25 @@ class ManualSearchScreen(ModalScreen[dict[str, str] | None]):
         self.audiobook_set = audiobook_set
 
     def compose(self) -> ComposeResult:
-        with Container(classes="candidate-modal"):
-            yield Label("Manual Search", classes="section-title")
-            yield Label(str(self.audiobook_set.source_path))
-            with Horizontal():
+        with Container(classes="candidate-modal") as modal:
+            modal.border_title = "Manual Search"
+            modal.border_subtitle = "enter search · esc cancel"
+            yield Label(
+                str(self.audiobook_set.source_path), classes="modal-path", markup=False
+            )
+            with Horizontal(classes="form-row"):
                 yield Label("Title")
                 yield Input(
                     value=self.audiobook_set.raw_title_guess or "",
                     id="manual_title",
                 )
-            with Horizontal():
+            with Horizontal(classes="form-row"):
                 yield Label("Author")
                 yield Input(
                     value=self.audiobook_set.author_guess or "",
                     id="manual_author",
                 )
-            with Horizontal():
+            with Horizontal(classes="form-row"):
                 yield Label("ASIN / ISBN")
                 yield Input(
                     value=(
@@ -679,9 +1022,11 @@ class ManualSearchScreen(ModalScreen[dict[str, str] | None]):
                     ),
                     id="manual_identifier",
                 )
-            with Horizontal():
-                yield Button("Search", id="manual_search_submit", variant="primary")
-                yield Button("Cancel", id="manual_search_cancel")
+            with Horizontal(classes="button-row"):
+                yield Button(
+                    "Search", id="manual_search_submit", variant="primary", compact=True
+                )
+                yield Button("Cancel", id="manual_search_cancel", compact=True)
 
     def on_mount(self) -> None:
         """Focus the title input on open."""
@@ -693,6 +1038,11 @@ class ManualSearchScreen(ModalScreen[dict[str, str] | None]):
             self.action_submit()
         elif event.button.id == "manual_search_cancel":
             self.action_cancel()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        """Enter in any field runs the search."""
+        event.stop()
+        self.action_submit()
 
     def action_submit(self) -> None:
         """Dismiss the modal with the requested search query."""
@@ -740,31 +1090,54 @@ class CandidateDetailScreen(ModalScreen[int | None]):
         )
 
     def compose(self) -> ComposeResult:
-        with Container(classes="candidate-modal"):
-            yield Label("Review Candidates", classes="section-title")
-            yield Label(str(self.audiobook_set.source_path))
-            yield DataTable(id="candidate_table")
-            yield Static(self.status_message, id="candidate_status")
+        with Container(classes="candidate-modal") as modal:
+            modal.border_title = "Review Candidates"
+            modal.border_subtitle = (
+                "enter choose · r rerun · / search · s skip · esc close"
+            )
+            yield Label(
+                str(self.audiobook_set.source_path), classes="modal-path", markup=False
+            )
+            yield DataTable(id="candidate_table", zebra_stripes=True)
+            yield Static(self.status_message, id="candidate_status", markup=False)
             with Horizontal(classes="candidate-columns"):
-                yield Static(self.local_evidence, id="candidate_local")
-                yield Static("", id="candidate_detail")
+                with VerticalScroll(id="candidate_local", classes="pane"):
+                    yield Static(self.local_evidence, markup=False)
+                with VerticalScroll(id="candidate_detail", classes="pane"):
+                    yield Static("", markup=False, id="candidate_detail_text")
 
     def on_mount(self) -> None:
         """Populate the candidate table and show the first candidate."""
         table = self.query_one("#candidate_table", DataTable)
         table.cursor_type = "row"
-        table.add_columns("#", "Title", "Author", "Confidence", "Flags")
+        self.query_one("#candidate_local").border_title = "On Disk"
+        self.query_one("#candidate_detail").border_title = "Candidate"
         self._refresh_candidates()
         table.focus()
 
-    def _refresh_candidates(self) -> None:
+    CANDIDATE_COLUMNS: tuple[tuple[str, int | float], ...] = (
+        ("#", 2),
+        ("Title", 1.4),
+        ("Author", 1.0),
+        ("Confidence", 10),
+        ("Flags", 6),
+    )
+
+    def on_resize(self) -> None:
+        self.call_after_refresh(self._refresh_candidates, False)
+
+    def _refresh_candidates(self, reset_cursor: bool = True) -> None:
         """Render the current candidate list and detail pane."""
         table = self.query_one("#candidate_table", DataTable)
-        table.clear(columns=False)
+        cursor_row = table.cursor_row
+        table.clear(columns=True)
+        widths = _column_widths(table, [spec for _, spec in self.CANDIDATE_COLUMNS])
+        for (label, _), width in zip(self.CANDIDATE_COLUMNS, widths, strict=True):
+            table.add_column(label, width=width)
 
         if not self.candidates:
-            table.add_row("-", "No candidates", "", "", "")
-            self.query_one("#candidate_detail", Static).update(
+            table.add_row("-", _cell("No candidates", "dim"), "", "", "")
+            self.query_one("#candidate_detail_text", Static).update(
                 "No candidates yet. Press / for manual search or r to rerun."
             )
             self.query_one("#candidate_status", Static).update(self.status_message)
@@ -776,14 +1149,15 @@ class CandidateDetailScreen(ModalScreen[int | None]):
             flags = severity.upper() if severity else "[none]"
             table.add_row(
                 str(index),
-                candidate.identity.title,
-                authors,
+                _cell(candidate.identity.title),
+                _cell(authors),
                 f"{candidate.confidence:.2f}",
-                flags,
+                Text(flags),
             )
 
-        table.move_cursor(row=0)
-        self._update_candidate_detail(0)
+        row = 0 if reset_cursor else min(max(cursor_row, 0), len(self.candidates) - 1)
+        table.move_cursor(row=row)
+        self._update_candidate_detail(row)
         self.query_one("#candidate_status", Static).update(self.status_message)
 
     @staticmethod
@@ -857,7 +1231,7 @@ class CandidateDetailScreen(ModalScreen[int | None]):
 
     def _update_candidate_detail(self, index: int | None) -> None:
         """Refresh the right-hand detail pane from the selected candidate."""
-        detail = self.query_one("#candidate_detail", Static)
+        detail = self.query_one("#candidate_detail_text", Static)
         if index is None or index < 0 or index >= len(self.candidates):
             detail.update("No candidate selected.")
             return
@@ -909,8 +1283,13 @@ class CandidateDetailScreen(ModalScreen[int | None]):
             self.status_message = f"Refresh failed: {exc}"
         self._refresh_candidates()
 
-    async def action_manual_search(self) -> None:
+    def action_manual_search(self) -> None:
         """Prompt for a manual search and replace the candidate list."""
+        self.run_worker(
+            self._manual_search_flow(), group="manual-search", exclusive=True
+        )
+
+    async def _manual_search_flow(self) -> None:
         query = await self.app.push_screen(
             ManualSearchScreen(self.audiobook_set),
             wait_for_dismiss=True,
@@ -942,10 +1321,73 @@ class PreviewScreen(Static):
         self.last_transaction_id: str | None = None
         self.last_plan: RenamePlan | None = None
         self.source_roots: list[Path] = []
+        self._columns: list[tuple[str, int | float]] = list(self.PREVIEW_COLUMNS)
+        self._rows: list[tuple[str, str, str]] = []
+
+    PREVIEW_COLUMNS: tuple[tuple[str, int | float], ...] = (
+        ("Current Name", 1.0),
+        ("Proposed Path", 1.6),
+        ("Status", 15),
+    )
+    RESULT_COLUMNS: tuple[tuple[str, int | float], ...] = (
+        ("Operation", 1.4),
+        ("Result", 10),
+        ("Details", 1.0),
+    )
 
     def compose(self) -> ComposeResult:
-        yield Label("Preview Changes", classes="section-title")
-        yield DataTable(id="preview_table")
+        yield DataTable(id="preview_table", cursor_type="row", zebra_stripes=True)
+
+    def on_mount(self) -> None:
+        self.border_title = "Rename Preview"
+        self.border_subtitle = "p to preview · d for diff"
+        self._render_table()
+
+    def on_resize(self) -> None:
+        self.call_after_refresh(self._render_table)
+
+    def reset(self) -> None:
+        """Forget the previous plan after the library is rescanned."""
+        self.audiobook_sets = []
+        self.last_plan = None
+        self.border_title = "Rename Preview"
+        self.border_subtitle = "p to preview · d for diff"
+        self._show(self.PREVIEW_COLUMNS, [])
+
+    def _show(
+        self,
+        columns: Sequence[tuple[str, int | float]],
+        rows: list[tuple[str, str, str]],
+    ) -> None:
+        self._columns = list(columns)
+        self._rows = rows
+        self._render_table()
+
+    _STATUS_STYLES = {
+        "✓": "green",
+        "→": "dim",
+        "✎": "cyan",
+        "Review": "yellow",
+        "Blocked": "yellow",
+        "Failed": "bold red",
+    }
+
+    def _render_table(self) -> None:
+        table = self.query_one("#preview_table", DataTable)
+        table.clear(columns=True)
+        widths = _column_widths(table, [spec for _, spec in self._columns])
+        for (label, _), width in zip(self._columns, widths, strict=True):
+            table.add_column(label, width=width)
+        for first, second, status in self._rows:
+            style = next(
+                (
+                    value
+                    for prefix, value in self._STATUS_STYLES.items()
+                    if status.startswith(prefix)
+                ),
+                "",
+            )
+            table.add_row(_cell(first), _cell(second), _cell(status, style))
 
     @staticmethod
     def _format_preview_path(path: Path, common_root: Path) -> str:
@@ -970,11 +1412,10 @@ class PreviewScreen(Static):
         """Set audiobook sets and generate preview."""
         self.audiobook_sets = audiobook_sets
 
-        table = self.query_one("#preview_table", DataTable)
-        table.clear(columns=True)
-        table.add_columns("Current Name", "Proposed Path", "Status")
+        rows: list[tuple[str, str, str]] = []
 
         if not audiobook_sets:
+            self._show(self.PREVIEW_COLUMNS, rows)
             return
 
         config = self.config_manager.load_config()
@@ -1011,14 +1452,25 @@ class PreviewScreen(Static):
                         track.src_path, common_root
                     )
                     status = "→ No change"
-                table.add_row(current_name, proposed_name, status)
+                rows.append((current_name, proposed_name, status))
 
         for sidecar_path in plan.planned_sidecars:
-            table.add_row(
-                sidecar_path.name,
-                self._format_preview_path(sidecar_path, common_root),
-                "✎ Sidecar",
+            rows.append(
+                (
+                    sidecar_path.name,
+                    self._format_preview_path(sidecar_path, common_root),
+                    "✎ Sidecar",
+                )
             )
+
+        self._show(self.PREVIEW_COLUMNS, rows)
+        changes = len(plan.operations) + len(plan.planned_sidecars)
+        self.border_title = f"Rename Preview · {changes} change(s)"
+        self.border_subtitle = (
+            f"{len(plan.skipped)} skipped for review · d for diff"
+            if plan.skipped
+            else "a to apply · d for diff"
+        )
 
     async def apply_changes(self) -> bool:
         """Apply the previewed changes."""
@@ -1043,13 +1495,15 @@ class PreviewScreen(Static):
             self.last_plan = plan
             has_pending_changes = bool(plan.operations or plan.planned_sidecars)
             if not has_pending_changes and plan.skipped:
-                table = self.query_one("#preview_table", DataTable)
-                table.clear(columns=True)
-                table.add_columns("Operation", "Result", "Details")
-                table.add_row(
-                    "Apply Changes",
-                    "Blocked",
-                    f"{len(plan.skipped)} book(s) still need review",
+                self._show(
+                    self.RESULT_COLUMNS,
+                    [
+                        (
+                            "Apply Changes",
+                            "Blocked",
+                            f"{len(plan.skipped)} book(s) still need review",
+                        )
+                    ],
                 )
                 return False
             if not has_pending_changes:
@@ -1074,26 +1528,29 @@ class PreviewScreen(Static):
             self.last_transaction_id = transaction_id
 
             # Update table to show completion
-            table = self.query_one("#preview_table", DataTable)
-            table.clear(columns=True)
-            table.add_columns("Operation", "Result", "Transaction ID")
-            table.add_row(
-                (
-                    f"Applied {len(plan.operations)} rename(s), "
-                    f"{len(plan.planned_sidecars)} sidecar write(s)"
-                ),
-                "✓ Success",
-                transaction_id[:8] + "...",
+            self._show(
+                (*self.RESULT_COLUMNS[:2], ("Transaction ID", 1.0)),
+                [
+                    (
+                        (
+                            f"Applied {len(plan.operations)} rename(s), "
+                            f"{len(plan.planned_sidecars)} sidecar write(s)"
+                        ),
+                        "✓ Success",
+                        transaction_id[:8] + "...",
+                    )
+                ],
             )
+            self.border_subtitle = "u to undo"
 
             return True
 
         except Exception as e:
             # Show error in table
-            table = self.query_one("#preview_table", DataTable)
-            table.clear(columns=True)
-            table.add_columns("Operation", "Result", "Error")
-            table.add_row("Apply Changes", "Failed", str(e))
+            self._show(
+                (*self.RESULT_COLUMNS[:2], ("Error", 1.0)),
+                [("Apply Changes", "Failed", str(e))],
+            )
             return False
 
 
@@ -1105,7 +1562,7 @@ class ConversionScreen(Static):
         self.config_manager = config_manager
         self.audiobook_sets: list[AudiobookSet] = []
         self.conversion_in_progress = False
-        self._result_row_keys: list[Any] = []
+        self._statuses: list[str] = []
 
     class ConversionComplete(Message):
         """Message sent when conversion is complete."""
@@ -1116,74 +1573,118 @@ class ConversionScreen(Static):
             self.message = message
 
     def compose(self) -> ComposeResult:
-        yield Label("M4B Conversion", classes="section-title")
-
-        with Container():
-            yield Label("Conversion Settings:", classes="subsection-title")
-
-            with Horizontal():
-                yield Label("Output Directory:")
-                yield Input(placeholder="/path/to/output", id="output_dir")
-
-            with Horizontal():
-                yield Label("Audio Quality:")
-                yield Select(
-                    [
-                        ("High Quality (192k)", "192k"),
-                        ("Standard (128k)", "128k"),
-                        ("Compressed (64k)", "64k"),
-                        ("VBR High", "vbr5"),
-                        ("VBR Standard", "vbr4"),
-                    ],
-                    value="128k",
-                    id="quality_select",
+        with Horizontal():
+            with Vertical(id="convert_settings", classes="pane"):
+                with Horizontal(classes="form-row"):
+                    yield Label("Output folder")
+                    yield Input(placeholder="./converted", id="output_dir")
+                with Horizontal(classes="form-row"):
+                    yield Label("Audio quality")
+                    yield Select(
+                        [
+                            ("High Quality (192k)", "192k"),
+                            ("Standard (128k)", "128k"),
+                            ("Compressed (64k)", "64k"),
+                            ("VBR High", "vbr5"),
+                            ("VBR Standard", "vbr4"),
+                        ],
+                        value="128k",
+                        allow_blank=False,
+                        id="quality_select",
+                    )
+                with Horizontal(classes="checkbox-row"):
+                    yield Checkbox("Normalize loudness", False, id="normalize_check")
+                    yield Checkbox("Embed cover art", True, id="cover_art_check")
+                with Horizontal(classes="button-row"):
+                    yield Button(
+                        "Start Conversion",
+                        id="start_conversion",
+                        variant="primary",
+                        disabled=True,
+                        compact=True,
+                    )
+                    yield Button(
+                        "Cancel", id="cancel_conversion", disabled=True, compact=True
+                    )
+            with Vertical(id="convert_queue", classes="pane"):
+                yield DataTable(id="conversion_results", cursor_type="row")
+                yield ProgressBar(id="conversion_progress", show_eta=False)
+                yield Label(
+                    "Scan a library to fill the queue",
+                    id="conversion_status",
+                    markup=False,
                 )
 
-            with Horizontal():
-                yield Checkbox("Normalize Audio", False, id="normalize_check")
-                yield Checkbox("Include Cover Art", True, id="cover_art_check")
+    def on_mount(self) -> None:
+        self.query_one("#convert_settings").border_title = "M4B Settings"
+        queue = self.query_one("#convert_queue")
+        queue.border_title = "Conversion Queue"
+        self.query_one("#conversion_progress", ProgressBar).display = False
+        self._render_queue()
 
-        with Container():
-            yield Label("Progress:", classes="subsection-title")
-            yield ProgressBar(id="conversion_progress")
-            yield Label("Ready", id="conversion_status")
+    QUEUE_COLUMNS: tuple[tuple[str, int | float], ...] = (
+        ("Audiobook", 1.0),
+        ("Tracks", 6),
+        ("Output File", 1.2),
+        ("Status", 12),
+    )
 
-        with Container():
-            yield DataTable(id="conversion_results")
+    def on_resize(self) -> None:
+        self.call_after_refresh(self._render_queue)
 
-        with Horizontal():
-            yield Button("Start Conversion", id="start_conversion", variant="primary")
-            yield Button("Cancel", id="cancel_conversion", disabled=True)
+    def _output_name(self, audiobook_set: AudiobookSet) -> str:
+        if audiobook_set.chosen_identity:
+            title = audiobook_set.chosen_identity.title
+            authors = ", ".join(audiobook_set.chosen_identity.authors)
+            return f"{authors} - {title}.m4b"
+        return f"{audiobook_set.source_path.name}.m4b"
+
+    def _set_row_status(self, index: int, status: str) -> None:
+        if 0 <= index < len(self._statuses):
+            self._statuses[index] = status
+            self._render_queue()
+
+    _STATUS_STYLES = {
+        "Pending": "dim",
+        "Converting": "cyan",
+        "Complete": "green",
+        "Failed": "bold red",
+    }
+
+    def _render_queue(self) -> None:
+        table = self.query_one("#conversion_results", DataTable)
+        cursor_row = table.cursor_row
+        table.clear(columns=True)
+        widths = _column_widths(table, [spec for _, spec in self.QUEUE_COLUMNS])
+        for (label, _), width in zip(self.QUEUE_COLUMNS, widths, strict=True):
+            table.add_column(label, width=width)
+        for audiobook_set, status in zip(
+            self.audiobook_sets, self._statuses, strict=False
+        ):
+            style = self._STATUS_STYLES.get(status.split(":")[0], "red")
+            table.add_row(
+                _cell(audiobook_set.raw_title_guess or "Unknown"),
+                Text(str(audiobook_set.total_tracks), justify="right"),
+                _cell(self._output_name(audiobook_set), "dim"),
+                _cell(status, style),
+            )
+        if self.audiobook_sets:
+            table.move_cursor(row=min(max(cursor_row, 0), len(self.audiobook_sets) - 1))
 
     def set_audiobook_sets(self, audiobook_sets: list[AudiobookSet]) -> None:
         """Set the audiobook sets for conversion."""
         self.audiobook_sets = audiobook_sets
-        self._result_row_keys = []
-
-        # Update results table to show what will be converted
-        table = self.query_one("#conversion_results", DataTable)
-        table.clear(columns=True)
-        table.add_columns("Audiobook", "Tracks", "Output File", "Status")
-
-        for audiobook_set in audiobook_sets:
-            if audiobook_set.chosen_identity:
-                title = audiobook_set.chosen_identity.title
-                authors = ", ".join(audiobook_set.chosen_identity.authors)
-                output_name = f"{authors} - {title}.m4b"
-            else:
-                output_name = f"{audiobook_set.source_path.name}.m4b"
-
-            row_key = table.add_row(
-                audiobook_set.raw_title_guess or "Unknown",
-                str(audiobook_set.total_tracks),
-                output_name,
-                "Pending",
-            )
-            self._result_row_keys.append(row_key)
+        self._statuses = ["Pending"] * len(audiobook_sets)
+        self._render_queue()
 
         # Enable conversion button if we have audiobooks
         start_button = self.query_one("#start_conversion", Button)
         start_button.disabled = len(audiobook_sets) == 0
+        count = len(audiobook_sets)
+        self.query_one(
+            "#convert_queue"
+        ).border_title = f"Conversion Queue · {count} book{'s' if count != 1 else ''}"
+        self.update_status("Ready to convert" if count else "Nothing to convert")
 
     async def on_button_pressed(self, event: Button.Pressed) -> None:
         """Handle button presses."""
@@ -1195,6 +1696,9 @@ class ConversionScreen(Static):
     async def start_conversion(self) -> None:
         """Start the M4B conversion process."""
         if self.conversion_in_progress:
+            return
+        if not self.audiobook_sets:
+            self.update_status("Nothing to convert - scan a library first")
             return
 
         # Get conversion settings
@@ -1230,6 +1734,7 @@ class ConversionScreen(Static):
         progress_bar = self.query_one("#conversion_progress", ProgressBar)
         progress_bar.total = len(self.audiobook_sets)
         progress_bar.progress = 0
+        progress_bar.display = True
 
         try:
             # Import conversion pipeline
@@ -1250,8 +1755,6 @@ class ConversionScreen(Static):
                 conv_config.use_vbr = False
                 conv_config.bitrate = str(quality)
 
-            table = self.query_one("#conversion_results", DataTable)
-
             # Convert each audiobook set
             for i, audiobook_set in enumerate(self.audiobook_sets):
                 if not self.conversion_in_progress:  # Check for cancellation
@@ -1260,35 +1763,15 @@ class ConversionScreen(Static):
                 self.update_status(
                     f"Converting {audiobook_set.raw_title_guess or 'Unknown'}..."
                 )
-
-                # Update table row status
-                if i < len(self._result_row_keys):
-                    table.update_cell(self._result_row_keys[i], "Status", "Converting")
+                self._set_row_status(i, "Converting")
 
                 try:
-                    # Perform conversion
                     success = await pipeline.convert_audiobook_set(
                         audiobook_set, conv_config
                     )
-
-                    if success:
-                        if i < len(self._result_row_keys):
-                            table.update_cell(
-                                self._result_row_keys[i], "Status", "Complete"
-                            )
-                    else:
-                        if i < len(self._result_row_keys):
-                            table.update_cell(
-                                self._result_row_keys[i], "Status", "Failed"
-                            )
-
+                    self._set_row_status(i, "Complete" if success else "Failed")
                 except Exception as e:
-                    if i < len(self._result_row_keys):
-                        table.update_cell(
-                            self._result_row_keys[i],
-                            "Status",
-                            f"Error: {str(e)[:20]}...",
-                        )
+                    self._set_row_status(i, f"Error: {e}")
 
                 # Update progress
                 progress_bar.progress = i + 1
