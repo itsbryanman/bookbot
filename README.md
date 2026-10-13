@@ -1,421 +1,220 @@
 <p align="center">
-  <img src="logo.png" alt="BookBot logo" width="220" />
+  <img src="logo.png" alt="BookBot logo" width="200" />
 </p>
 
 <h1 align="center">BookBot</h1>
 
-<p align="center"><em>Declarative audiobook command center for collectors who care about clean metadata.</em></p>
+<p align="center"><em>A terminal command center for audiobook collectors who care about clean metadata.</em></p>
 
 <p align="center">
-  <a href="https://github.com/itsbryanman/BookBot/actions/workflows/ci.yml">
-    <img alt="CI" src="https://github.com/itsbryanman/BookBot/actions/workflows/ci.yml/badge.svg?style=for-the-badge" />
-  </a>
-  <a href="https://ghcr.io/itsbryanman/bookbot">
-    <img alt="Docker" src="https://img.shields.io/badge/docker-ghcr.io%2Fitsbryanman%2Fbookbot-2496ED?style=for-the-badge&logo=docker&logoColor=white" />
-  </a>
-  <a href="https://pypi.org/project/bookbot-cli/">
-    <img alt="PyPI" src="https://img.shields.io/pypi/v/bookbot-cli?style=for-the-badge&logo=pypi&logoColor=white" />
-  </a>
-  <a href="https://pypi.org/project/bookbot-cli/">
-    <img alt="Python versions" src="https://img.shields.io/pypi/pyversions/bookbot-cli?style=for-the-badge&logo=python&logoColor=white" />
-  </a>
-  <a href="LICENSE">
-    <img alt="License" src="https://img.shields.io/github/license/itsbryanman/BookBot?style=for-the-badge&color=brightgreen" />
-  </a>
-  <a href="https://github.com/psf/black">
-    <img alt="Code style" src="https://img.shields.io/badge/code%20style-black-000000?style=for-the-badge&logo=python&logoColor=white" />
-  </a>
-  <a href="https://github.com/astral-sh/ruff">
-    <img alt="Ruff" src="https://img.shields.io/badge/linter-ruff-FCC21B?style=for-the-badge&logo=ruff&logoColor=white" />
-  </a>
-  <a href="http://mypy-lang.org/">
-    <img alt="Typing" src="https://img.shields.io/badge/typed-mypy-blue?style=for-the-badge&logo=python&logoColor=white" />
-  </a>
+  <a href="https://github.com/itsbryanman/BookBot/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/itsbryanman/BookBot/ci.yml?branch=main&style=for-the-badge&label=CI" /></a>
+  <a href="https://pypi.org/project/bookbot-cli/"><img alt="PyPI" src="https://img.shields.io/pypi/v/bookbot-cli?style=for-the-badge&logo=pypi&logoColor=white" /></a>
+  <a href="https://pypi.org/project/bookbot-cli/"><img alt="Python versions" src="https://img.shields.io/pypi/pyversions/bookbot-cli?style=for-the-badge&logo=python&logoColor=white" /></a>
+  <a href="https://github.com/itsbryanman/BookBot/pkgs/container/bookbot"><img alt="Docker" src="https://img.shields.io/badge/docker-ghcr.io-2496ED?style=for-the-badge&logo=docker&logoColor=white" /></a>
+  <a href="LICENSE"><img alt="License" src="https://img.shields.io/github/license/itsbryanman/BookBot?style=for-the-badge&color=brightgreen" /></a>
 </p>
 
-BookBot is a Textual-powered terminal app and command-line toolkit for taming large audiobook libraries. Its core workflow is a safe, reviewable rename plan: scan a library, inspect the exact moves, apply them atomically, and undo them if needed.
+BookBot scans a messy audiobook library, matches every book against several metadata providers, and shows you the exact renames before anything moves. Changes are applied atomically, journaled for crash recovery, and can be undone with one key.
 
 ## Screenshots
 
-### Mission control
-
 <p align="center">
-  <img src="images/bookbot-mission-control.png" alt="BookBot mission-control interface" width="900" />
+  <img src="images/tui-library.png" alt="Library view with matches and rename preview" width="760" />
 </p>
 
-### Rename preview
-
-<p align="center">
-  <img src="images/bookbot-preview.png" alt="BookBot rename preview" width="900" />
-</p>
-
-### M4B conversion
-
-<p align="center">
-  <img src="images/bookbot-conversion.png" alt="BookBot M4B conversion interface" width="900" />
-</p>
+<table>
+  <tr>
+    <td align="center" width="50%"><img src="images/tui-review.png" alt="Candidate review" width="420" /><br /><sub>Compare candidates against what is on disk</sub></td>
+    <td align="center" width="50%"><img src="images/tui-sources.png" alt="Folder browser" width="420" /><br /><sub>Pick library folders without leaving the app</sub></td>
+  </tr>
+  <tr>
+    <td align="center"><img src="images/tui-diff.png" alt="Plan diff" width="420" /><br /><sub>Full plan diff before you apply</sub></td>
+    <td align="center"><img src="images/tui-convert.png" alt="M4B conversion" width="420" /><br /><sub>Queue single-file M4B conversions</sub></td>
+  </tr>
+</table>
 
 ## Highlights
 
-- Safe-plan workflow with dry-runs, write-ahead recovery journals, diffable JSON plans, transaction history, and undo support.
-- Built-in profiles for `safe`, `audiobookshelf`, `plex`, `prologue`, and `apple-books`.
-- `bookbot doctor` checks your runtime, FFmpeg health, writable config/cache paths, and library integrity before changes land.
-- Unified matching via `AdvancedMatcher`, with article and Unicode normalization, shared title and author scoring across providers, series and volume extraction, and built-in plus user-supplied `author_aliases.json` support.
-- Identifier-first matching uses embedded ASIN and ISBN guesses when available, short-circuiting to deterministic lookups before falling back to fuzzy search.
-- Multi-provider matching queries every enabled provider concurrently, merges overlapping candidates by identifier or normalized author/title, boosts confidence when providers corroborate a result, and falls back from title+author+series to stripped-title, title-only, and author-only searches when needed.
-- Runtime cross-checking compares local duration against provider-reported audiobook length to reward exact matches and flag likely abridged or wrong-edition candidates.
-- Provider coverage includes Open Library by default, Audnexus enabled by default, and optional Google Books, LibriVox, Audible, and Hardcover providers when configured.
-- `bookbot dedupe` builds a reviewable quarantine plan for duplicate editions and byte-identical files using edition clustering plus staged hashing (size -> partial hash -> full hash), then reuses `bookbot undo` for rollback.
-- Dedupe never deletes files: `--apply` moves quarantined tracks into `.bookbot-quarantine/<plan_id>/...`, preserves relative paths, and can write the plan to JSON for review.
-- Mission-control TUI with scan, metadata review, preview, warnings, diff, and undo shortcuts in one interface.
-- Configurable templates and collector profiles so folders, file names, covers, and sidecars match the way your players expect them.
-- Optional M4B conversion pipeline with FFmpeg stream copy, loudness normalization, and chapter generation.
-- M4B tooling for merging, splitting, tagging, and chapter injection.
-- Chapter detection pipeline with silence analysis, cue file parsing, track boundaries, and Audnexus chapter data.
-- Audiobookshelf integration for searching, matching, progress tracking, and bidirectional sync.
-- Library health auditing to catch missing covers, inconsistent tags, orphaned files, duplicates, and series gaps.
-- Smart organizer for restructuring messy libraries into Plex, Audiobookshelf, or custom directory layouts.
-- Sidecar metadata support for OPF (Calibre), BookLore JSON, and NFO formats.
-- Audible authentication, protected-format detection, and validated AAX removal for books you own. AAXC is detected and reports its voucher/content-key requirement instead of attempting an unsafe conversion.
+- **Reviewable plans.** Scan, preview, diff, apply atomically, undo. Interrupted applies are rolled back from a write-ahead journal with `bookbot recover`.
+- **Multi-provider matching.** Audnexus, Audible, Open Library, and LibriVox are queried together (plus Google Books and Hardcover with a key). Embedded ASIN/ISBN lookups come first, providers corroborate each other, and runtime checks flag abridged or wrong editions. `bookbot match` explains every score.
+- **Collector profiles** for Audiobookshelf, Plex, Prologue, and Apple Books, with configurable folder and file templates.
+- **Library audits.** `doctor` checks your setup and a library before changes land; `health` finds missing covers, tag drift, duplicates, and series gaps.
+- **Duplicate quarantine.** `dedupe` moves byte-identical files and duplicate editions into a quarantine folder. Nothing is deleted, and it is undoable.
+- **M4B tooling.** Convert, merge, split, tag, and detect chapters with FFmpeg.
+- **Sidecars and integrations.** Read OPF, Audiobookshelf JSON, and NFO; sync progress with an Audiobookshelf server; Audible library and AAX tools for books you own.
 
-## Installation
+## Install
 
-Docker is the fastest way to run BookBot with every dependency pre-baked. It keeps FFmpeg, optional DRM tooling, and Python libraries in one container so your host stays clean.
+BookBot needs Python 3.10+ and a system `ffmpeg`.
 
-### Docker (recommended)
+```bash
+pipx install bookbot-cli        # the command is `bookbot`
+```
+
+**Docker** bundles FFmpeg and every Python dependency:
 
 ```bash
 docker run -it --rm \
   -v "/path/to/audiobooks:/data" \
   -v "$PWD/config:/config" \
-  -e BOOKBOT_CONFIG_DIR=/config \
   ghcr.io/itsbryanman/bookbot:latest tui /data
 ```
 
-Mount your library into `/data` and persist configuration under `/config`. Swap `tui /data` for commands like `scan /data --plan /config/bookbot-plan.json`, `doctor /data`, or `convert /book --profile conversion`.
+With the included [`docker-compose.yml`](docker-compose.yml), put your library in `./audiobooks` and run `docker compose run --rm bookbot`. The Audible browser login needs a display, so run `bookbot audible auth` on the host.
 
-Or use Docker Compose with the included [`docker-compose.yml`](docker-compose.yml):
-
-```bash
-docker compose up
-```
-
-You can also add a convenience alias:
-
-```bash
-alias bookbot-docker='docker run -it --rm -v "$PWD/config:/config" -e BOOKBOT_CONFIG_DIR=/config -v "$PWD:/data" ghcr.io/itsbryanman/bookbot:latest'
-```
-
-Then run `bookbot-docker tui /data` from any library directory.
-
-### pipx (alternative)
-
-```bash
-pipx install bookbot-cli
-```
-
-The package on PyPI is `bookbot-cli`, but the executable is `bookbot`. pipx keeps BookBot isolated and places `bookbot` on your PATH. If the executable is not found after install, add `$HOME/.local/bin` to your shell profile.
-
-### pip / virtualenv (alternative)
-
-```bash
-python -m pip install bookbot-cli
-python -m pip install "bookbot-cli[conversion]"
-```
-
-You still need a system FFmpeg binary for audio conversion and DRM extraction.
-
-### From source
+**From source:**
 
 ```bash
 git clone https://github.com/itsbryanman/BookBot.git
 cd BookBot
-python -m pip install -e .[dev]
+python -m pip install -e ".[dev]"
 ```
-
-The editable install gives you live reload while iterating on the app.
 
 ## Quick start
 
 ```bash
-# 1. Create a safe, reviewable rename plan
-bookbot scan /path/to/audiobooks --plan ./bookbot-plan.json
-
-# 2. Review or diff the plan before touching files
-bookbot review ./bookbot-plan.json
-bookbot plan diff ./bookbot-plan.json
-
-# 3. Apply it atomically, then undo if needed
-bookbot apply ./bookbot-plan.json
-bookbot undo <transaction-id>
-
-# If an apply was interrupted by a process kill or power loss
-bookbot recover
-bookbot recover <transaction-id>
-
-# 4. Check the host or a mounted library before a bigger run
-bookbot doctor
-bookbot doctor /path/to/audiobooks --profile audiobookshelf
-
-# 5. Launch the Textual TUI for interactive review
-bookbot tui /path/to/audiobooks
-
-#    Stay offline by reusing existing sidecar metadata
-bookbot tui /path/to/audiobooks --metadata-from-files
-
-# 6. Convert a finished book to a single tagged M4B
-bookbot convert /path/to/book -o /path/to/output --normalize --chapters auto
-
-# 7. Authenticate with Audible once, then import books by ASIN
-bookbot audible auth
-bookbot audible import B01234567X --remove-drm
+bookbot tui /path/to/audiobooks              # interactive: scan, match, preview, apply
 ```
 
-Prefer a desktop entry point? `bookbot gui` launches the same Textual application and falls back to the CLI if GUI dependencies are missing.
+Or script the same flow:
 
-## Core workflows
+```bash
+bookbot doctor /path/to/audiobooks           # check FFmpeg, config, and the library
+bookbot scan /path/to/audiobooks --plan plan.json
+bookbot plan diff plan.json                  # exact moves, nothing touched yet
+bookbot apply plan.json                      # prints a transaction ID
+bookbot undo <transaction-id>                # a unique prefix is enough
+```
 
-**Organize safely**
-- `bookbot scan DIR --plan bookbot-plan.json`
-- `bookbot review bookbot-plan.json`
-- `bookbot apply bookbot-plan.json`
-- `bookbot undo <transaction-id>`
-- The `bookbot plan` subgroup exposes the same flow explicitly: `create`, `show`, `diff`, `validate`, and `apply`.
+## The TUI
 
-**Tailor metadata**
-- Activate opinionated profiles with `bookbot profile list`, `bookbot profile show audiobookshelf`, and `bookbot profile use plex`.
-- Built-in collector profiles define folder layout, preferred packaged filename, cover behavior, sidecar output, M4B preference, and chapter style.
-- Customize templates or output behavior with `bookbot config show`, `bookbot config set output.folder_template ...`, and runtime `--profile` flags.
+`bookbot tui DIR...` opens the library view: books on the left, matches and the rename preview on the right, and a progress strip across the top (`Scan › Match › Preview › Apply`). Launch it without a folder and pick one on the **Sources** tab. Matching runs in the background, so the interface stays responsive on large libraries.
 
-**Diagnose first**
-- `bookbot doctor` checks Python, FFmpeg, config/cache writability, and provider configuration.
-- `bookbot doctor ./library --profile audiobookshelf` validates plan compatibility, cover art, narrators, duplicate titles, broken chapters, suspiciously short tracks, unsupported formats, and Windows/Samba-hostile filenames.
+| Key | Action |
+| --- | --- |
+| `s` | Scan the library folders |
+| `m` | Match every book against the metadata providers |
+| `Enter` / `c` | Compare candidates for the highlighted match |
+| `A` | Accept every safe match (no blocking flag, confidence 0.75+) |
+| `p` | Preview the rename plan |
+| `a`, `a` | Apply (press twice; switching tabs or waiting 10 s cancels) |
+| `u` | Undo the latest applied transaction |
+| `d` | Full plan diff |
+| `f` | List scan warnings |
+| `ctrl+r` | Rescan from disk |
+| `?` | All shortcuts |
 
-**Bring your own providers**
-- Open Library and Audnexus are always on. Add Google Books, LibriVox, Audible, or Hardcover enrichment with:
-  ```bash
-  bookbot provider set-key googlebooks YOUR_API_KEY
-  bookbot provider set-key hardcover YOUR_TOKEN
-  bookbot provider enable librivox
-  bookbot provider enable audible
-  bookbot provider list
-  ```
-- Audible marketplace defaults to US; switch with `bookbot provider set-marketplace UK`.
+In the candidate picker: `Enter` accepts, `r` re-runs matching, `/` searches by title, author, ASIN, or ISBN, `s` skips the book, and `Esc` closes. Add `--metadata-from-files` to work offline from existing sidecars.
 
-**Convert and normalize**
-- Install FFmpeg, then enable the conversion profile or pass `--profile conversion`.
-- Stream copy AAC sources when possible, or set bitrate/VBR/normalization flags per run.
-- Chapters can come from tags, track order, or custom names depending on your config.
+## Command reference
 
-**DRM tooling**
-- Detect protection on folders of files with `bookbot drm detect ./library --recursive`.
-- Store activation bytes once using `bookbot drm set-activation-bytes DEADBEAF`.
-- Remove DRM in place or to a clean output location using `bookbot drm remove book.aax -o ./clean`.
+Run `bookbot COMMAND --help` for every option. Global flags: `--config-dir PATH`, `--version`.
 
-## CLI cheat sheet
+**Plans and history**
 
 | Command | Purpose |
 | --- | --- |
-| `bookbot scan DIR --plan PLAN.json` | Inspect directories, infer series/disc structure, and write a reviewable rename plan without touching files. |
-| `bookbot review PLAN.json` | Show the saved plan with warnings, conflicts, and exact file moves. |
-| `bookbot apply PLAN.json` | Apply a saved plan atomically and emit a transaction ID for undo. |
-| `bookbot plan create/show/diff/validate/apply` | Explicit safe-plan workflow for scripting and auditing. |
-| `bookbot doctor [DIR]` | Verify runtime dependencies and optionally inspect a library for compatibility problems. |
-| `bookbot profile use NAME` | Apply a collector profile such as `safe`, `audiobookshelf`, `plex`, `prologue`, or `apple-books`. |
-| `bookbot tui DIR...` | Launch the interactive Textual mission-control interface. Add `--metadata-from-files` to reuse local NFO/JSON sidecars instead of online providers. |
-| `bookbot convert DIR -o OUT` | Build single-file, chaptered M4B releases with optional normalization and artwork. |
-| `bookbot history --days 7` | Review completed transactions and identify undo candidates. |
-| `bookbot undo ID` | Roll back an operation safely using its transaction identifier. |
-| `bookbot recover [ID]` | List interrupted operations or restore one from its durable write-ahead journal. |
-| `bookbot provider ...` | Enable, disable, and configure metadata providers and API keys. |
-| `bookbot config ...` | Manage global config, reset defaults, and inspect profile settings stored under `~/.config/bookbot`. |
-| `bookbot health DIR` | Audit a library for missing covers, inconsistent tags, orphaned files, duplicates, and series gaps. Use `--json-output` for machine-readable output. |
-| `bookbot organize SOURCE` | Reorganize a library into a clean structure. Use `--template abs\|plex\|default` and `--confirm` to execute. |
-| `bookbot chapters detect DIR` | Detect chapters via silence analysis, cue files, track boundaries, or Audnexus data. |
-| `bookbot chapters apply DIR` | Write detected chapters as FFMETADATA1 or cue sidecar files. |
-| `bookbot m4b merge DIR -o OUT` | Merge audio files into a single M4B with optional chapter markers and cover art. |
-| `bookbot m4b split FILE -o DIR` | Split an M4B into individual files by chapter. |
-| `bookbot m4b chapters FILE` | Display embedded chapter markers. |
-| `bookbot m4b tag FILE` | Update metadata tags and cover art on an M4B file. |
-| `bookbot sidecar read DIR` | Display detected sidecar metadata (OPF, JSON, NFO). |
-| `bookbot sidecar write DIR` | Generate sidecar metadata from tags or matched identity. |
-| `bookbot abs login` | Authenticate with an Audiobookshelf server. |
-| `bookbot abs libraries` | List all libraries on the ABS server. |
-| `bookbot abs search LIB QUERY` | Search a library for audiobooks. |
-| `bookbot abs list LIB` | List items in a library. |
-| `bookbot abs show ITEM` | Show full item details with chapters and progress. |
-| `bookbot abs match ITEM` | Trigger metadata match for an item. |
-| `bookbot abs match-all LIB` | Batch match all items in a library. |
-| `bookbot abs progress ITEM` | Get or set playback progress. |
-| `bookbot abs stats` | Show listening statistics. |
-| `bookbot abs sync` | Synchronize playback progress with the server. Use `--watch` for continuous sync. |
-| `bookbot audible ...` | Authenticate, list your library, and download titles directly from Audible. |
-| `bookbot drm ...` | Detect DRM, save activation bytes, and convert protected files. |
-| `bookbot completions SHELL` | Generate shell completions (bash, zsh, fish, or all). |
+| `scan DIR --plan PLAN.json` | Find audiobooks, infer series and disc layout, and write a plan. |
+| `plan create\|show\|diff\|validate\|apply` | The plan workflow, step by step. |
+| `review PLAN.json` | Show a plan with warnings and conflicts. |
+| `apply PLAN.json [--yes]` | Apply atomically and print a transaction ID. |
+| `history` / `undo ID` / `recover [ID]` | List, roll back, or recover interrupted transactions. |
 
-Use `--help` on any command or subgroup for the full option set.
+**Matching and review**
 
-## Configuration directory layout
-
-| Location | Purpose |
+| Command | Purpose |
 | --- | --- |
-| `~/.config/bookbot/config.toml` | Primary configuration file persisted by the TUI and CLI. |
-| `~/.config/bookbot/profiles/*.toml` | Saved profiles, including the bundled `safe`, `audiobookshelf`, `plex`, `prologue`, `apple-books`, `full`, and `conversion` presets. |
-| `~/.cache/bookbot/` | Cached metadata, cover art, and conversion plans. Delete to force fresh lookups. |
-| `~/.local/share/bookbot/logs/transaction_*.json` | Transaction history used for undo and audit logs. |
+| `match DIR [--show-all] [--json]` | Show merged candidates and why they scored as they did. |
+| `review-queue DIR` | List books that still need a decision. |
+| `accept DIR --set N --candidate M` | Accept a candidate (or `--skip` the book). |
+| `provider list\|enable\|disable\|set-key\|set-marketplace` | Configure metadata providers. |
 
-Config files use TOML; edit by hand or via `bookbot config` commands.
+**Library tools**
 
-## Metadata providers
-
-| Provider | Notes |
+| Command | Purpose |
 | --- | --- |
-| Open Library | Default, always enabled, free. Core search source for titles and authors. |
-| Audnexus | Enabled by default, free, no API key. Audiobook-specific metadata and chapter data via ASIN lookup. Supports regional marketplaces. |
-| Google Books | Requires an API key; adds richer descriptions and ISBN data. |
-| LibriVox | Public domain library; great for narrator and language hints. |
-| Audible | Requires authentication; unlocks commercial metadata and download tooling. |
-| Hardcover | Requires a Bearer token from your Hardcover account. GraphQL API for book metadata with audiobook duration matching. |
+| `doctor [DIR]` | Check the runtime and audit a library for compatibility problems. |
+| `health DIR [--json-output]` | Missing covers, inconsistent tags, orphans, duplicates, series gaps. |
+| `dedupe DIR [--apply]` | Quarantine duplicate files and editions; undo with `bookbot undo`. |
+| `organize DIR --template abs\|plex\|default [--confirm]` | Restructure into a player layout. Not journaled; use `scan` + `apply` when you want undo. |
+| `profile list\|show\|use NAME` | Built-in collector profiles. |
+| `config show\|get\|set\|edit\|where\|reset` | Settings, e.g. `config set output.folder_template "{author_sort}/{title}"`. |
 
-Provider priorities and fallback logic are configurable through the `ConfigManager`. Combine multiple providers for higher confidence matches.
+**Audio, chapters, and sidecars**
 
-## Conversion pipeline
+| Command | Purpose |
+| --- | --- |
+| `convert DIR -o OUT [--normalize] [--chapters auto]` | Build a single chaptered, tagged M4B. `--dry-run` prints the plan. |
+| `m4b merge\|split\|tag\|chapters` | Work with existing M4B files. |
+| `chapters detect\|apply DIR` | Chapters from Audnexus, cue files, track boundaries, or silence. |
+| `sidecar read\|write\|sync DIR` | OPF, JSON, and NFO metadata files. |
 
-The conversion subsystem lives in `bookbot.convert` and wraps FFmpeg (through `ffmpeg-python`) to build high quality, chaptered M4B files. Highlights:
+**Integrations**
 
-- Auto-detects when stream copy is safe to avoid re-encoding AAC tracks.
-- Supports bitrate or VBR quality targets with optional EBU R128 loudness normalization.
-- Generates chapter markers from track segmentation or existing tags.
-- Embeds cover art and metadata pulled from the selected provider record.
-- Writes conversion plans to disk so you can dry-run before touching anything (`bookbot convert --dry-run`).
+| Command | Purpose |
+| --- | --- |
+| `abs login\|libraries\|list\|search\|show\|match\|progress\|sync` | Audiobookshelf server tools. `abs sync --watch` keeps progress in sync. |
+| `audible auth\|list\|import` | Log in, list your Audible library, import by list number. |
+| `drm detect\|set-activation-bytes\|remove` | AAX tools for books you own. |
+| `completions bash\|zsh\|fish` | Shell completions. |
 
-## DRM and Audible helpers
+## Configuration
 
-BookBot includes a focused DRM toolkit backed by `ffmpeg` and the `audible` Python package.
+`bookbot config where` prints the active paths. The config directory comes from `--config-dir`, then `BOOKBOT_CONFIG_DIR`, then `~/.config/bookbot` (`%APPDATA%\bookbot` on Windows). When you set it explicitly, the cache and logs live under it too.
 
-![BookBot protected audiobook tools](images/bookbot-drm.png)
+| Path | Contents |
+| --- | --- |
+| `config.toml` | Main settings (TOML). |
+| `profiles/*.toml` | `safe`, `audiobookshelf`, `plex`, `prologue`, `apple-books`, `full`, `conversion`. |
+| `author_aliases.json` | Optional pen-name and spelling aliases used during matching. |
+| `~/.cache/bookbot/bookbot_cache.db` | Provider lookup cache; delete it to force fresh lookups. |
+| `~/.local/share/bookbot/logs/` | Transaction journals for undo and recover, plus logs. |
 
-1. Authenticate once with `bookbot audible auth`; credentials are stored in the system keyring.
-2. List your library (`bookbot audible list --limit 50`) or import specific titles by ASIN.
-3. Use `bookbot drm detect` to map protected files and `bookbot drm remove` to produce DRM-free audio. Activation bytes can be supplied per run or cached via `bookbot drm set-activation-bytes`.
+**Templates.** The defaults are `output.folder_template = "{author_sort}/{title} ({year})"` and `output.file_template = "{DiscPad}{TrackPad} - {TrackTitle}"`. Available tokens: `{author}`, `{authors}`, `{author_sort}`, `{title}`, `{short_title}`, `{series}`, `{series_index}`, `{year}`, `{narrator}`, `{language}`, `{isbn}`, `{disc}`, `{disc_pad}`, `{track}`, `{track_pad}`, `{track_title}` (PascalCase forms such as `{AuthorLastFirst}` also work).
 
-### Retrieving Activation Bytes
-
-For DRM removal of Audible files, you'll need your account's activation bytes. BookBot can retrieve these for you.
-
-**Dependencies:**
-
-This feature requires `selenium` and `chromedriver`. If you are not using the Docker image, you will need to install them:
-
-```bash
-pip install selenium
-# Make sure chromedriver is in your PATH
-```
-
-**Usage:**
-
-Run the following command and follow the prompts to enter your Audible username and password:
+**Providers.** Audnexus (primary), Audible, Open Library, and LibriVox are on by default and need no key. Google Books and Hardcover turn on when you add a key:
 
 ```bash
-bookbot audible get-activation-bytes
+bookbot provider set-key googlebooks YOUR_API_KEY
+bookbot provider set-key hardcover YOUR_TOKEN
+bookbot provider set-marketplace UK          # Audible/Audnexus region, default US
 ```
 
-This stores activation bytes in the system keyring for future use. If no keyring is
-available, BookBot fails with an explanation instead of silently writing credentials to
-disk. To explicitly accept an owner-only local credential file, add
-`--credential-storage file` to the command.
+Set the order with `providers.priority_order` in `config.toml`.
 
-These features depend on optional packages (`audible`, `cryptography`, `keyring`, `selenium`) that are already declared in `pyproject.toml`. AAX removal requires an FFmpeg build with `activation_bytes` support. AAXC cannot be opened with activation bytes alone; it requires the matching voucher and content key.
+## Audible and DRM
 
-## Audiobookshelf integration
-
-BookBot can connect to an Audiobookshelf server for metadata matching, progress tracking, and library management.
-
-1. Authenticate with `bookbot abs login --server https://abs.example.com --username admin`.
-2. Browse your server with `bookbot abs libraries`, `bookbot abs list LIB_ID`, and `bookbot abs search LIB_ID QUERY`.
-3. Trigger metadata matching with `bookbot abs match ITEM_ID` or batch match an entire library.
-4. Sync playback progress bidirectionally with `bookbot abs sync`. Use `--watch --interval 60` for continuous background sync.
-
-## Library health checks
-
-Run `bookbot health /path/to/library` to audit for common issues:
-
-- Missing cover art (no embedded cover and no cover.jpg sidecar)
-- Inconsistent tags across tracks in the same book
-- Orphaned non-audio files
-- Duplicate editions (fuzzy title and author matching)
-- Series gaps (missing volumes in a numbered series)
-- Mixed audio formats within a single book
-- Bitrate anomalies (tracks with significantly different bitrates)
-
-Use `--json-output` for machine-readable output or `--verbose` for file-level detail.
-
-## Smart organizer
-
-The `bookbot organize` command restructures messy libraries into clean, player-compatible directory layouts:
+These tools are for audiobooks you own.
 
 ```bash
-# Preview proposed moves (default is dry-run)
-bookbot organize /messy/library --template abs
-
-# Execute the reorganization
-bookbot organize /messy/library --template abs --target /clean/library --confirm
+bookbot audible auth                         # browser login; cookies go to the system keyring
+bookbot audible list --limit 50
+bookbot audible import 1,3 --remove-drm -o ./audible
+bookbot drm remove book.aax -o ./clean --activation-bytes XXXXXXXX
 ```
 
-Built-in templates: `default`, `abs` (Audiobookshelf-compatible), `plex` (Plex Media Server).
-
-## Chapter detection
-
-BookBot can detect and generate chapter markers using multiple strategies:
-
-1. **Audnexus** - fetch chapter data by ASIN from the Audnexus API
-2. **Cue files** - parse existing .cue sidecar files
-3. **Track boundaries** - treat each audio file as a chapter
-4. **Silence detection** - use FFmpeg to find silence gaps between chapters
-
-```bash
-bookbot chapters detect /path/to/book --method auto
-bookbot chapters apply /path/to/book --format ffmetadata
-```
-
-## Sidecar metadata
-
-BookBot reads and writes sidecar metadata files for interoperability with other audiobook tools:
-
-- **OPF** (Dublin Core XML) - compatible with Calibre and Audiobookshelf
-- **BookLore JSON** - `.metadata.json` format
-- **NFO** - audiobook info files (XML or key-value)
-
-```bash
-bookbot sidecar read /path/to/book
-bookbot sidecar write /path/to/book --format opf
-```
+`bookbot audible get-activation-bytes` also needs `selenium` and a `chromedriver` on your PATH (not bundled, including in Docker). Activation bytes are stored in the system keyring; add `--credential-storage file` to accept an owner-only local file when no keyring exists. AAX removal needs an FFmpeg build with `activation_bytes` support. AAXC needs its matching voucher and content key.
 
 ## Development
 
 ```bash
-make install-dev   # install dev dependencies
-make lint          # ruff + mypy
-make format        # black
+make dev-setup     # editable install with dev tools
+make lint          # ruff check + ruff format --check
+make type-check    # mypy
 make test          # pytest
-make pre-commit    # run the full formatting and lint bundle
+make pre-commit    # format, lint, type-check, fast tests
 ```
 
-Textual ships with a live reload server: run `textual run --dev bookbot.tui.app:BookBotApp` while editing the TUI.
+For TUI debugging, run `textual console` in one terminal and `TEXTUAL=devtools,debug bookbot tui demo_library/` in another (`make demo` builds the demo library).
 
 ## Contributing
 
-I  welcome issues and pull requests. Please:
+Issues and pull requests are welcome. Add tests under `tests/` for new behavior and run `make pre-commit` before opening a PR.
 
-1. Fork the repo and create a feature branch.
-2. Add or update tests under `tests/` for any new functionality.
-3. Run `make pre-commit` before submitting to keep style and typing checks green.
-4. Document user-facing changes in this README or the changelog if applicable.
+## Support
 
-## did you like bookbot?
 [![Ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/itsbryandude)
-
 
 ## License
 
-BookBot is released under the MIT License. See [LICENSE](LICENSE) for the full text.
+MIT. See [LICENSE](LICENSE).
