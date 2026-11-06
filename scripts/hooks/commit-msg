@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """commit-msg hook: strip AI attribution lines from the commit message.
 
-Removes lines matching (case-insensitive):
-  ^co-authored-by:.*(claude|copilot)
-  ^.*generated with.*claude code.*$
-Trailing blank lines left behind are collapsed.
+Removes only:
+  - Co-authored-by trailers naming Claude or Copilot
+  - the Claude Code footer line itself: "Generated with Claude Code" or
+    "Generated with [Claude Code](<url>)", optionally after the robot emoji
+Other lines that merely mention Claude Code are kept. Trailing blank lines
+left behind are collapsed.
 """
 
 import re
@@ -12,7 +14,10 @@ import sys
 
 PATTERNS = (
     re.compile(r"(?i)^co-authored-by:.*(claude|copilot)"),
-    re.compile(r"(?i)^.*generated with.*claude code.*$"),
+    re.compile(
+        r"(?i)^\s*(?:\N{ROBOT FACE}\s*)?generated with "
+        r"(?:claude code|\[claude code\]\([^)]*\))\s*$"
+    ),
 )
 
 
