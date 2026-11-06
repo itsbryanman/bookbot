@@ -3,6 +3,7 @@
 import os
 import sys
 from pathlib import Path
+from typing import Any
 
 import toml
 from pydantic import ValidationError
@@ -26,6 +27,17 @@ def get_runtime_config_dir(config_dir: Path | None = None) -> Path:
         base = Path.home() / ".config"
 
     return base / "bookbot"
+
+
+def _fill_missing(data: dict[str, Any], defaults: dict[str, Any]) -> dict[str, Any]:
+    """``data`` with keys it lacks taken from ``defaults``, recursively."""
+    merged = dict(data)
+    for key, value in defaults.items():
+        if key not in merged:
+            merged[key] = value
+        elif isinstance(merged[key], dict) and isinstance(value, dict):
+            merged[key] = _fill_missing(merged[key], value)
+    return merged
 
 
 class ConfigManager:
@@ -145,7 +157,19 @@ class ConfigManager:
         try:
             with open(profile_file, encoding="utf-8") as f:
                 profile_data = toml.load(f)
-                return Profile(**profile_data)
+            # Built-in profiles are written to disk once. Keys added in later
+            # versions are missing from those files; take them from the
+            # built-in definition rather than the plain model defaults.
+            # Values in the file still win.
+            builtin = next(
+                (p for p in self._builtin_profiles() if p.name == name), None
+            )
+            if builtin is not None:
+                profile_data = _fill_missing(
+                    profile_data,
+                    builtin.model_dump(exclude_none=True, mode="json"),
+                )
+            return Profile(**profile_data)
         except (OSError, ValidationError, toml.TomlDecodeError):
             return None
 
@@ -193,7 +217,13 @@ class ConfigManager:
         return True
 
     def create_default_profiles(self) -> None:
-        """Create default configuration profiles."""
+        """Write built-in profiles that are not on disk yet."""
+        for profile in self._builtin_profiles():
+            if not (self.profiles_dir / f"{profile.name}.toml").exists():
+                self.save_profile(profile)
+
+    def _builtin_profiles(self) -> list[Profile]:
+        """The built-in profiles, as this version defines them."""
         base_config = self._build_default_config()
         default_profiles = [
             Profile(
@@ -393,9 +423,7 @@ class ConfigManager:
             ),
         ]
 
-        for profile in default_profiles:
-            if not (self.profiles_dir / f"{profile.name}.toml").exists():
-                self.save_profile(profile)
+        return default_profiles
 
     def reset_to_defaults(self) -> None:
         """Reset configuration to defaults."""

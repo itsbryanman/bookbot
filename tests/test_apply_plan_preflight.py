@@ -166,3 +166,40 @@ def test_failed_post_apply_save_reports_transaction_and_exits_2(
     assert "files were changed; plan file not updated" in result.output
     assert "bookbot history" in result.output
     assert f"bookbot undo {match.group(1)}" in result.output
+
+
+# ── Codex review on #9 ──
+
+
+def test_writable_plan_in_read_only_directory_is_allowed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_dir, plan_file, track_path = _plan(tmp_path)
+    real_access = os.access
+
+    def fake_access(path, mode, *args, **kwargs):  # type: ignore[no-untyped-def]
+        if mode & os.W_OK and Path(path).resolve() == plan_file.parent.resolve():
+            return False
+        return real_access(path, mode, *args, **kwargs)
+
+    monkeypatch.setattr("bookbot.cli.os.access", fake_access)
+
+    result = _apply(config_dir, plan_file)
+
+    assert result.exit_code == 0, result.output
+    assert not track_path.exists()
+    assert json.loads(plan_file.read_text())["applied_transaction_id"]
+
+
+def test_plan_out_beneath_a_regular_file_is_rejected_before_moving(
+    tmp_path: Path,
+) -> None:
+    config_dir, plan_file, track_path = _plan(tmp_path)
+    blocker = tmp_path / "existing-file"
+    blocker.write_text("not a directory")
+
+    result = _apply(config_dir, plan_file, "--plan-out", str(blocker / "applied.json"))
+
+    assert result.exit_code == 1
+    assert "not a directory" in result.output
+    assert track_path.exists()

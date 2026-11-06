@@ -1,6 +1,4 @@
-<p align="center">
-  <img src="logo.png" alt="BookBot logo" width="200" />
-</p>
+
 
 <h1 align="center">BookBot</h1>
 
