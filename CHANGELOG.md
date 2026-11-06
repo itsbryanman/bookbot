@@ -27,7 +27,7 @@ Every entry below is covered by a test in `tests/` (file named in brackets).
 - Discovery: `Author/Series/01 - Title/` folders give the right title, author, series and number (was title "01", author "All Systems Red"). [test_discovery_series_layouts.py]
 - Discovery: a folder name no longer loses to an album tag that names the series. The album becomes the series guess, and the book is flagged for review unless the track titles back the folder name. [test_discovery_series_layouts.py]
 - M4B chapter boundaries are measured from MP4 temp tracks instead of bitrate estimates on ADTS files. They land within 50 ms of the real track boundaries, and the last chapter ends within the audio stream. [test_m4b_chapters.py]
-- Chapter titles containing `=`, `;`, `#`, `\\` or newlines are escaped in FFMETADATA and read back unchanged. [test_m4b_chapters.py]
+- Chapter titles containing `=`, `;`, `#`, `\` or newlines are escaped in FFMETADATA and read back unchanged. [test_m4b_chapters.py]
 - Cover art that cannot be embedded during `convert` produces a warning instead of failing silently. [test_m4b_chapters.py]
 - `m4b tag` errors include the FFmpeg version and the end of FFmpeg's stderr. [test_m4b_chapters.py]
 - `apply` checks the plan file is writable before moving anything. If saving it fails afterwards, it prints the transaction ID with `history`/`undo` hints and exits 2 (it used to exit 1 with only a permission error). [test_apply_plan_preflight.py]
