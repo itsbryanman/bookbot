@@ -77,6 +77,85 @@ def _coerce_int(value: Any) -> int | None:
         return None
 
 
+def split_narrators(value: str | None) -> list[str]:
+    """Split a narrator string on ',', ';' and '&'."""
+    if not value:
+        return []
+    names: list[str] = []
+    for part in re.split(r"\s*[,;&]\s*", value):
+        name = part.strip()
+        if name and name not in names:
+            names.append(name)
+    return names
+
+
+def _isbn(identity: ProviderIdentity) -> str | None:
+    return identity.isbn_13 or identity.isbn_10
+
+
+def abs_metadata_fields(identity: ProviderIdentity) -> dict[str, Any]:
+    """Fields for an Audiobookshelf metadata.json (mediaTypeKeys.book types)."""
+    data: dict[str, Any] = {"title": identity.title}
+    if identity.subtitle:
+        data["subtitle"] = identity.subtitle
+    if identity.authors:
+        data["authors"] = list(identity.authors)
+    narrators = split_narrators(identity.narrator)
+    if narrators:
+        data["narrators"] = narrators
+    if identity.series_name:
+        series = identity.series_name
+        if identity.series_index:
+            series = f"{series} #{identity.series_index}"
+        data["series"] = [series]
+    if identity.genres:
+        data["genres"] = list(identity.genres)
+    if identity.year:
+        data["publishedYear"] = str(identity.year)
+    scalars = {
+        "publisher": identity.publisher,
+        "description": identity.description,
+        "isbn": _isbn(identity),
+        "asin": identity.asin,
+        "language": identity.language,
+    }
+    data.update({key: value for key, value in scalars.items() if value})
+    return data
+
+
+def booklore_metadata_fields(identity: ProviderIdentity) -> dict[str, Any]:
+    """Fields for a BookLore-style metadata.json."""
+    data: dict[str, Any] = {
+        "title": identity.title,
+        "authors": identity.authors,
+    }
+    optional: dict[str, Any] = {
+        "subtitle": identity.subtitle,
+        "series": identity.series_name,
+        "seriesIndex": identity.series_index,
+        "narrator": identity.narrator,
+        "year": identity.year,
+        "isbn": _isbn(identity),
+        "asin": identity.asin,
+        "description": identity.description,
+        "publisher": identity.publisher,
+        "language": identity.language,
+        "genres": list(identity.genres) or None,
+        "coverUrl": identity.cover_urls[0] if identity.cover_urls else None,
+    }
+    data.update({key: value for key, value in optional.items() if value})
+    return data
+
+
+def load_json_object(path: Path) -> dict[str, Any] | None:
+    """Read a JSON object from ``path``; None if missing or not an object."""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
 def sidecar_output_paths(
     directory: Path,
     identity: ProviderIdentity,
@@ -348,10 +427,12 @@ class SidecarManager:
                 provider="sidecar_json",
                 external_id=str(path),
                 title=title,
+                subtitle=_coerce_scalar(data.get("subtitle")),
                 authors=authors,
                 series_name=series_name,
                 series_index=series_index,
                 year=year,
+                genres=_coerce_str_list(data.get("genres")),
                 language=_coerce_scalar(data.get("language")),
                 narrator=narrator,
                 publisher=_coerce_scalar(data.get("publisher")),
@@ -371,35 +452,30 @@ class SidecarManager:
             logger.warning(f"Ignoring unusable metadata JSON {path}: {e}")
             return None
 
-    def write_metadata_json(self, path: Path, identity: ProviderIdentity) -> None:
-        """Write metadata as BookLore-style JSON."""
-        data: dict[str, Any] = {
-            "title": identity.title,
-            "authors": identity.authors,
-        }
+    def write_metadata_json(
+        self,
+        path: Path,
+        identity: ProviderIdentity,
+        *,
+        style: str = "booklore",
+        existing: dict[str, Any] | None = None,
+    ) -> None:
+        """Write metadata.json in BookLore or Audiobookshelf style.
 
-        if identity.series_name:
-            data["series"] = identity.series_name
-        if identity.series_index:
-            data["seriesIndex"] = identity.series_index
-        if identity.narrator:
-            data["narrator"] = identity.narrator
-        if identity.year:
-            data["year"] = identity.year
-        if identity.isbn_13:
-            data["isbn"] = identity.isbn_13
-        elif identity.isbn_10:
-            data["isbn"] = identity.isbn_10
-        if identity.asin:
-            data["asin"] = identity.asin
-        if identity.description:
-            data["description"] = identity.description
-        if identity.publisher:
-            data["publisher"] = identity.publisher
-        if identity.language:
-            data["language"] = identity.language
-        if identity.cover_urls:
-            data["coverUrl"] = identity.cover_urls[0]
+        ``existing`` is the content of the metadata.json being replaced.
+        Its keys are kept and only the fields BookBot has values for are
+        overwritten, so chapters, tags, genres, explicit and abridged written
+        by another tool survive.
+        """
+        if style == "audiobookshelf":
+            fields = abs_metadata_fields(identity)
+        elif style == "booklore":
+            fields = booklore_metadata_fields(identity)
+        else:
+            raise ValueError(f"Unknown metadata.json style: {style!r}")
+
+        data: dict[str, Any] = dict(existing) if existing else {}
+        data.update(fields)
 
         path.write_text(
             json.dumps(data, indent=2, ensure_ascii=False) + "\n",

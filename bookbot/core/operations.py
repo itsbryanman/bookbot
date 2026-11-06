@@ -13,7 +13,7 @@ from mutagen import MutagenError
 
 from ..config.manager import ConfigManager
 from ..core.logging import get_logger
-from ..io.sidecar import SidecarManager, sidecar_output_paths
+from ..io.sidecar import SidecarManager, load_json_object, sidecar_output_paths
 from .discovery import QUARANTINE_DIRNAME, is_ignored_file, is_within_quarantine_tree
 from .models import AudioTags, OperationRecord, RenameOperation, RenamePlan, Track
 
@@ -107,7 +107,19 @@ class TransactionManager:
 
                 try:
                     if sidecar_kind == "metadata_json":
-                        self.sidecar_manager.write_metadata_json(target_path, identity)
+                        # Merge into the file being replaced (kept as the
+                        # backup for undo) so keys BookBot does not model,
+                        # such as chapters or tags, survive.
+                        self.sidecar_manager.write_metadata_json(
+                            target_path,
+                            identity,
+                            style=config.output.metadata_json_style,
+                            existing=(
+                                load_json_object(backup_path)
+                                if backup_path is not None
+                                else None
+                            ),
+                        )
                     elif sidecar_kind == "metadata_opf":
                         self.sidecar_manager.write_opf(target_path, identity)
                     elif sidecar_kind == "nfo":

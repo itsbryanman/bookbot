@@ -192,6 +192,11 @@ class LibraryOutputConfig(BaseModel):
     write_metadata_json: bool = True
     write_metadata_opf: bool = False
     write_nfo: bool = False
+    # "booklore": series/seriesIndex/narrator/year scalars.
+    # "audiobookshelf": the key names and types ABS's metadata.json parser
+    # accepts (string arrays for authors/narrators/series/genres,
+    # publishedYear as a string).
+    metadata_json_style: Literal["booklore", "audiobookshelf"] = "booklore"
     prefer_m4b: bool = False
     chapter_style: str = "auto"  # "auto", "from_tags", "track"
 

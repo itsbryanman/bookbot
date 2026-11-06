@@ -209,6 +209,15 @@ def _match_query_text(audiobook_set: Any) -> str:
     return str(title)
 
 
+def metadata_from_files_option(func: Any) -> Any:
+    """``--metadata-from-files``, shared by every command that matches."""
+    return click.option(
+        "--metadata-from-files",
+        is_flag=True,
+        help="Use local metadata sidecar files instead of online providers",
+    )(func)
+
+
 MatchSessionRow = tuple[Any, list[Any], BaseException | None, str | None, Any | None]
 
 
@@ -485,6 +494,7 @@ def _local_guess_payload(audiobook_set: Any) -> dict[str, Any]:
         "Without it, only saved review decisions are applied, offline."
     ),
 )
+@metadata_from_files_option
 @click.option("--lang", type=str, default="en", help="Preferred language")
 @click.option("--cache", type=click.Path(path_type=Path), help="Cache directory")
 @click.option("--log", type=click.Path(path_type=Path), help="Log file path")
@@ -499,6 +509,7 @@ def scan(
     template: str | None,
     plan_path: Path | None,
     run_match: bool,
+    metadata_from_files: bool,
     lang: str,
     cache: Path | None,
     log: Path | None,
@@ -533,8 +544,18 @@ def scan(
             click.echo("No audiobooks found in the specified directory.")
             return
 
+        if metadata_from_files and not run_match:
+            click.echo(
+                "Error: --metadata-from-files only applies with --match", err=True
+            )
+            sys.exit(1)
         if run_match:
-            _match_sets(config_manager, audiobook_sets, limit=5)
+            _match_sets(
+                config_manager,
+                audiobook_sets,
+                limit=5,
+                metadata_from_files=metadata_from_files,
+            )
         else:
             _apply_saved_decisions(config_manager, audiobook_sets)
 
@@ -617,11 +638,7 @@ def scan(
     "folders", nargs=-1, type=click.Path(exists=True, file_okay=False, path_type=Path)
 )
 @click.option("--profile", type=str, help="Configuration profile to use")
-@click.option(
-    "--metadata-from-files",
-    is_flag=True,
-    help="Use local metadata sidecar files instead of online providers",
-)
+@metadata_from_files_option
 @click.pass_context
 def tui(
     ctx: click.Context,
@@ -668,6 +685,7 @@ def tui(
 @click.option("--limit", type=int, default=5, show_default=True)
 @click.option("--show-all", is_flag=True, help="Show every returned candidate")
 @click.option("--json", "as_json", is_flag=True, help="Emit structured JSON")
+@metadata_from_files_option
 @click.pass_context
 def match(
     ctx: click.Context,
@@ -675,6 +693,7 @@ def match(
     limit: int,
     show_all: bool,
     as_json: bool,
+    metadata_from_files: bool,
 ) -> None:
     """Inspect merged metadata matches and the reasons behind them."""
     config_manager = ctx.obj["config_manager"]
@@ -683,6 +702,7 @@ def match(
         config_manager,
         folder,
         limit=fetch_limit,
+        metadata_from_files=metadata_from_files,
     )
 
     if not audiobook_sets:
@@ -791,12 +811,14 @@ def match(
 @click.argument("folder", type=click.Path(exists=True, file_okay=False, path_type=Path))
 @click.option("--limit", type=int, default=10, show_default=True)
 @click.option("--json", "as_json", is_flag=True, help="Emit structured JSON")
+@metadata_from_files_option
 @click.pass_context
 def review_queue(
     ctx: click.Context,
     folder: Path,
     limit: int,
     as_json: bool,
+    metadata_from_files: bool,
 ) -> None:
     """List audiobook sets that still require manual review."""
     config_manager = ctx.obj["config_manager"]
@@ -804,6 +826,7 @@ def review_queue(
         config_manager,
         folder,
         limit=max(limit, 10),
+        metadata_from_files=metadata_from_files,
     )
 
     if not audiobook_sets:
@@ -934,6 +957,7 @@ def _select_candidate(
 @click.option("--asin", type=str, help="Accept the candidate with this ASIN")
 @click.option("--isbn", type=str, help="Accept the candidate with this ISBN-10/13")
 @click.option("--skip", "skip_set", is_flag=True, help="Skip the set from future plans")
+@metadata_from_files_option
 @click.pass_context
 def accept(
     ctx: click.Context,
@@ -944,6 +968,7 @@ def accept(
     asin: str | None,
     isbn: str | None,
     skip_set: bool,
+    metadata_from_files: bool,
 ) -> None:
     """Persist a manual review decision for one queued set."""
     from .core.review_store import ReviewDecisionStore
@@ -968,6 +993,7 @@ def accept(
         config_manager,
         folder,
         limit=25,
+        metadata_from_files=metadata_from_files,
     )
     pending = [
         (index, audiobook_set, candidates)
@@ -3215,8 +3241,16 @@ def sidecar_write(
         out_path = folder / "metadata.opf"
         manager.write_opf(out_path, identity)
     else:
+        from .io.sidecar import load_json_object
+
         out_path = folder / "metadata.json"
-        manager.write_metadata_json(out_path, identity)
+        style = ctx.obj["config_manager"].load_config().output.metadata_json_style
+        manager.write_metadata_json(
+            out_path,
+            identity,
+            style=style,
+            existing=load_json_object(out_path) if out_path.exists() else None,
+        )
 
     click.echo(f"Wrote sidecar metadata to {out_path}")
 

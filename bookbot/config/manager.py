@@ -245,6 +245,7 @@ class ConfigManager:
                                 "write_metadata_json": True,
                                 "write_metadata_opf": True,
                                 "write_nfo": True,
+                                "metadata_json_style": "audiobookshelf",
                                 "prefer_m4b": True,
                                 "chapter_style": "track",
                             }
