@@ -29,6 +29,8 @@ _IMPLAUSIBLE_AUTHOR_RE = re.compile(r"^[A-Z]{1,4}\s*\d+$")
 _VOLUME_PREFIX_RE = re.compile(
     r"^(?:book|vol(?:ume)?|part)\.?\s*(\d+)\s*[-–—:]\s*(.+)$", re.IGNORECASE
 )
+# "01 - All Systems Red": a bare book number in front of the title.
+_NUMBERED_TITLE_RE = re.compile(r"^(\d{1,3})\s*[-–—.:]\s*(.*\D.*)$")
 _VOLUME_ONLY_RE = re.compile(r"^(?:book|vol(?:ume)?|part)\.?\s*\d+$", re.IGNORECASE)
 # Encoding noise such as "128kbps", "64 kbps" or "64k" in folder names.
 _BITRATE_NOISE_RE = re.compile(r"\b\d{2,3}\s*k(?:bps|bits?|bts)?\b", re.IGNORECASE)
@@ -357,6 +359,10 @@ class AudioFileScanner:
     def __init__(self, recursive: bool = True, max_depth: int = 5):
         self.recursive = recursive
         self.max_depth = max_depth
+        self._scan_root: Path | None = None
+        # Set by _extract_metadata_guesses when the evidence disagrees and
+        # the set should go to review instead of trusting a guess.
+        self._pending_review_reason: str | None = None
 
     def scan_directory(
         self,
@@ -371,6 +377,7 @@ class AudioFileScanner:
         if not path.exists() or not path.is_dir():
             raise ValueError(f"Path does not exist or is not a directory: {path}")
 
+        self._scan_root = path
         audio_files = self._find_audio_files(path)
         if not audio_files:
             return []
@@ -654,9 +661,12 @@ class AudioFileScanner:
         tracks.sort(key=lambda t: (t.disc, t.track_index, natural_sort_key(t.src_path)))
 
         # Extract metadata guesses from folder name and tracks
+        self._pending_review_reason = None
         title_guess, author_guess, series_guess, volume_guess = (
             self._extract_metadata_guesses(source_path, tracks, loose=loose)
         )
+        guess_review_reason = self._pending_review_reason
+        self._pending_review_reason = None
         if title_guess:
             title_guess = tidy_name_title(title_guess)
 
@@ -690,6 +700,10 @@ class AudioFileScanner:
 
         if read_sidecar:
             self._apply_sidecar_evidence(audiobook_set)
+
+        if guess_review_reason and not audiobook_set.needs_review:
+            audiobook_set.needs_review = True
+            audiobook_set.review_reason = guess_review_reason
 
         if not audiobook_set.raw_title_guess:
             # "New Folder (3)/audio.m4b" with empty tags: guessing a title
@@ -1282,6 +1296,9 @@ class AudioFileScanner:
                     or self._parent_author_guess(source_path.parent)
                 )
                 return title, author, series_name, volume
+            numbered = self._numbered_folder_guess(source_path, folder_name, tag_author)
+            if numbered is not None:
+                return numbered
 
         # "Along Came a Spider by James Patterson"
         title_by_author = self._title_by_author_guess(folder_name, tag_author)
@@ -1328,12 +1345,46 @@ class AudioFileScanner:
             )
         )
 
+        album_series: str | None = None
+        if (
+            not prefer_folder_title
+            and not in_author_title_layout
+            and tag_title is not None
+            and self._folder_title_disagrees_with_album(
+                folder_name, tag_title, tag_author
+            )
+        ):
+            # Folder "All Systems Red", album "The Murderbot Diaries": the
+            # album tag often names the series. The folder wins as the title
+            # and the album becomes the series candidate; unless the track
+            # titles back the folder, a reviewer has to confirm.
+            if not self._track_titles_support(tracks, folder_name):
+                self._pending_review_reason = (
+                    f"Folder name '{folder_name}' and album tag '{tag_title}' "
+                    "disagree; using the folder as the title and the album as "
+                    "the series. Confirm before applying."
+                )
+            album_series = tag_title
+            tag_title = None
+
         title_guess = (
             folder_name
             if prefer_folder_title or in_author_title_layout or tag_title is None
             else tag_title
         )
         author_guess = tag_author or parent_author
+        if album_series is not None:
+            series_split = self._series_number_title_guess(title_guess)
+            if series_split is None:
+                album_name, album_volume = self._album_series_guess(
+                    tracks, title_guess
+                )
+                return (
+                    title_guess,
+                    author_guess,
+                    album_name or album_series,
+                    album_volume or folder_volume,
+                )
 
         if folder_volume is None and title_guess:
             series_split = self._series_number_title_guess(title_guess)
@@ -1342,6 +1393,77 @@ class AudioFileScanner:
                 return title, author_guess or split_author, series_name, volume
 
         return title_guess, author_guess, None, folder_volume
+
+    def _numbered_folder_guess(
+        self, source_path: Path, folder_name: str, tag_author: str | None
+    ) -> tuple[str, str | None, str | None, str] | None:
+        """Guesses for "Author/Series/01 - Title" style folders.
+
+        The number in front of the title is the book's place in the series;
+        the parent folder names the series unless it is an author name, the
+        scan root or generic.
+        """
+        match = _NUMBERED_TITLE_RE.match(folder_name)
+        if match is None:
+            return None
+        title = match.group(2).strip()
+        if not title or _VOLUME_ONLY_RE.fullmatch(title) or is_generic_name(title):
+            return None
+        volume = str(int(match.group(1)))
+
+        parent = source_path.parent
+        parent_name = self._clean_metadata_name(parent.name)
+        series: str | None = None
+        author = tag_author
+        parent_is_root = self._scan_root is not None and (
+            parent.resolve(strict=False) == self._scan_root.resolve(strict=False)
+            or not parent.resolve(strict=False).is_relative_to(
+                self._scan_root.resolve(strict=False)
+            )
+        )
+        if parent_name and not is_generic_name(parent_name) and not parent_is_root:
+            if self._looks_like_author(parent_name) or (
+                tag_author and self._names_match(tag_author, parent_name)
+            ):
+                author = author or parent_name
+            else:
+                series = parent_name
+                if author is None:
+                    author = self._parent_author_guess(parent)
+                if author is None:
+                    grandparent_name = self._clean_metadata_name(parent.parent.name)
+                    if grandparent_name and self._looks_like_author(
+                        grandparent_name
+                    ):
+                        author = grandparent_name
+        return title, author, series, volume
+
+    def _folder_title_disagrees_with_album(
+        self, folder_name: str, album: str, tag_author: str | None
+    ) -> bool:
+        """Whether a descriptive folder name and the album tag name different works."""
+        if not folder_name or is_generic_name(folder_name):
+            return False
+        if tag_author and self._names_match(tag_author, folder_name):
+            return False
+        folder_key = folder_name.casefold()
+        album_key = album.casefold()
+        if folder_key in album_key or album_key in folder_key:
+            return False
+        matcher = getattr(self, "_matcher", None)
+        if matcher is None:
+            matcher = AdvancedMatcher()
+            self._matcher = matcher
+        return bool(matcher.match_title(folder_name, album) < 0.85)
+
+    def _track_titles_support(self, tracks: list[Track], title: str) -> bool:
+        """Whether the tracks' title tags name ``title``."""
+        stem = self._track_title_stem(tracks)
+        if stem is None:
+            return False
+        stem_key = stem.casefold()
+        title_key = title.casefold()
+        return title_key in stem_key or stem_key in title_key
 
     def _guesses_from_tags(
         self, tracks: list[Track], tag_title: str | None, tag_author: str | None
