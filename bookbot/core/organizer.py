@@ -268,10 +268,12 @@ class SmartOrganizer:
             for audiobook_set in plan.audiobook_sets
             for track in audiobook_set.tracks
         }
+        # The journal must not depend on the working directory: undo and
+        # recover may run from anywhere.
         operations = [
             RenameOperation(
-                old_path=op.source,
-                new_path=op.destination,
+                old_path=op.source.absolute(),
+                new_path=op.destination.absolute(),
                 track=tracks.get(op.source.resolve(strict=False)),
             )
             for op in plan.operations
@@ -280,7 +282,7 @@ class SmartOrganizer:
         return RenamePlan(
             plan_id=str(uuid.uuid4()),
             created_at=datetime.now(),
-            source_path=plan.source_root or Path("."),
+            source_path=(plan.source_root or Path(".")).absolute(),
             operations=operations,
             audiobook_sets=plan.audiobook_sets,
             dry_run=False,

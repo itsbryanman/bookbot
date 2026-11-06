@@ -422,3 +422,75 @@ def test_saved_decision_follows_book_after_apply_and_undo(tmp_path: Path) -> Non
     assert manager.undo_transaction(plan.applied_transaction_id or "")
     original = _make_set(library)
     assert store.get(original) is not None
+
+
+# ── Codex review on #5 ──
+
+
+def _legacy_decision(store: ReviewDecisionStore, audiobook_set: AudiobookSet) -> None:
+    store.save(
+        {
+            store.review_key(audiobook_set): ReviewDecision(
+                action="accept",
+                candidate=StoredCandidateSelector(
+                    provider=ACCEPTED.provider,
+                    external_id=ACCEPTED.external_id,
+                    title=ACCEPTED.title,
+                    authors=ACCEPTED.authors,
+                ),
+                candidate_index=2,
+                decided_at=datetime.now().isoformat(),
+            )
+        }
+    )
+
+
+def test_legacy_decision_is_upgraded_when_provider_resolves_it(
+    tmp_path: Path, library: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_dir = tmp_path / "cfg"
+    store = ReviewDecisionStore(ConfigManager(config_dir))
+    _legacy_decision(store, _make_set(library))
+    runner = CliRunner()
+
+    _use_provider(monkeypatch, _Provider())
+    matched = _invoke(runner, config_dir, "match", str(library))
+    assert matched.exit_code == 0, matched.output
+    assert next(iter(store.load().values())).identity == ACCEPTED
+
+    _use_provider(monkeypatch, _OfflineProvider())
+    plan_path = tmp_path / "plan.json"
+    scanned = _invoke(
+        runner, config_dir, "scan", str(library), "--plan", str(plan_path)
+    )
+    assert scanned.exit_code == 0, scanned.output
+    chosen = json.loads(plan_path.read_text())["audiobook_sets"][0]["chosen_identity"]
+    assert chosen["title"] == "All Systems Red"
+
+
+def test_saved_snapshot_survives_empty_provider_results(tmp_path: Path) -> None:
+    config_manager = ConfigManager(tmp_path / "cfg")
+    store = ReviewDecisionStore(config_manager)
+    audiobook_set = _make_set(tmp_path)
+    store.set_accept(audiobook_set, _candidate(ACCEPTED), candidate_index=2)
+
+    state, chosen = store.resolve_match_state(
+        audiobook_set, [], config_manager.load_config().matching
+    )
+
+    assert state == "accepted_saved"
+    assert audiobook_set.chosen_identity == ACCEPTED
+
+
+def test_saved_skip_survives_empty_provider_results(tmp_path: Path) -> None:
+    config_manager = ConfigManager(tmp_path / "cfg")
+    store = ReviewDecisionStore(config_manager)
+    audiobook_set = _make_set(tmp_path)
+    store.set_skip(audiobook_set)
+
+    state, _ = store.resolve_match_state(
+        audiobook_set, [], config_manager.load_config().matching
+    )
+
+    assert state == "skipped"
+    assert audiobook_set.review_skipped is True

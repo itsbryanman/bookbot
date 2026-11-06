@@ -1,6 +1,4 @@
-<p align="center">
-  <img src="logo.png" alt="BookBot logo" width="200" />
-</p>
+
 
 <h1 align="center">BookBot</h1>
 
@@ -164,7 +162,7 @@ Run `bookbot COMMAND --help` for every option. Global flags: `--config-dir PATH`
 
 After `apply` or `organize --confirm` moves a book, its decision is copied to the new location. The old entry is kept, so `undo` still finds it.
 
-Decisions saved by BookBot 1.2.0 or earlier have no stored metadata. Those books show up as needing review with "re-accept to refresh saved decision".
+Decisions saved by BookBot 1.2.0 or earlier have no stored metadata. Offline, those books show up as needing review with "re-accept to refresh saved decision". The next `match`, `review-queue` or `accept` that gets the same candidate back from a provider stores its metadata automatically.
 
 ### How dedupe decides
 
@@ -197,7 +195,8 @@ Decisions saved by BookBot 1.2.0 or earlier have no stored metadata. Those books
 **Templates.** The defaults are `output.folder_template = "{author_sort}/{title} ({year})"` and `output.file_template = "{DiscPad}{TrackPad} - {TrackTitle}"`. Available tokens: `{author}`, `{authors}`, `{author_sort}`, `{title}`, `{short_title}`, `{series}`, `{series_index}`, `{year}`, `{narrator}`, `{language}`, `{isbn}`, `{disc}`, `{disc_pad}`, `{track}`, `{track_pad}`, `{track_title}` (PascalCase forms such as `{AuthorLastFirst}` also work).
 
 **Sidecar output.**
-- `output.metadata_json_style` is `"booklore"` (default) or `"audiobookshelf"`. The built-in `audiobookshelf` profile uses `"audiobookshelf"`, which writes the keys and types Audiobookshelf's `metadata.json` parser reads: `authors`, `narrators`, `series` (`"Name #N"`) and `genres` as string arrays, and `publishedYear` as a string.
+- `output.metadata_json_style` is `"booklore"` (default) or `"audiobookshelf"`. The built-in `audiobookshelf` profile uses `"audiobookshelf"` (also when its file was saved by an older version), which writes the keys and types Audiobookshelf's `metadata.json` parser reads: `authors`, `narrators`, `series` (`"Name #N"`) and `genres` as string arrays, and `publishedYear` as a string.
+- `doctor DIR` warns when the library has Audiobookshelf-style `metadata.json` files while the style is `"booklore"`.
 - When a `metadata.json` already exists, its other keys (such as `chapters` or `tags`) are kept; only fields BookBot has values for are replaced. The previous file is kept as a `.bak` for undo.
 - `output.cover_filename` (default `"cover"`) sets the cover file's name and may use template tokens, e.g. `"{title} - cover"`. The extension follows the image type. `doctor` and `health` recognize the configured name.
 

@@ -193,3 +193,78 @@ def test_organize_journal_is_a_rename_transaction(
     payloads = [json.loads(p.read_text()) for p in logs]
     statuses = [p.get("status") for p in payloads if "operations" in p]
     assert statuses == ["completed"]
+
+
+# ── Codex review on #8 / #5 ──
+
+
+def test_relative_paths_are_journaled_absolute_and_undo_from_elsewhere(
+    tmp_path: Path, library: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_dir = tmp_path / "cfg"
+    before = _snapshot(library)
+    monkeypatch.chdir(tmp_path)
+
+    result = _invoke(config_dir, "organize", "lib", "--confirm")
+    assert result.exit_code == 0, result.output
+    transaction_id = re.search(r"Transaction ID: ([0-9a-f-]{36})", result.output)
+    assert transaction_id
+
+    manager = TransactionManager(ConfigManager(config_dir))
+    log = json.loads(manager._transaction_log_path(transaction_id.group(1)).read_text())
+    paths = [op[key] for op in log["operations"] for key in ("old_path", "new_path")]
+    assert paths and all(Path(p).is_absolute() for p in paths)
+
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+    undone = _invoke(config_dir, "undo", transaction_id.group(1))
+    assert undone.exit_code == 0, undone.output
+    assert _snapshot(library) == before
+
+
+def test_organize_carries_saved_decisions_to_new_paths(
+    tmp_path: Path, library: Path
+) -> None:
+    from bookbot.core.models import MatchCandidate, MatchConfidence, ProviderIdentity
+    from bookbot.core.review_store import ReviewDecisionStore
+
+    config_dir = tmp_path / "cfg"
+    store = ReviewDecisionStore(ConfigManager(config_dir))
+    book = _book(library / "messy one", "American Gods", "Neil Gaiman")
+    identity = ProviderIdentity(
+        provider="x",
+        external_id="ag",
+        title="American Gods",
+        authors=["Neil Gaiman"],
+        narrator="George Guidall",
+    )
+    store.set_accept(
+        book,
+        MatchCandidate(
+            identity=identity, confidence=0.9, confidence_level=MatchConfidence.HIGH
+        ),
+        candidate_index=1,
+    )
+
+    result = _invoke(config_dir, "organize", str(library), "--confirm")
+    assert result.exit_code == 0, result.output
+
+    new_folder = next(p.parent for p in library.rglob("*.mp3") if "Gaiman" in str(p))
+    moved = AudiobookSet(
+        source_path=new_folder,
+        tracks=[
+            Track(
+                src_path=path,
+                disc=1,
+                track_index=index,
+                file_size=path.stat().st_size,
+                audio_format=AudioFormat.MP3,
+                status=TrackStatus.VALID,
+            )
+            for index, path in enumerate(sorted(new_folder.glob("*.mp3")), 1)
+        ],
+    )
+    moved_decision = store.get(moved)
+    assert moved_decision is not None
+    assert moved_decision.identity == identity
