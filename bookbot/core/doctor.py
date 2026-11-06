@@ -242,6 +242,13 @@ class LibraryDoctor:
         audiobook_sets = self.scanner.scan_directory(library_path)
         if audiobook_sets:
             report.add("ok", f"Detected {len(audiobook_sets)} audiobook set(s)")
+            # Saved review decisions carry the identity that apply used, so
+            # tokenized names (cover_filename "{title} ({year})") match.
+            from .review_store import ReviewDecisionStore, apply_stored_decisions
+
+            apply_stored_decisions(
+                audiobook_sets, ReviewDecisionStore.for_config_dir(self.config_dir)
+            )
         else:
             report.add("warn", "No supported audiobooks detected in library")
             return

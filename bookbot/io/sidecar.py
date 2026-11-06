@@ -188,6 +188,7 @@ def sidecar_output_paths(
 
 
 DEFAULT_COVER_STEM = "cover"
+MAX_FILENAME_BYTES = 255
 
 
 def cover_stem(
@@ -219,6 +220,11 @@ def _cover_filename(url: str, stem: str = DEFAULT_COVER_STEM) -> str:
     suffix = Path(urlparse(url).path).suffix.lower()
     if suffix not in {".jpg", ".jpeg", ".png", ".gif", ".webp"}:
         suffix = ".jpg"
+    # Keep the whole name within the common 255-byte component limit.
+    budget = MAX_FILENAME_BYTES - len(suffix.encode("utf-8"))
+    while len(stem.encode("utf-8")) > budget:
+        stem = stem[:-1]
+    stem = stem.rstrip(" .") or DEFAULT_COVER_STEM
     return f"{stem}{suffix}"
 
 
