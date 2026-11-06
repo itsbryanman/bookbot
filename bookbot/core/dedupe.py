@@ -57,7 +57,18 @@ SEGMENT_SUFFIX_PATTERN = re.compile(
 )
 
 
-_EDITION_BRACKETS_RE = re.compile(r"[\(\[][^\)\]]*[\)\]]")
+# Bracketed text made only of release noise: edition words, bitrates,
+# formats and years. Anything else in brackets ("(German)", "(Book 2)") is
+# part of what tells editions apart and stays in the key.
+_RELEASE_NOISE_TOKEN = (
+    r"(?:unabridged|abridged|audiobook|audio\s*book|retail|"
+    r"\d{2,3}\s*k(?:bps)?|vbr|cbr|mp3|m4b|m4a|aac|flac|ogg|opus|"
+    r"(?:19|20)\d{2})"
+)
+_EDITION_BRACKETS_RE = re.compile(
+    rf"[\(\[]\s*{_RELEASE_NOISE_TOKEN}(?:[\s,;/+-]+{_RELEASE_NOISE_TOKEN})*\s*[\)\]]",
+    re.IGNORECASE,
+)
 _EDITION_WORDS_RE = re.compile(
     r"\b(?:unabridged|abridged|audiobook|audio\s*book|retail)\b", re.IGNORECASE
 )
