@@ -139,6 +139,7 @@ class ProviderIdentity(BaseModel):
     provider: str
     external_id: str
     title: str
+    subtitle: str | None = None
     authors: list[str] = Field(default_factory=list)
     series_name: str | None = None
     series_index: str | None = None
@@ -152,6 +153,7 @@ class ProviderIdentity(BaseModel):
     asin: str | None = None
     runtime_minutes: int | None = None
     description: str | None = None
+    genres: list[str] = Field(default_factory=list)
     cover_urls: list[str] = Field(default_factory=list)
 
     # Raw provider data for reference
