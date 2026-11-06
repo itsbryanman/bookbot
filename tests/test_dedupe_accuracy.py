@@ -235,3 +235,40 @@ def test_audio_hash_help_matches_behavior(tmp_path: Path) -> None:
     )
     assert result.exit_code == 1
     assert "not implemented" in result.output
+
+
+# ── Codex review on #11 ──
+
+
+def test_language_qualifiers_keep_editions_apart(tmp_path: Path) -> None:
+    english = _book(
+        tmp_path,
+        "a",
+        "Dune (English)",
+        "Frank Herbert",
+        minutes=1260,
+        asin="B00ENGLISH",
+    )
+    german = _book(
+        tmp_path,
+        "b",
+        "Dune (German)",
+        "Frank Herbert",
+        minutes=1500,
+        asin="B00GERMAN0",
+    )
+    engine = DedupeEngine(tmp_path)
+
+    assert engine.analyze_editions([english, german]) == []
+    assert _quarantined(engine, [english, german]) == set()
+
+
+@pytest.mark.parametrize(
+    "noisy",
+    ["Dune (Unabridged)", "Dune [128k]", "Dune (2007)", "Dune [MP3]", "Dune, The"],
+)
+def test_release_noise_in_brackets_is_still_ignored(tmp_path: Path, noisy: str) -> None:
+    engine = DedupeEngine(tmp_path)
+    plain = _book(tmp_path, "a", "Dune", "Frank Herbert", minutes=1260)
+    other = _book(tmp_path, "b", noisy, "Frank Herbert", minutes=1260)
+    assert engine._edition_key(plain) == engine._edition_key(other)
