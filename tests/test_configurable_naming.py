@@ -168,6 +168,7 @@ def test_organize_cli_honors_config_and_template_flags(
     config.output.file_template = "Track {track_pad}"
     config_manager.save_config(config)
     library = tmp_path / "lib"
+    library.mkdir()
     monkeypatch.setattr(
         "bookbot.core.discovery.AudioFileScanner.scan_directory",
         lambda self, path, progress=None: [_book(library / "rough")],

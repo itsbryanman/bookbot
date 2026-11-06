@@ -9,7 +9,7 @@ from urllib.parse import urlparse
 
 from ..config.models import LibraryOutputConfig
 from ..core.logging import get_logger
-from ..core.models import ProviderIdentity
+from ..core.models import AudiobookSet, ProviderIdentity
 
 logger = get_logger("sidecar")
 
@@ -170,16 +170,46 @@ def sidecar_output_paths(
     if output_config.write_nfo:
         targets["nfo"] = directory / "audiobook.nfo"
     if output_config.write_cover and identity.cover_urls:
-        targets["cover"] = directory / _cover_filename(identity.cover_urls[0])
+        targets["cover"] = directory / _cover_filename(
+            identity.cover_urls[0],
+            cover_stem(output_config.cover_filename, identity=identity),
+        )
     return targets
 
 
-def _cover_filename(url: str) -> str:
-    """Pick a stable local cover filename from a remote URL."""
+DEFAULT_COVER_STEM = "cover"
+
+
+def cover_stem(
+    template: str,
+    *,
+    identity: ProviderIdentity | None = None,
+    audiobook_set: AudiobookSet | None = None,
+) -> str:
+    """Render ``output.cover_filename`` into a safe file stem.
+
+    Tokens use the same names as folder/file templates. Values keep their
+    case, and an empty result falls back to "cover".
+    """
+    from ..config.models import CasePolicy
+    from ..core.templates import TemplateEngine
+
+    engine = TemplateEngine(case_policy=CasePolicy.AS_IS)
+    book = audiobook_set or AudiobookSet(source_path=Path("."))
+    rendered = engine._apply_template(
+        template, engine._build_tokens(book, identity or book.chosen_identity)
+    )
+    rendered = engine._normalize_filename(re.sub(r"\s*[\\/]\s*", " - ", rendered))
+    rendered = rendered.strip().strip(".")
+    return rendered or DEFAULT_COVER_STEM
+
+
+def _cover_filename(url: str, stem: str = DEFAULT_COVER_STEM) -> str:
+    """Pick a local cover filename: ``stem`` plus the image type's suffix."""
     suffix = Path(urlparse(url).path).suffix.lower()
     if suffix not in {".jpg", ".jpeg", ".png", ".gif", ".webp"}:
         suffix = ".jpg"
-    return f"cover{suffix}"
+    return f"{stem}{suffix}"
 
 
 class SidecarManager:

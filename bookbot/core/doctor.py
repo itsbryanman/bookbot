@@ -82,6 +82,7 @@ class LibraryDoctor:
         ".wma",
     }
     COVER_NAMES = {"cover.jpg", "cover.jpeg", "cover.png", "cover.webp"}
+    COVER_SUFFIXES = (".jpg", ".jpeg", ".png", ".gif", ".webp")
     FORBIDDEN_FILENAME_CHARS = set('<>:"\\|?*')
 
     def __init__(self, config: Config, config_dir: Path):
@@ -367,10 +368,18 @@ class LibraryDoctor:
         ]
 
     def _count_missing_covers(self, audiobook_sets: list) -> int:
+        from ..io.sidecar import cover_stem
+
         missing = 0
         for audiobook_set in audiobook_sets:
             files = {path.name.lower() for path in audiobook_set.source_path.glob("*")}
-            if not files.intersection(self.COVER_NAMES):
+            stem = cover_stem(
+                self.config.output.cover_filename, audiobook_set=audiobook_set
+            ).lower()
+            names = self.COVER_NAMES | {
+                f"{stem}{suffix}" for suffix in self.COVER_SUFFIXES
+            }
+            if not files.intersection(names):
                 missing += 1
         return missing
 
