@@ -1184,6 +1184,8 @@ def convert(
         else:
             # Execute conversion
             success = pipeline.convert_directory(folder, conv_config)
+            for warning in pipeline.warnings:
+                click.echo(f"Warning: {warning}", err=True)
             if success:
                 click.echo("Conversion completed successfully!")
             else:

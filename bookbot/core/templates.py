@@ -7,6 +7,21 @@ from pathlib import Path
 from ..config.models import CasePolicy
 from .models import AudiobookSet, ProviderIdentity, Track
 
+_GENERIC_TRACK_TITLE_RE = re.compile(r"^(?:track|tr)\s*\d*$", re.IGNORECASE)
+
+
+def derive_track_title(stem: str) -> str | None:
+    """Readable title from a track filename stem, or None if it has none.
+
+    "01 - Prelude" gives "Prelude"; "03_The_End" gives "The End"; bare
+    numbers and "Track 07" give None.
+    """
+    cleaned = re.sub(r"^[\d\s._-]+", "", stem).replace("_", " ").strip()
+    cleaned = re.sub(r"\s{2,}", " ", cleaned)
+    if not cleaned or _GENERIC_TRACK_TITLE_RE.fullmatch(cleaned):
+        return None
+    return cleaned
+
 
 class TemplateEngine:
     """Generates filenames from templates and metadata."""
@@ -329,8 +344,7 @@ class TemplateEngine:
 
     def _derive_track_title(self, stem: str) -> str:
         """Build a readable track title from the source filename."""
-        cleaned = re.sub(r"^[\d\s._-]+", "", stem).replace("_", " ").strip()
-        return cleaned or stem or "Track"
+        return derive_track_title(stem) or stem or "Track"
 
     @staticmethod
     def _soften_punctuation(text: str) -> str:

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import subprocess
 import tempfile
+from collections.abc import Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -22,6 +23,63 @@ def _safe_unlink(path: Path) -> None:
     except OSError:
         # Best-effort cleanup; leave other errors untouched
         pass
+
+
+def escape_ffmetadata(value: str) -> str:
+    """Escape a value for an FFMETADATA1 file.
+
+    FFmpeg's ffmetadata format treats '=', ';', '#', '\\' and newlines as
+    special; each must be preceded by a backslash.
+    """
+    escaped = value.replace("\\", "\\\\")
+    for char in ("=", ";", "#", "\n"):
+        escaped = escaped.replace(char, "\\" + char)
+    return escaped
+
+
+def chapters_ffmetadata(chapters: Sequence[tuple[int, int | None, str]]) -> str:
+    """FFMETADATA1 text for (start_ms, end_ms, title) chapters."""
+    lines = [";FFMETADATA1"]
+    for start_ms, end_ms, title in chapters:
+        lines += ["", "[CHAPTER]", "TIMEBASE=1/1000", f"START={start_ms}"]
+        if end_ms is not None:
+            lines.append(f"END={end_ms}")
+        lines.append(f"title={escape_ffmetadata(title)}")
+    return "\n".join(lines) + "\n"
+
+
+def validate_chapter_timeline(chapters: list[dict], duration: float) -> None:
+    """Check chapters against the real audio duration, in place.
+
+    The last chapter's end is clamped to ``duration``. Raises ValueError
+    when a chapter starts at or after the end of the audio, ends at or
+    before its start, or overlaps the previous one.
+    """
+    tolerance = 0.001
+    for index, chapter in enumerate(chapters, start=1):
+        start = float(chapter["start"])
+        if start >= duration - tolerance:
+            raise ValueError(
+                f"Chapter {index} starts at {start:.3f}s, at or after the end "
+                f"of the audio ({duration:.3f}s)"
+            )
+    if chapters and float(chapters[-1]["end"]) > duration:
+        chapters[-1]["end"] = duration
+    previous_end = 0.0
+    for index, chapter in enumerate(chapters, start=1):
+        start = float(chapter["start"])
+        end = float(chapter["end"])
+        if end <= start:
+            raise ValueError(
+                f"Chapter {index} ends at {end:.3f}s, not after its start "
+                f"({start:.3f}s)"
+            )
+        if start < previous_end - tolerance:
+            raise ValueError(
+                f"Chapter {index} starts at {start:.3f}s and would overlap the "
+                f"previous chapter ending at {previous_end:.3f}s"
+            )
+        previous_end = end
 
 
 class FFmpegWrapper:
@@ -84,6 +142,51 @@ class FFmpegWrapper:
             raise RuntimeError(
                 f"Failed to parse FFprobe output for {file_path}: {e}"
             ) from e
+
+    def version(self) -> str:
+        """First line of ``ffmpeg -version``, for error reports."""
+        try:
+            result = subprocess.run(
+                [self.ffmpeg_path, "-version"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+        except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+            return "ffmpeg version unknown"
+        first = (result.stdout or "").splitlines()
+        return first[0].strip() if first else "ffmpeg version unknown"
+
+    def get_audio_stream_duration(self, file_path: Path) -> float:
+        """Duration of the first audio stream (falls back to the container)."""
+        probe_data = self.probe_file(file_path)
+        for stream in probe_data.get("streams", []):
+            if stream.get("codec_type") == "audio" and "duration" in stream:
+                return float(stream["duration"])
+        return self.get_duration(file_path)
+
+    def remux_audio(self, input_path: Path, output_path: Path) -> bool:
+        """Copy the first audio stream into ``output_path``'s container."""
+        cmd = [
+            self.ffmpeg_path,
+            "-i",
+            str(input_path),
+            "-map",
+            "0:a:0",
+            "-c:a",
+            "copy",
+            "-y",
+            str(output_path),
+        ]
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+        except subprocess.TimeoutExpired:
+            _safe_unlink(output_path)
+            return False
+        if result.returncode != 0:
+            _safe_unlink(output_path)
+            return False
+        return True
 
     def get_duration(self, file_path: Path) -> float:
         """Get duration of an audio file in seconds."""
@@ -165,8 +268,12 @@ class FFmpegWrapper:
         normalize: bool = False,
         target_lufs: float = -16.0,
     ) -> bool:
-        """Convert audio file to AAC format."""
-        cmd = [self.ffmpeg_path, "-i", str(input_path)]
+        """Convert audio file to AAC format.
+
+        Only the first audio stream is encoded; cover art in the source
+        (an attached picture stream) is left out.
+        """
+        cmd = [self.ffmpeg_path, "-i", str(input_path), "-map", "0:a:0"]
 
         # Audio filters
         filters = []
@@ -258,22 +365,19 @@ class FFmpegWrapper:
 
     def add_chapters(self, file_path: Path, chapters: list[dict]) -> bool:
         """Add chapter markers to an audio file."""
-        # Create chapters metadata file
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
+        entries = [
+            (
+                int(round(float(chapter["start"]) * 1000)),
+                int(round(float(chapter["end"]) * 1000)),
+                str(chapter.get("title") or f"Chapter {index + 1}"),
+            )
+            for index, chapter in enumerate(chapters)
+        ]
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".txt", delete=False, encoding="utf-8"
+        ) as f:
             chapters_file = Path(f.name)
-
-            f.write(";FFMETADATA1\n")
-
-            for i, chapter in enumerate(chapters):
-                start_time = int(chapter["start"] * 1000)  # Convert to milliseconds
-                end_time = int(chapter["end"] * 1000)
-                title = chapter.get("title", f"Chapter {i + 1}")
-
-                f.write("\n[CHAPTER]\n")
-                f.write("TIMEBASE=1/1000\n")
-                f.write(f"START={start_time}\n")
-                f.write(f"END={end_time}\n")
-                f.write(f"title={title}\n")
+            f.write(chapters_ffmetadata(entries))
 
         temp_output = file_path.with_suffix(".tmp.m4b")
 
@@ -557,7 +661,11 @@ class FFmpegWrapper:
                 return file_path
 
             _safe_unlink(temp_output)
-            raise RuntimeError(f"Failed to embed metadata: {result.stderr[-500:]}")
+            stderr_tail = "\n".join((result.stderr or "").strip().splitlines()[-8:])
+            raise RuntimeError(
+                f"Failed to embed metadata ({self.version()}, exit "
+                f"{result.returncode}):\n{stderr_tail}"
+            )
 
         except subprocess.TimeoutExpired as exc:
             _safe_unlink(temp_output)
@@ -610,17 +718,16 @@ class FFmpegWrapper:
 
     def _write_chapter_metadata(self, chapters: list[Chapter]) -> Path:
         """Write FFMETADATA1 file for chapters and return its path."""
-        f = tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False)
-        metadata_file = Path(f.name)
-
-        f.write(";FFMETADATA1\n")
-        for chapter in chapters:
-            f.write("\n[CHAPTER]\n")
-            f.write("TIMEBASE=1/1000\n")
-            f.write(f"START={chapter.start_ms}\n")
-            if chapter.end_ms is not None:
-                f.write(f"END={chapter.end_ms}\n")
-            f.write(f"title={chapter.title}\n")
-
-        f.close()
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".txt", delete=False, encoding="utf-8"
+        ) as f:
+            metadata_file = Path(f.name)
+            f.write(
+                chapters_ffmetadata(
+                    [
+                        (chapter.start_ms, chapter.end_ms, chapter.title)
+                        for chapter in chapters
+                    ]
+                )
+            )
         return metadata_file
