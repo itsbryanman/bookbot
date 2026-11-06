@@ -59,16 +59,31 @@ SEGMENT_SUFFIX_PATTERN = re.compile(
 
 # Bracketed text made only of release noise: edition words, bitrates,
 # formats and years. Anything else in brackets ("(German)", "(Book 2)") is
-# part of what tells editions apart and stays in the key.
-_RELEASE_NOISE_TOKEN = (
-    r"(?:unabridged|abridged|audiobook|audio\s*book|retail|"
-    r"\d{2,3}\s*k(?:bps)?|vbr|cbr|mp3|m4b|m4a|aac|flac|ogg|opus|"
-    r"(?:19|20)\d{2})"
-)
-_EDITION_BRACKETS_RE = re.compile(
-    rf"[\(\[]\s*{_RELEASE_NOISE_TOKEN}(?:[\s,;/+-]+{_RELEASE_NOISE_TOKEN})*\s*[\)\]]",
+# part of what tells editions apart and stays in the key. Spans are found
+# with a linear pattern and each token is checked on its own, so no
+# pattern can backtrack over a long title.
+_BRACKET_SPAN_RE = re.compile(r"[\(\[]([^\(\)\[\]]*)[\)\]]")
+_NOISE_SEPARATOR_RE = re.compile(r"[\s,;/+-]+")
+_NOISE_TOKEN_RE = re.compile(
+    r"unabridged|abridged|audiobook|retail|\d{2,3}k|\d{2,3}kbps|vbr|cbr|"
+    r"mp3|m4b|m4a|aac|flac|ogg|opus|(?:19|20)\d{2}",
     re.IGNORECASE,
 )
+_MAX_TITLE_CHARS = 500
+
+
+def _strip_release_noise_brackets(title: str) -> str:
+    def replace(match: re.Match[str]) -> str:
+        inner = re.sub(r"(?i)audio\s+book", "audiobook", match.group(1))
+        inner = re.sub(r"(?i)(\d{2,3})\s+(k|kbps)\b", r"\1\2", inner)
+        tokens = [t for t in _NOISE_SEPARATOR_RE.split(inner) if t]
+        if tokens and all(_NOISE_TOKEN_RE.fullmatch(t) for t in tokens):
+            return " "
+        return match.group(0)
+
+    return _BRACKET_SPAN_RE.sub(replace, title[:_MAX_TITLE_CHARS])
+
+
 _EDITION_WORDS_RE = re.compile(
     r"\b(?:unabridged|abridged|audiobook|audio\s*book|retail)\b", re.IGNORECASE
 )
@@ -670,7 +685,7 @@ class DedupeEngine:
         "The Stand (Unabridged)" and "Stand, The" both give "stand"; the
         fuzzy pass no longer forgives extra words, so they must go here.
         """
-        title = _EDITION_BRACKETS_RE.sub(" ", raw_title)
+        title = _strip_release_noise_brackets(raw_title)
         title = _EDITION_WORDS_RE.sub(" ", title)
         title = self.matcher.normalize_title(title)
         tokens = title.split()
