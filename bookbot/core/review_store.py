@@ -107,6 +107,17 @@ class ReviewDecisionStore:
         self.config_manager = config_manager
         self.path = config_manager.config_dir / "review-decisions.json"
 
+    @classmethod
+    def for_config_dir(cls, config_dir: Path) -> ReviewDecisionStore:
+        """A read/write store for ``config_dir`` without a ConfigManager.
+
+        ConfigManager has side effects (it writes default profiles and sets
+        BOOKBOT_CONFIG_DIR), which read-only checks such as doctor avoid.
+        """
+        store = cls.__new__(cls)
+        store.path = config_dir / "review-decisions.json"
+        return store
+
     def review_key(self, audiobook_set: AudiobookSet) -> str:
         """Build a stable key for one scanned audiobook set."""
         source_path = str(audiobook_set.source_path.resolve(strict=False))

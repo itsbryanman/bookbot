@@ -189,6 +189,9 @@ class LibraryOutputConfig(BaseModel):
     folder_template: str = "{author_sort}/{title} ({year})"
     file_template: str = "{DiscPad}{TrackPad} - {TrackTitle}"
     write_cover: bool = True
+    # Stem of the cover sidecar; template tokens such as {title} are
+    # allowed. The extension follows the downloaded image type.
+    cover_filename: str = "cover"
     write_metadata_json: bool = True
     write_metadata_opf: bool = False
     write_nfo: bool = False

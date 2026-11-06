@@ -80,6 +80,9 @@ class SmartOrganizer:
         target_path: Path | None,
         template_name: str,
         audiobook_sets: list[AudiobookSet],
+        *,
+        folder_template: str | None = None,
+        file_template: str | None = None,
     ) -> ReorganizationPlan:
         """Propose a reorganization plan for the given audiobook sets.
 
@@ -87,16 +90,23 @@ class SmartOrganizer:
             source_path: Root path of the current library.
             target_path: Root path for the reorganized library
                 (defaults to source_path).
-            template_name: Name of the template preset to use.
+            template_name: Name of the template preset to use. "config"
+                means the caller passes the templates from ``output``.
             audiobook_sets: List of discovered audiobook sets.
+            folder_template: Overrides the preset's folder template.
+            file_template: Overrides the preset's file template.
 
         Returns:
             A ReorganizationPlan with proposed moves, conflicts, and warnings.
         """
         target = target_path or source_path
         preset = TEMPLATE_PRESETS.get(template_name, TEMPLATE_PRESETS["default"])
-        folder_template = preset["folder_template"]
-        file_template = preset["file_template"]
+        if template_name == "config" and not (folder_template and file_template):
+            defaults = Config().output
+            folder_template = folder_template or defaults.folder_template
+            file_template = file_template or defaults.file_template
+        folder_template = folder_template or preset["folder_template"]
+        file_template = file_template or preset["file_template"]
 
         plan = ReorganizationPlan(source_root=source_path)
         used_destinations: dict[str, str] = {}

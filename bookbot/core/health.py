@@ -56,6 +56,20 @@ class HealthReport(BaseModel):
 class LibraryHealthChecker:
     """Audits an audiobook library for common issues."""
 
+    def __init__(self, cover_filename: str = "cover") -> None:
+        # ``output.cover_filename``; may contain template tokens.
+        self.cover_filename = cover_filename
+
+    def _cover_stems(self, audiobook_sets: list[AudiobookSet]) -> set[str]:
+        from ..io.sidecar import cover_stem
+
+        stems = set(COVER_NAMES)
+        for ab_set in audiobook_sets:
+            stems.add(cover_stem(self.cover_filename, audiobook_set=ab_set).lower())
+        if "{" not in self.cover_filename:
+            stems.add(cover_stem(self.cover_filename).lower())
+        return stems
+
     def check_missing_covers(
         self, audiobook_sets: list[AudiobookSet]
     ) -> list[dict[str, Any]]:
@@ -65,11 +79,12 @@ class LibraryHealthChecker:
         for ab_set in audiobook_sets:
             has_sidecar_cover = False
             source = ab_set.source_path
+            cover_stems = self._cover_stems([ab_set])
 
             if source.is_dir():
                 for f in source.iterdir():
                     if f.suffix.lower() in IMAGE_EXTENSIONS:
-                        if f.stem.lower() in COVER_NAMES:
+                        if f.stem.lower() in cover_stems:
                             has_sidecar_cover = True
                             break
 
@@ -126,9 +141,18 @@ class LibraryHealthChecker:
 
         return issues
 
-    def check_orphaned_files(self, library_path: Path) -> list[Path]:
-        """Find non-audio files that are not covers, NFO, cue, or metadata sidecars."""
+    def check_orphaned_files(
+        self,
+        library_path: Path,
+        audiobook_sets: list[AudiobookSet] | None = None,
+    ) -> list[Path]:
+        """Find non-audio files that are not covers, NFO, cue, or metadata sidecars.
+
+        ``audiobook_sets`` lets a tokenized ``cover_filename`` ("{title}")
+        be recognized for each book.
+        """
         orphaned = []
+        cover_stems = self._cover_stems(audiobook_sets or [])
 
         for f in library_path.rglob("*"):
             if not f.is_file():
@@ -145,7 +169,7 @@ class LibraryHealthChecker:
                 continue
 
             # Skip cover images
-            if suffix in IMAGE_EXTENSIONS and f.stem.lower() in COVER_NAMES:
+            if suffix in IMAGE_EXTENSIONS and f.stem.lower() in cover_stems:
                 continue
 
             # Skip hidden files
@@ -297,7 +321,9 @@ class LibraryHealthChecker:
         report = HealthReport(
             missing_covers=self.check_missing_covers(audiobook_sets),
             inconsistent_tags=self.check_inconsistent_tags(audiobook_sets),
-            orphaned_files=[str(p) for p in self.check_orphaned_files(library_path)],
+            orphaned_files=[
+                str(p) for p in self.check_orphaned_files(library_path, audiobook_sets)
+            ],
             duplicate_editions=[
                 [
                     {

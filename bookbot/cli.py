@@ -2689,7 +2689,11 @@ def health(ctx: click.Context, folder: Path, json_out: bool, verbose: bool) -> N
         click.echo("No audiobooks found.")
         return
 
-    checker = LibraryHealthChecker()
+    config_manager = ctx.obj["config_manager"]
+    _apply_saved_decisions(config_manager, audiobook_sets)
+    checker = LibraryHealthChecker(
+        cover_filename=config_manager.load_config().output.cover_filename
+    )
     report = checker.run_all_checks(folder, audiobook_sets)
 
     if json_out:
@@ -2760,9 +2764,22 @@ def health(ctx: click.Context, folder: Path, json_out: bool, verbose: bool) -> N
 )
 @click.option(
     "--template",
-    type=click.Choice(["default", "abs", "plex"]),
+    type=click.Choice(["default", "abs", "plex", "config"]),
     default="default",
-    help="Naming template preset",
+    help=(
+        "Naming template preset; 'config' uses output.folder_template and "
+        "output.file_template"
+    ),
+)
+@click.option(
+    "--folder-template",
+    type=str,
+    help="Folder template (overrides the preset's)",
+)
+@click.option(
+    "--file-template",
+    type=str,
+    help="File template (overrides the preset's)",
 )
 @click.option("--dry-run", is_flag=True, default=True, help="Show proposed moves only")
 @click.option("--confirm", is_flag=True, help="Execute the reorganization")
@@ -2772,6 +2789,8 @@ def organize(
     source: Path,
     target: Path | None,
     template: str,
+    folder_template: str | None,
+    file_template: str | None,
     dry_run: bool,
     confirm: bool,
 ) -> None:
@@ -2788,8 +2807,20 @@ def organize(
         return
 
     _apply_saved_decisions(ctx.obj["config_manager"], audiobook_sets)
+    if template == "config":
+        output_config = ctx.obj["config_manager"].load_config().output
+        folder_template = folder_template or output_config.folder_template
+        file_template = file_template or output_config.file_template
+
     organizer = SmartOrganizer()
-    plan = organizer.propose_reorganization(source, target, template, audiobook_sets)
+    plan = organizer.propose_reorganization(
+        source,
+        target,
+        template,
+        audiobook_sets,
+        folder_template=folder_template,
+        file_template=file_template,
+    )
 
     click.echo(f"\nReorganization Plan ({plan.total_moves} file moves):")
     click.echo("-" * 50)
