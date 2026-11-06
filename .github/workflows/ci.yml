@@ -40,7 +40,20 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
       - name: Install FFmpeg
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+        # apt mirrors have stalled for 20+ minutes on some runners; bound each
+        # attempt and retry instead of hanging the job.
+        timeout-minutes: 12
+        run: |
+          for attempt in 1 2 3; do
+            if timeout 180 sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 update \
+              && timeout 300 sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 \
+                   install -y --no-install-recommends ffmpeg; then
+              exit 0
+            fi
+            echo "FFmpeg install attempt $attempt failed; retrying" >&2
+            sleep 10
+          done
+          exit 1
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip setuptools wheel
