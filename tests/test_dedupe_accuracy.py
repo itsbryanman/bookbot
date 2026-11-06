@@ -272,3 +272,15 @@ def test_release_noise_in_brackets_is_still_ignored(tmp_path: Path, noisy: str) 
     plain = _book(tmp_path, "a", "Dune", "Frank Herbert", minutes=1260)
     other = _book(tmp_path, "b", noisy, "Frank Herbert", minutes=1260)
     assert engine._edition_key(plain) == engine._edition_key(other)
+
+
+def test_bracket_noise_check_is_linear_on_pathological_titles(
+    tmp_path: Path,
+) -> None:
+    import time
+
+    engine = DedupeEngine(tmp_path)
+    book = _book(tmp_path, "a", "(" + "mp3 " * 20000 + "x", None, minutes=1)
+    started = time.perf_counter()
+    engine._edition_key(book)
+    assert time.perf_counter() - started < 1.0
