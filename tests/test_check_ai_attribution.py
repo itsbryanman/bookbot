@@ -130,3 +130,74 @@ def test_only_the_given_range_is_checked(repo: Path) -> None:
     base = _git(repo, "rev-parse", "HEAD")
     _commit(repo, "new clean commit")
     assert _check(repo, f"{base}..HEAD").returncode == 0
+
+
+# ── Codex review on #14: choose the range from the CI event ──
+
+
+def _auto(repo: Path, **env: str) -> subprocess.CompletedProcess[str]:
+    import os
+
+    return subprocess.run(
+        [sys.executable, str(CHECKER), "--from-ci-env"],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        env={**os.environ, **env},
+    )
+
+
+def test_force_push_with_unknown_before_falls_back_to_default_branch(
+    repo: Path,
+) -> None:
+    _git(repo, "branch", "-M", "main")
+    _git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+    _git(repo, "checkout", "-q", "-b", "feature")
+    bad = _commit(repo, "x\n\nCo-Authored-By: Claude <noreply@anthropic.com>")
+
+    result = _auto(
+        repo,
+        EVENT="push",
+        BEFORE="1234567890abcdef1234567890abcdef12345678",
+        AFTER=bad,
+        DEFAULT_BRANCH="main",
+    )
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert bad[:12] in result.stdout
+
+
+def test_new_branch_push_checks_commits_not_on_default_branch(repo: Path) -> None:
+    _git(repo, "branch", "-M", "main")
+    _git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+    _git(repo, "checkout", "-q", "-b", "feature")
+    clean = _commit(repo, "clean")
+
+    result = _auto(
+        repo, EVENT="push", BEFORE="0" * 40, AFTER=clean, DEFAULT_BRANCH="main"
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_force_push_to_default_branch_checks_the_new_tip(repo: Path) -> None:
+    _git(repo, "branch", "-M", "main")
+    bad = _commit(repo, "x\n\nGenerated with Claude Code")
+    _git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+
+    result = _auto(
+        repo, EVENT="push", BEFORE="f" * 40, AFTER=bad, DEFAULT_BRANCH="main"
+    )
+
+    assert result.returncode == 1
+    assert bad[:12] in result.stdout
+
+
+def test_pull_request_uses_base_and_head(repo: Path) -> None:
+    base = _git(repo, "rev-parse", "HEAD")
+    head = _commit(repo, "x\n\nCo-authored-by: Copilot <c@users.noreply.github.com>")
+
+    result = _auto(repo, EVENT="pull_request", PR_BASE=base, PR_HEAD=head)
+
+    assert result.returncode == 1
+    assert head[:12] in result.stdout
