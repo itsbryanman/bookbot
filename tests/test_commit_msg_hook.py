@@ -42,3 +42,24 @@ def test_clean_message_is_unchanged(tmp_path: Path) -> None:
 def test_trailing_blank_lines_collapsed(tmp_path: Path) -> None:
     out = _run(tmp_path, "Subject\n\nCo-Authored-By: Claude <noreply@anthropic.com>\n")
     assert out == "Subject\n"
+
+
+def test_prose_mentioning_claude_code_survives(tmp_path: Path) -> None:
+    prose = [
+        "- the hook drops the Claude Code footer, i.e. lines generated with",
+        "Docs generated with Claude Code were reviewed by hand.",
+        "  🤖 Generated with Claude Code is the footer we remove.",
+        "Mentions Copilot and Claude in passing.",
+    ]
+    message = "Subject\n\n" + "\n".join(prose) + "\n"
+    assert _run(tmp_path, message) == message
+
+
+def test_only_marker_lines_are_removed(tmp_path: Path) -> None:
+    message = (
+        "Subject\n\nBody.\n\n"
+        "Generated with Claude Code\n"
+        "🤖 Generated with [Claude Code](https://claude.com/claude-code)\n"
+        "Co-authored-by: GitHub Copilot <copilot@github.com>\n"
+    )
+    assert _run(tmp_path, message) == "Subject\n\nBody.\n"
