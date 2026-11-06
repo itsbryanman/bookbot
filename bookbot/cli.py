@@ -1743,13 +1743,23 @@ def review(plan_file: Path) -> None:
 
 
 def _plan_output_problem(path: Path) -> str | None:
-    """Why ``path`` cannot be (re)written, or None when it can."""
-    directory = path.parent if str(path.parent) else Path(".")
-    nearest = directory
+    """Why ``path`` cannot be (re)written, or None when it can.
+
+    An existing file only needs to be writable itself (``save_plan`` opens it
+    in place). A new file needs its nearest existing ancestor to be a
+    writable directory.
+    """
+    if path.exists():
+        if not path.is_file():
+            return f"{path} is not a regular file"
+        if not os.access(path, os.W_OK):
+            return f"{path} is not writable"
+        return None
+    nearest = path.parent if str(path.parent) else Path(".")
     while not nearest.exists() and nearest != nearest.parent:
         nearest = nearest.parent
-    if path.exists() and not os.access(path, os.W_OK):
-        return f"{path} is not writable"
+    if not nearest.is_dir():
+        return f"{nearest} is not a directory"
     if not os.access(nearest, os.W_OK):
         return f"directory {nearest} is not writable"
     return None
