@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
 from pathlib import Path
 
 import pytest
@@ -14,6 +15,7 @@ from textual.widgets import DataTable, Label, Static, TabbedContent
 
 from bookbot.cli import cli
 from bookbot.config.manager import ConfigManager
+from bookbot.core.discovery import AudioFileScanner
 from bookbot.core.models import (
     AudiobookSet,
     AudioFormat,
@@ -352,22 +354,37 @@ async def test_bookbot_app_reports_no_matches_found_honestly(
 @pytest.mark.asyncio
 async def test_bookbot_app_with_preloaded_folders_starts_in_scanning_state(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     library = tmp_path / "library"
     library.mkdir()
+
+    # Hold the scan open until the assertions ran: an empty folder scans so
+    # fast that the worker could reach "scan_complete" first (seen in CI).
+    release = threading.Event()
+    real_scan = AudioFileScanner.scan_directory
+
+    def blocking_scan(self, path, progress=None):  # type: ignore[no-untyped-def]
+        release.wait(timeout=10)
+        return real_scan(self, path, progress)
+
+    monkeypatch.setattr(AudioFileScanner, "scan_directory", blocking_scan)
 
     app = BookBotApp(ConfigManager(tmp_path / "config"), [library])
 
     async with app.run_test() as pilot:
         await pilot.pause(0)
 
-        assert app.current_step == "scanning"
-        assert app.query_one(TabbedContent).active == "mission"
-        # The scan worker may already have advanced the label from
-        # "Scanning preloaded folders..." to "Scanning <dir>..." depending on
-        # scheduling, so assert the scanning phase rather than an exact
-        # mid-race string.
-        assert str(app.query_one("#status_label", Label).content).startswith("Scanning")
+        try:
+            assert app.current_step == "scanning"
+            assert app.query_one(TabbedContent).active == "mission"
+            # The label may read "Scanning preloaded folders..." or
+            # "Scanning <dir>..." depending on scheduling.
+            assert str(app.query_one("#status_label", Label).content).startswith(
+                "Scanning"
+            )
+        finally:
+            release.set()
 
 
 @pytest.mark.asyncio
