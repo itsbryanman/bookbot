@@ -57,6 +57,13 @@ SEGMENT_SUFFIX_PATTERN = re.compile(
 )
 
 
+_EDITION_BRACKETS_RE = re.compile(r"[\(\[][^\)\]]*[\)\]]")
+_EDITION_WORDS_RE = re.compile(
+    r"\b(?:unabridged|abridged|audiobook|audio\s*book|retail)\b", re.IGNORECASE
+)
+_ARTICLES = {"the", "a", "an"}
+
+
 @dataclass
 class DedupeCandidate:
     """An audiobook set annotated with keeper/quarantine status."""
@@ -73,6 +80,14 @@ class EditionGroup:
 
     members: list[DedupeCandidate] = field(default_factory=list)
     keeper: DedupeCandidate | None = None
+
+
+@dataclass
+class PossibleDuplicate:
+    """Sets that look alike but lack evidence; listed for review only."""
+
+    members: list[AudiobookSet] = field(default_factory=list)
+    reason: str = ""
 
 
 @dataclass
@@ -104,6 +119,8 @@ class DedupePlan:
     operations: list[QuarantineOp] = field(default_factory=list)
     edition_groups: list[dict] = field(default_factory=list)
     file_groups: list[dict] = field(default_factory=list)
+    # Never quarantined: {"paths": [...], "reason": "..."}
+    possible_duplicates: list[dict] = field(default_factory=list)
 
     @property
     def total_reclaimable_bytes(self) -> int:
@@ -149,6 +166,7 @@ class DedupePlan:
             ],
             "edition_groups": self.edition_groups,
             "file_groups": self.file_groups,
+            "possible_duplicates": self.possible_duplicates,
         }
 
     def to_transaction_records(self) -> list[OperationRecord]:
@@ -174,11 +192,21 @@ class DedupePlan:
 class DedupeEngine:
     """Performs deduplication analysis and plan generation."""
 
-    def __init__(self, library_root: Path) -> None:
+    # Fuzzy thresholds. token_sort_ratio compares every token, so extra
+    # words lower the score: "dune" vs "dune messiah" is 50 (token_set_ratio
+    # gave 100 because one token set contains the other).
+    TITLE_THRESHOLD = 92
+    AUTHOR_THRESHOLD = 90
+
+    def __init__(self, library_root: Path, duration_tolerance_pct: float = 2.0) -> None:
         self.library_root = library_root
         self.matcher = AdvancedMatcher()
         self.scanner = AudioFileScanner()
         self.analysis_warnings: list[str] = []
+        # Fuzzy-only matches need a shared ASIN/ISBN or durations within
+        # this many percent before anything is quarantined.
+        self.duration_tolerance_pct = duration_tolerance_pct
+        self.possible_duplicates: list[PossibleDuplicate] = []
 
     def analyze_editions(
         self, audiobook_sets: list[AudiobookSet]
@@ -192,7 +220,12 @@ class DedupeEngine:
             key = self._edition_key(ab_set)
             clusters[key].append(ab_set)
 
-        # Pass 2: fuzzy-merge clusters
+        # Pass 2: fuzzy-merge clusters. Only an exact normalized
+        # author+title key with an author on both sides is trusted on its
+        # own; everything else needs corroboration (same ASIN/ISBN, or
+        # durations within duration_tolerance_pct) and otherwise is listed
+        # as a possible duplicate for review, never quarantined.
+        self.possible_duplicates = []
         cluster_keys = list(clusters.keys())
         merged_indices: set[int] = set()
         merged_clusters: list[list[AudiobookSet]] = []
@@ -200,24 +233,37 @@ class DedupeEngine:
         for i, key_i in enumerate(cluster_keys):
             if i in merged_indices:
                 continue
-            group = list(clusters[key_i])
             author_i, title_i = self._split_key(key_i)
+            group = self._corroborated_authorless(clusters[key_i], author_i)
 
             for j in range(i + 1, len(cluster_keys)):
                 if j in merged_indices:
                     continue
                 author_j, title_j = self._split_key(cluster_keys[j])
+                other = clusters[cluster_keys[j]]
 
-                title_sim = fuzz.token_set_ratio(title_i, title_j)
-                author_sim = (
-                    fuzz.token_sort_ratio(author_i, author_j)
-                    if (author_i and author_j)
-                    else 100
-                )
-
-                if title_sim >= 92 and author_sim >= 90:
-                    group.extend(clusters[cluster_keys[j]])
-                    merged_indices.add(j)
+                if fuzz.token_sort_ratio(title_i, title_j) < self.TITLE_THRESHOLD:
+                    continue
+                if not (author_i and author_j):
+                    self._add_possible(
+                        group + other,
+                        "Titles match but the author is missing on one side; "
+                        "review before removing anything",
+                    )
+                    continue
+                if fuzz.token_sort_ratio(author_i, author_j) < self.AUTHOR_THRESHOLD:
+                    continue
+                if key_i != cluster_keys[j] and not self._corroborated(group, other):
+                    self._add_possible(
+                        group + other,
+                        "Similar title/author, but no shared ASIN/ISBN and "
+                        f"durations differ by more than "
+                        f"{self.duration_tolerance_pct:g}%; review before "
+                        "removing anything",
+                    )
+                    continue
+                group.extend(other)
+                merged_indices.add(j)
 
             merged_indices.add(i)
             if len(group) > 1:
@@ -254,6 +300,66 @@ class DedupeEngine:
             edition_groups.append(edition_group)
 
         return edition_groups
+
+    def _corroborated_authorless(
+        self, members: list[AudiobookSet], author: str
+    ) -> list[AudiobookSet]:
+        """Members of an exact-key cluster that may be grouped.
+
+        With an author the exact key is trusted. Without one, each member
+        must corroborate the first; the rest become possible duplicates.
+        """
+        if author or len(members) < 2:
+            return list(members)
+        group = [members[0]]
+        for member in members[1:]:
+            if self._corroborated(group, [member]):
+                group.append(member)
+            else:
+                self._add_possible(
+                    [members[0], member],
+                    "Same title but no author, no shared ASIN/ISBN and "
+                    f"durations differ by more than "
+                    f"{self.duration_tolerance_pct:g}%; review before removing "
+                    "anything",
+                )
+        return group
+
+    def _add_possible(self, members: list[AudiobookSet], reason: str) -> None:
+        self.possible_duplicates.append(
+            PossibleDuplicate(members=list(members), reason=reason)
+        )
+
+    @staticmethod
+    def _identifiers(ab_set: AudiobookSet) -> set[str]:
+        values = {ab_set.asin_guess, ab_set.isbn_guess}
+        identity = ab_set.chosen_identity
+        if identity is not None:
+            values |= {identity.asin, identity.isbn_13, identity.isbn_10}
+        return {
+            "".join(ch for ch in value if ch.isalnum()).upper()
+            for value in values
+            if value
+        }
+
+    def _durations_agree(self, left: AudiobookSet, right: AudiobookSet) -> bool:
+        if not left.total_duration or not right.total_duration:
+            return False
+        longest = max(left.total_duration, right.total_duration)
+        delta = abs(left.total_duration - right.total_duration)
+        return delta / longest * 100.0 <= self.duration_tolerance_pct
+
+    def _corroborated(
+        self, left: list[AudiobookSet], right: list[AudiobookSet]
+    ) -> bool:
+        """Whether any pair across the two lists shares an id or a duration."""
+        for a in left:
+            for b in right:
+                if self._identifiers(a) & self._identifiers(b):
+                    return True
+                if self._durations_agree(a, b):
+                    return True
+        return False
 
     def _segment_group_warning(self, members: list[AudiobookSet]) -> str | None:
         """Return a warning when a cluster looks like one segmented work."""
@@ -488,6 +594,13 @@ class DedupeEngine:
 
                 plan.file_groups.append(fg_info)
 
+        plan.possible_duplicates = [
+            {
+                "paths": [str(member.source_path) for member in possible.members],
+                "reason": possible.reason,
+            }
+            for possible in self.possible_duplicates
+        ]
         plan.validate_sources_outside_quarantine()
         return plan
 
@@ -538,8 +651,23 @@ class DedupeEngine:
         author = self.matcher.normalize_author(ab_set.author_guess or "")
         # Strip dots for consistent keying (e.g. "J.R.R." → "JRR")
         author = author.replace(".", "")
-        title = self.matcher.normalize_title(ab_set.raw_title_guess or "")
-        return f"{author}||{title}"
+        return f"{author}||{self._edition_title(ab_set.raw_title_guess or '')}"
+
+    def _edition_title(self, raw_title: str) -> str:
+        """Normalized title without edition noise or a moved article.
+
+        "The Stand (Unabridged)" and "Stand, The" both give "stand"; the
+        fuzzy pass no longer forgives extra words, so they must go here.
+        """
+        title = _EDITION_BRACKETS_RE.sub(" ", raw_title)
+        title = _EDITION_WORDS_RE.sub(" ", title)
+        title = self.matcher.normalize_title(title)
+        tokens = title.split()
+        if len(tokens) > 1 and tokens[-1] in _ARTICLES:
+            tokens = tokens[:-1]
+        if len(tokens) > 1 and tokens[0] in _ARTICLES:
+            tokens = tokens[1:]
+        return " ".join(tokens)
 
     @staticmethod
     def _split_key(key: str) -> tuple[str, str]:

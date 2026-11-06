@@ -135,7 +135,7 @@ Run `bookbot COMMAND --help` for every option. Global flags: `--config-dir PATH`
 | --- | --- |
 | `doctor [DIR]` | Check the runtime and audit a library for compatibility problems. |
 | `health DIR [--json-output]` | Missing covers, inconsistent tags, orphans, duplicates, series gaps. |
-| `dedupe DIR [--apply]` | Quarantine duplicate files and editions; undo with `bookbot undo`. |
+| `dedupe DIR [--apply] [--duration-tolerance PCT]` | Quarantine duplicate files and editions; undo with `bookbot undo`. See [How dedupe decides](#how-dedupe-decides). |
 | `organize DIR --template abs\|plex\|default\|config [--folder-template T] [--file-template T] [--target DIR] [--confirm]` | Restructure into a player layout. With `--confirm` the moves are journaled like `apply`: it prints a transaction ID for `bookbot undo`, and an interrupted run can be rolled back with `bookbot recover`. A `--target` on another filesystem is refused. Does not write sidecars. |
 | `profile list\|show\|use NAME` | Built-in collector profiles. |
 | `config show\|get\|set\|edit\|where\|reset` | Settings, e.g. `config set output.folder_template "{author_sort}/{title}"`. |
@@ -157,6 +157,22 @@ Run `bookbot COMMAND --help` for every option. Global flags: `--config-dir PATH`
 | `audible auth\|list\|import` | Log in, list your Audible library, import by list number. |
 | `drm detect\|set-activation-bytes\|remove` | AAX tools for books you own. |
 | `completions bash\|zsh\|fish` | Shell completions. |
+
+### How dedupe decides
+
+`dedupe` runs two independent checks. Both only ever move files into `.bookbot-quarantine/<plan-id>/` (with `--apply`), and `bookbot undo <plan-id>` moves them back.
+
+**File level (exact).** Files are compared by size, then by a hash of their first and last 64 KiB, then by a full-file hash. Only byte-identical files are grouped.
+
+**Edition level (by name).**
+1. Books are keyed by normalized author + title. Case, punctuation, a leading or trailing article ("Stand, The") and edition words such as "(Unabridged)" are ignored.
+2. An exact key match with an author on both sides groups the books.
+3. Near matches (title and author `token_sort_ratio` of at least 92 and 90) group only when corroborated by a shared ASIN/ISBN, or by total durations within `--duration-tolerance` percent (default 2).
+4. Uncorroborated near matches, and same-title books with a missing author, are listed as **possible duplicates — review** and are never quarantined. A missing author never counts as a match.
+
+"Dune" and "Dune Messiah" are not grouped.
+
+`--audio-hash` (decoded-audio comparison) is not implemented. Passing it exits with an error.
 
 ## Configuration
 

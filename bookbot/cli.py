@@ -3784,8 +3784,18 @@ def abs_sync(ctx: click.Context, direction: str, watch: bool, interval: int) -> 
     is_flag=True,
     default=False,
     help=(
-        "Reserved for future decoded-audio hashing; "
-        "currently only checks ffmpeg availability"
+        "Decoded-audio hashing. Not implemented yet: passing it exits with an "
+        "error instead of running a byte-hash-only dedupe."
+    ),
+)
+@click.option(
+    "--duration-tolerance",
+    type=float,
+    default=2.0,
+    show_default=True,
+    help=(
+        "Percent difference in total duration that still corroborates a "
+        "fuzzy (non-exact) title/author match"
     ),
 )
 @click.option(
@@ -3802,6 +3812,7 @@ def dedupe(
     files_only: bool,
     editions_only: bool,
     audio_hash: bool,
+    duration_tolerance: float,
     json_path: Path | None,
 ) -> None:
     """Find and quarantine duplicate audiobooks and files."""
@@ -3819,7 +3830,7 @@ def dedupe(
     scanner = AudioFileScanner(recursive=True, max_depth=5)
     audiobook_sets = scanner.scan_directory(folder)
 
-    engine = DedupeEngine(folder)
+    engine = DedupeEngine(folder, duration_tolerance_pct=duration_tolerance)
 
     edition_groups = None
     file_groups = None
@@ -3848,8 +3859,21 @@ def dedupe(
             json_mod.dump(plan.to_dict(), f, indent=2, default=str)
         click.echo(f"Plan written to {json_path}")
 
+    if plan.possible_duplicates:
+        click.echo(
+            f"\n--- Possible duplicates — review: "
+            f"{len(plan.possible_duplicates)} group(s), not quarantined ---"
+        )
+        for i, possible in enumerate(plan.possible_duplicates, 1):
+            click.echo(f"\nPossible {i}: {possible['reason']}")
+            for member_path in possible["paths"]:
+                click.echo(f"  [REVIEW]  {member_path}")
+
     if not plan.operations:
-        click.echo("No duplicates found.")
+        if plan.possible_duplicates:
+            click.echo("\nNo duplicates to quarantine.")
+        else:
+            click.echo("No duplicates found.")
         return
 
     # Dry-run output
