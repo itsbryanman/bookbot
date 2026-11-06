@@ -1,12 +1,16 @@
 """Smart file organizer for messy audiobook libraries."""
 
+import os
+import uuid
+from datetime import datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, Field
 
 from ..config.models import Config
 from .logging import get_logger
-from .models import AudiobookSet, ProviderIdentity
+from .models import AudiobookSet, ProviderIdentity, RenameOperation, RenamePlan
 from .planning import (
     PlanBuilder,
     collision_skip_order,
@@ -17,7 +21,34 @@ from .planning import (
 )
 from .templates import TemplateEngine
 
+if TYPE_CHECKING:
+    from .operations import TransactionManager
+
 logger = get_logger("organizer")
+
+
+def _device_of(path: Path) -> int:
+    """st_dev of ``path``, or of its nearest existing ancestor."""
+    current = path.resolve(strict=False)
+    while not current.exists() and current != current.parent:
+        current = current.parent
+    return os.stat(current).st_dev
+
+
+def cross_device_error(source: Path, target: Path | None) -> str | None:
+    """Explain why ``target`` cannot be used, or None when it can.
+
+    Files are moved with ``Path.rename``, which cannot cross filesystems.
+    """
+    if target is None:
+        return None
+    if _device_of(source) == _device_of(target):
+        return None
+    return (
+        f"Target {target} is on a different filesystem than {source}. "
+        "organize moves files with rename, which cannot cross filesystems; "
+        "choose a target on the same filesystem, or copy the library first."
+    )
 
 
 class MoveOperation(BaseModel):
@@ -38,6 +69,10 @@ class ReorganizationPlan(BaseModel):
     # Books left in place, as {"source_path", "reason"}: duplicates whose
     # destination another book already claims, and books awaiting review.
     skipped: list[dict[str, str]] = Field(default_factory=list)
+    # The books the operations belong to, so the journaled apply can update
+    # their tracks and carry saved review decisions to the new paths.
+    audiobook_sets: list[AudiobookSet] = Field(default_factory=list)
+    applied_transaction_id: str | None = None
 
     @property
     def total_moves(self) -> int:
@@ -204,6 +239,7 @@ class SmartOrganizer:
         # Keep the scan order for the moves themselves.
         for set_index in sorted(planned):
             plan.operations.extend(planned[set_index])
+            plan.audiobook_sets.append(audiobook_sets[set_index])
         return plan
 
     def _track_moves(
@@ -224,11 +260,47 @@ class SmartOrganizer:
             for track in sorted(ab_set.tracks, key=lambda t: (t.disc, t.track_index))
         ]
 
-    def execute_plan(self, plan: ReorganizationPlan, dry_run: bool = True) -> bool:
-        """Execute a reorganization plan.
+    @staticmethod
+    def to_rename_plan(plan: ReorganizationPlan) -> RenamePlan:
+        """Convert a reorganization plan into a journaled rename plan."""
+        tracks = {
+            track.src_path.resolve(strict=False): track
+            for audiobook_set in plan.audiobook_sets
+            for track in audiobook_set.tracks
+        }
+        operations = [
+            RenameOperation(
+                old_path=op.source,
+                new_path=op.destination,
+                track=tracks.get(op.source.resolve(strict=False)),
+            )
+            for op in plan.operations
+            if op.source != op.destination
+        ]
+        return RenamePlan(
+            plan_id=str(uuid.uuid4()),
+            created_at=datetime.now(),
+            source_path=plan.source_root or Path("."),
+            operations=operations,
+            audiobook_sets=plan.audiobook_sets,
+            dry_run=False,
+            conflicts=list(plan.conflicts),
+        )
 
-        Uses a two-phase approach: first move all to temp names,
-        then move to final destinations.
+    def execute_plan(
+        self,
+        plan: ReorganizationPlan,
+        dry_run: bool = True,
+        *,
+        transaction_manager: "TransactionManager",
+    ) -> bool:
+        """Execute a reorganization plan through ``TransactionManager``.
+
+        The moves go through the same write-ahead journal as ``apply``, so a
+        completed run can be undone with ``bookbot undo`` and an interrupted
+        one rolled back with ``bookbot recover``. A failure part-way is
+        rolled back immediately and raises ``RuntimeError``. Sidecars are
+        not written; organize only moves files.
         """
         if not plan.is_valid:
             logger.warning("Cannot execute plan with conflicts")
@@ -237,46 +309,9 @@ class SmartOrganizer:
         if dry_run:
             return True
 
-        completed: list[tuple[Path, Path]] = []
-
-        try:
-            for op in plan.operations:
-                op.destination.parent.mkdir(parents=True, exist_ok=True)
-
-                if op.source == op.destination:
-                    continue
-
-                op.source.rename(op.destination)
-                completed.append((op.destination, op.source))
-
-            self._prune_empty_source_dirs(plan, completed)
-            return True
-
-        except OSError as e:
-            logger.error(f"Reorganization failed: {e}, rolling back")
-            # Rollback
-            for dest, orig in reversed(completed):
-                try:
-                    if dest.exists():
-                        orig.parent.mkdir(parents=True, exist_ok=True)
-                        dest.rename(orig)
-                except OSError:
-                    pass
-            return False
-
-    @staticmethod
-    def _prune_empty_source_dirs(
-        plan: ReorganizationPlan, completed: list[tuple[Path, Path]]
-    ) -> None:
-        """Remove source folders emptied by the move, never the library root."""
-        root = plan.source_root.resolve() if plan.source_root else None
-        for _dest, orig in completed:
-            folder = orig.parent
-            while root is not None and folder.resolve() != root:
-                if root not in folder.resolve().parents:
-                    break
-                try:
-                    folder.rmdir()
-                except OSError:
-                    break
-                folder = folder.parent
+        rename_plan = self.to_rename_plan(plan)
+        transaction_manager.execute_plan(
+            rename_plan, dry_run=False, write_sidecars=False
+        )
+        plan.applied_transaction_id = rename_plan.applied_transaction_id
+        return True

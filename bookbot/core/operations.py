@@ -169,8 +169,17 @@ class TransactionManager:
 
         return plan
 
-    def execute_plan(self, plan: RenamePlan, dry_run: bool = False) -> bool:
-        """Execute a rename plan atomically."""
+    def execute_plan(
+        self,
+        plan: RenamePlan,
+        dry_run: bool = False,
+        *,
+        write_sidecars: bool = True,
+    ) -> bool:
+        """Execute a rename plan atomically.
+
+        ``write_sidecars=False`` only moves files (used by ``organize``).
+        """
         if dry_run:
             plan.dry_run = True
             return True
@@ -269,12 +278,13 @@ class TransactionManager:
                     operation.track.src_path = operation.new_path
 
             # Phase 3: Write sidecars in the destination folders.
-            self._write_sidecar_outputs(
-                plan,
-                transaction_id,
-                transaction_log,
-                persist_journal=persist_journal,
-            )
+            if write_sidecars:
+                self._write_sidecar_outputs(
+                    plan,
+                    transaction_id,
+                    transaction_log,
+                    persist_journal=persist_journal,
+                )
 
             # Phase 4: Source folders left holding only OS junk (Thumbs.db,
             # desktop.ini, ._* ...) get that junk moved into quarantine under

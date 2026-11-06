@@ -628,7 +628,10 @@ def test_organize_confirm_moves_sidecars_and_prunes_empty_folders(tmp_path) -> N
 
     organizer = SmartOrganizer()
     plan = organizer.propose_reorganization(library, None, "default", [book])
-    assert organizer.execute_plan(plan, dry_run=False) is True
+    manager = TransactionManager(ConfigManager(tmp_path / "cfg"))
+    assert (
+        organizer.execute_plan(plan, dry_run=False, transaction_manager=manager) is True
+    )
 
     destination = library / "Gaiman, Neil" / "American Gods"
     assert (destination / "cover.jpg").is_file()

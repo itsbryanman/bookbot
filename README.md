@@ -136,7 +136,7 @@ Run `bookbot COMMAND --help` for every option. Global flags: `--config-dir PATH`
 | `doctor [DIR]` | Check the runtime and audit a library for compatibility problems. |
 | `health DIR [--json-output]` | Missing covers, inconsistent tags, orphans, duplicates, series gaps. |
 | `dedupe DIR [--apply]` | Quarantine duplicate files and editions; undo with `bookbot undo`. |
-| `organize DIR --template abs\|plex\|default [--confirm]` | Restructure into a player layout. Not journaled; use `scan` + `apply` when you want undo. |
+| `organize DIR --template abs\|plex\|default\|config [--folder-template T] [--file-template T] [--target DIR] [--confirm]` | Restructure into a player layout. With `--confirm` the moves are journaled like `apply`: it prints a transaction ID for `bookbot undo`, and an interrupted run can be rolled back with `bookbot recover`. A `--target` on another filesystem is refused. Does not write sidecars. |
 | `profile list\|show\|use NAME` | Built-in collector profiles. |
 | `config show\|get\|set\|edit\|where\|reset` | Settings, e.g. `config set output.folder_template "{author_sort}/{title}"`. |
 

@@ -2781,8 +2781,17 @@ def health(ctx: click.Context, folder: Path, json_out: bool, verbose: bool) -> N
     type=str,
     help="File template (overrides the preset's)",
 )
-@click.option("--dry-run", is_flag=True, default=True, help="Show proposed moves only")
-@click.option("--confirm", is_flag=True, help="Execute the reorganization")
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    hidden=True,
+    help="Deprecated: showing the plan without --confirm is the default",
+)
+@click.option(
+    "--confirm",
+    is_flag=True,
+    help="Execute the reorganization (journaled; undo with `bookbot undo`)",
+)
 @click.pass_context
 def organize(
     ctx: click.Context,
@@ -2794,9 +2803,23 @@ def organize(
     dry_run: bool,
     confirm: bool,
 ) -> None:
-    """Reorganize an audiobook library into a clean directory structure."""
+    """Reorganize an audiobook library into a clean directory structure.
+
+    Moves are journaled like `apply`: `bookbot undo <id>` reverts a run and
+    `bookbot recover` rolls back one that was interrupted.
+    """
     from .core.discovery import AudioFileScanner
-    from .core.organizer import SmartOrganizer
+    from .core.organizer import SmartOrganizer, cross_device_error
+
+    if dry_run:
+        click.echo(
+            "Note: --dry-run is deprecated; organize only moves files with --confirm.",
+            err=True,
+        )
+    device_error = cross_device_error(source, target)
+    if device_error is not None:
+        click.echo(f"Error: {device_error}", err=True)
+        sys.exit(1)
 
     scanner = AudioFileScanner(recursive=True)
     click.echo(f"Scanning {source}...")
@@ -2850,14 +2873,19 @@ def organize(
 
     if confirm and plan.is_valid:
         click.echo("\nExecuting reorganization...")
-        success = organizer.execute_plan(plan, dry_run=False)
-        if success:
-            click.echo("Reorganization completed successfully.")
-        else:
-            click.echo(
-                "Reorganization failed. Changes have been rolled back.", err=True
+        try:
+            organizer.execute_plan(
+                plan,
+                dry_run=False,
+                transaction_manager=TransactionManager(ctx.obj["config_manager"]),
             )
+        except Exception as exc:
+            click.echo(f"Reorganization failed and was rolled back: {exc}", err=True)
             sys.exit(1)
+        transaction_id = plan.applied_transaction_id or "unknown"
+        click.echo("Reorganization completed successfully.")
+        click.echo(f"Transaction ID: {transaction_id}")
+        click.echo(f"Undo with: bookbot undo {transaction_id}")
     elif not plan.is_valid:
         click.echo("\nPlan has conflicts. Resolve them before using --confirm.")
     else:
