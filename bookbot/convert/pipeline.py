@@ -10,8 +10,12 @@ import aiohttp
 
 from ..config.manager import ConfigManager
 from ..config.models import ConversionConfig
-from ..core.models import AudiobookSet, ProviderIdentity
-from .ffmpeg import FFmpegWrapper
+from ..core.logging import get_logger
+from ..core.models import AudiobookSet, ProviderIdentity, Track
+from ..core.templates import derive_track_title
+from .ffmpeg import FFmpegWrapper, validate_chapter_timeline
+
+logger = get_logger("convert")
 
 
 class ConversionPlan:
@@ -64,6 +68,9 @@ class ConversionPipeline:
     def __init__(self, config_manager: ConfigManager):
         self.config_manager = config_manager
         self._ffmpeg: FFmpegWrapper | None = None
+        # Problems that did not fail the conversion (e.g. cover art that
+        # could not be embedded); the CLI prints them.
+        self.warnings: list[str] = []
 
     def _get_ffmpeg(self) -> FFmpegWrapper:
         """Lazily instantiate and return the FFmpeg wrapper."""
@@ -127,23 +134,23 @@ class ConversionPipeline:
             chapter_data: list[dict[str, object]] = []
             current_time = 0.0
 
+            ffmpeg = self._get_ffmpeg()
             for track in sorted(
                 audiobook_set.tracks, key=lambda t: (t.disc, t.track_index)
             ):
+                # MP4 (.m4a) rather than raw ADTS: ffprobe reads an exact
+                # duration from the sample table instead of estimating it
+                # from the bitrate, so chapter boundaries line up.
                 temp_file = (
-                    temp_dir / f"track_{track.disc:02d}_{track.track_index:03d}.aac"
+                    temp_dir / f"track_{track.disc:02d}_{track.track_index:03d}.m4a"
                 )
-
-                ffmpeg = self._get_ffmpeg()
 
                 if (
                     ffmpeg.can_stream_copy(track.src_path)
                     and not config.normalize_audio
                 ):
-                    # Stream copy for AAC files
-                    success = self._stream_copy(track.src_path, temp_file)
+                    success = ffmpeg.remux_audio(track.src_path, temp_file)
                 else:
-                    # Convert to AAC
                     success = ffmpeg.convert_to_aac(
                         track.src_path,
                         temp_file,
@@ -159,43 +166,37 @@ class ConversionPipeline:
                 aac_files.append(temp_file)
                 operation.temp_files.append(temp_file)
 
-                # Calculate chapter information
                 if config.create_chapters:
-                    duration = ffmpeg.get_duration(temp_file)
-
-                    if (
-                        config.chapter_naming == "from_tags"
-                        and track.existing_tags.title
-                    ):
-                        chapter_title = track.existing_tags.title
-                    elif config.chapter_naming == "track_number":
-                        chapter_title = f"Track {track.track_index}"
-                    else:  # auto
-                        chapter_title = (
-                            track.existing_tags.title
-                            or f"Chapter {len(chapter_data) + 1}"
-                        )
-
+                    duration = ffmpeg.get_audio_stream_duration(temp_file)
                     chapter_data.append(
                         {
-                            "title": chapter_title,
+                            "title": self._chapter_title(
+                                track, config.chapter_naming, len(chapter_data) + 1
+                            ),
                             "start": current_time,
                             "end": current_time + duration,
                         }
                     )
-
                     current_time += duration
 
             # Step 2: Concatenate files. A single track goes through the same
-            # path so raw ADTS output is still remuxed into an MP4 container.
-            success = self._get_ffmpeg().concatenate_files(
-                aac_files,
-                output_path,
-                chapters=chapter_data if config.create_chapters else None,
-            )
-
+            # path so it is remuxed into the M4B container.
+            success = ffmpeg.concatenate_files(aac_files, output_path)
             if not success:
                 raise RuntimeError("Failed to concatenate audio files")
+
+            if config.create_chapters and chapter_data:
+                # Check the chapters against the audio that was actually
+                # written; the last END never runs past the stream.
+                stream_duration = ffmpeg.get_audio_stream_duration(output_path)
+                try:
+                    validate_chapter_timeline(chapter_data, stream_duration)
+                except ValueError as exc:
+                    output_path.unlink(missing_ok=True)
+                    raise RuntimeError(f"Chapter validation failed: {exc}") from exc
+                if not ffmpeg.add_chapters(output_path, chapter_data):
+                    output_path.unlink(missing_ok=True)
+                    raise RuntimeError("Failed to write chapters")
 
             # Step 3: Add metadata (fall back to locally discovered metadata)
             identity = audiobook_set.chosen_identity or self._local_identity(
@@ -217,6 +218,21 @@ class ConversionPipeline:
             # Remove temporary directory
             if temp_dir.exists():
                 temp_dir.rmdir()
+
+    @staticmethod
+    def _chapter_title(track: Track, naming: str, number: int) -> str:
+        """Chapter name for a track.
+
+        ``track_number``: "Track N". ``from_tags`` and ``auto``: the title
+        tag, else a title derived from the filename ("01 - Prelude" gives
+        "Prelude"), else "Chapter N".
+        """
+        if naming == "track_number":
+            return f"Track {track.track_index}"
+        tag_title = (track.existing_tags.title or "").strip()
+        if tag_title:
+            return tag_title
+        return derive_track_title(track.src_path.stem) or f"Chapter {number}"
 
     @staticmethod
     def _local_identity(audiobook_set: AudiobookSet) -> ProviderIdentity | None:
@@ -292,16 +308,27 @@ class ConversionPipeline:
             return
 
         # Try to download the largest cover
+        problems: list[str] = []
         for cover_url in identity.cover_urls:
             try:
                 cover_path = await self._download_cover(cover_url, file_path.parent)
-                if cover_path:
-                    success = self._get_ffmpeg().embed_cover_art(file_path, cover_path)
-                    cover_path.unlink()  # Clean up downloaded cover
-                    if success:
-                        break
-            except Exception:
-                continue
+                if not cover_path:
+                    problems.append(f"{cover_url}: download failed")
+                    continue
+                success = self._get_ffmpeg().embed_cover_art(file_path, cover_path)
+                cover_path.unlink(missing_ok=True)
+                if success:
+                    return
+                problems.append(f"{cover_url}: FFmpeg could not embed it")
+            except Exception as exc:
+                problems.append(f"{cover_url}: {exc}")
+        message = (
+            f"Cover art was not embedded in {file_path.name} ("
+            + "; ".join(problems)
+            + ")"
+        )
+        self.warnings.append(message)
+        logger.warning(message)
 
     async def _download_cover(self, url: str, temp_dir: Path) -> Path | None:
         """Download cover art from URL."""
