@@ -114,19 +114,19 @@ Run `bookbot COMMAND --help` for every option. Global flags: `--config-dir PATH`
 
 | Command | Purpose |
 | --- | --- |
-| `scan DIR --plan PLAN.json` | Find audiobooks, infer series and disc layout, and write a plan. |
+| `scan DIR [--plan PLAN.json] [--match [--metadata-from-files]]` | Find audiobooks, infer series and disc layout, and write a plan. Saved review decisions are applied without contacting providers; `--match` also looks each book up. |
 | `plan create\|show\|diff\|validate\|apply` | The plan workflow, step by step. |
 | `review PLAN.json` | Show a plan with warnings and conflicts. |
-| `apply PLAN.json [--yes]` | Apply atomically and print a transaction ID. |
+| `apply PLAN.json [--yes] [--plan-out PATH \| --no-update-plan]` | Apply atomically and print a transaction ID. Refuses to start (exit 1, nothing moved) if the plan file can't be rewritten; if saving it fails after the move, prints the transaction ID and exits 2. |
 | `history` / `undo ID` / `recover [ID]` | List, roll back, or recover interrupted transactions. |
 
 **Matching and review**
 
 | Command | Purpose |
 | --- | --- |
-| `match DIR [--show-all] [--json]` | Show merged candidates and why they scored as they did. |
-| `review-queue DIR` | List books that still need a decision. |
-| `accept DIR --set N --candidate M` | Accept a candidate (or `--skip` the book). |
+| `match DIR [--show-all] [--json] [--metadata-from-files]` | Show merged candidates and why they scored as they did. Each candidate has a stable `candidate_id`. |
+| `review-queue DIR [--json] [--metadata-from-files]` | List books that still need a decision. |
+| `accept DIR --set N (--candidate M \| --candidate-id ID \| --asin X \| --isbn X \| --skip)` | Accept a candidate or skip the book. Ids don't shift between runs the way list positions can. |
 | `provider list\|enable\|disable\|set-key\|set-marketplace` | Configure metadata providers. |
 
 **Library tools**
@@ -144,10 +144,10 @@ Run `bookbot COMMAND --help` for every option. Global flags: `--config-dir PATH`
 
 | Command | Purpose |
 | --- | --- |
-| `convert DIR -o OUT [--normalize] [--chapters auto]` | Build a single chaptered, tagged M4B. `--dry-run` prints the plan. |
+| `convert DIR -o OUT [--normalize] [--chapters auto]` | Build a single chaptered, tagged M4B. `--dry-run` prints the plan. Chapter boundaries come from each track's measured duration, and the last one is clamped to the audio. `auto` names chapters from the title tag, then the filename (`01 - Prelude.mp3` → "Prelude"), then "Chapter N". |
 | `m4b merge\|split\|tag\|chapters` | Work with existing M4B files. |
 | `chapters detect\|apply DIR` | Chapters from Audnexus, cue files, track boundaries, or silence. |
-| `sidecar read\|write\|sync DIR` | OPF, JSON, and NFO metadata files. |
+| `sidecar read\|write\|sync DIR` | OPF, JSON, and NFO metadata files. `write --format json` merges into an existing `metadata.json`. |
 
 **Integrations**
 
@@ -157,6 +157,14 @@ Run `bookbot COMMAND --help` for every option. Global flags: `--config-dir PATH`
 | `audible auth\|list\|import` | Log in, list your Audible library, import by list number. |
 | `drm detect\|set-activation-bytes\|remove` | AAX tools for books you own. |
 | `completions bash\|zsh\|fish` | Shell completions. |
+
+### Saved review decisions
+
+`accept` saves the full chosen metadata, keyed by the book's folder and track names. `scan`, `plan create`, `organize`, `convert` and `sidecar write` apply saved accept/skip decisions offline, so `match` → `accept` → `scan --plan` puts the accepted title and series in the plan.
+
+After `apply` or `organize --confirm` moves a book, its decision is copied to the new location. The old entry is kept, so `undo` still finds it.
+
+Decisions saved by BookBot 1.2.0 or earlier have no stored metadata. Those books show up as needing review with "re-accept to refresh saved decision".
 
 ### How dedupe decides
 
@@ -187,6 +195,11 @@ Run `bookbot COMMAND --help` for every option. Global flags: `--config-dir PATH`
 | `~/.local/share/bookbot/logs/` | Transaction journals for undo and recover, plus logs. |
 
 **Templates.** The defaults are `output.folder_template = "{author_sort}/{title} ({year})"` and `output.file_template = "{DiscPad}{TrackPad} - {TrackTitle}"`. Available tokens: `{author}`, `{authors}`, `{author_sort}`, `{title}`, `{short_title}`, `{series}`, `{series_index}`, `{year}`, `{narrator}`, `{language}`, `{isbn}`, `{disc}`, `{disc_pad}`, `{track}`, `{track_pad}`, `{track_title}` (PascalCase forms such as `{AuthorLastFirst}` also work).
+
+**Sidecar output.**
+- `output.metadata_json_style` is `"booklore"` (default) or `"audiobookshelf"`. The built-in `audiobookshelf` profile uses `"audiobookshelf"`, which writes the keys and types Audiobookshelf's `metadata.json` parser reads: `authors`, `narrators`, `series` (`"Name #N"`) and `genres` as string arrays, and `publishedYear` as a string.
+- When a `metadata.json` already exists, its other keys (such as `chapters` or `tags`) are kept; only fields BookBot has values for are replaced. The previous file is kept as a `.bak` for undo.
+- `output.cover_filename` (default `"cover"`) sets the cover file's name and may use template tokens, e.g. `"{title} - cover"`. The extension follows the image type. `doctor` and `health` recognize the configured name.
 
 **Providers.** Audnexus (primary), Audible, Open Library, and LibriVox are on by default and need no key. Google Books and Hardcover turn on when you add a key:
 
