@@ -112,7 +112,7 @@ class LocalMetadataProvider(MetadataProvider):
                 with path.open(encoding="utf-8") as f:
                     data = json.load(f)
                     if isinstance(data, dict):
-                        return data
+                        return self._normalize_json_metadata(data)
             elif suffix in {".nfo", ".info"}:
                 return self._parse_nfo(path)
         except (OSError, json.JSONDecodeError) as exc:
@@ -122,6 +122,35 @@ class LocalMetadataProvider(MetadataProvider):
             return None
 
         return None
+
+    @staticmethod
+    def _normalize_json_metadata(data: dict[str, Any]) -> dict[str, Any]:
+        """Map Audiobookshelf-style keys onto the scalar keys used here.
+
+        ABS writes ``series: ["Name #N"]``, ``narrators: [...]`` and
+        ``publishedYear``; BookLore and older files use ``series``,
+        ``series_index``/``seriesIndex``, ``narrator`` and ``year``.
+        """
+        data = dict(data)
+        series = data.get("series")
+        if isinstance(series, list):
+            series = next((str(item) for item in series if item), None)
+            data["series"] = series
+        if isinstance(series, str) and not (
+            data.get("series_index") or data.get("seriesIndex")
+        ):
+            sequence = re.match(r"^(.*?)\s*#\s*([\d.]+)\s*$", series)
+            if sequence and sequence.group(1).strip():
+                data["series"] = sequence.group(1).strip()
+                data["series_index"] = sequence.group(2)
+        if data.get("seriesIndex") and not data.get("series_index"):
+            data["series_index"] = data["seriesIndex"]
+        narrators = data.get("narrators")
+        if not data.get("narrator") and isinstance(narrators, list) and narrators:
+            data["narrator"] = ", ".join(str(name) for name in narrators if name)
+        if data.get("year") is None and data.get("publishedYear"):
+            data["year"] = data["publishedYear"]
+        return data
 
     def _parse_nfo(self, path: Path) -> dict[str, Any] | None:
         """Parse a simple key:value based NFO or INFO file."""

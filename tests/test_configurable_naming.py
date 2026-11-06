@@ -204,3 +204,46 @@ def test_organize_cli_honors_config_and_template_flags(
     )
     assert from_flags.exit_code == 0, from_flags.output
     assert "All Systems Red/All Systems Red 1.mp3" in from_flags.output
+
+
+# ── Codex review on #7 ──
+
+
+def test_doctor_uses_saved_identity_for_tokenized_cover_names(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from bookbot.core.models import MatchCandidate, MatchConfidence
+    from bookbot.core.review_store import ReviewDecisionStore
+
+    config_dir = tmp_path / "cfg"
+    book = _book(tmp_path / "lib" / "book", identity=None)
+    ReviewDecisionStore(ConfigManager(config_dir)).set_accept(
+        book,
+        MatchCandidate(
+            identity=IDENTITY, confidence=0.9, confidence_level=MatchConfidence.HIGH
+        ),
+        candidate_index=1,
+    )
+    (book.source_path / "All Systems Red (2017).jpg").write_bytes(b"x")
+    config = Config()
+    config.output.cover_filename = "{title} ({year})"
+    doctor = LibraryDoctor(config, config_dir)
+    monkeypatch.setattr(
+        doctor.scanner,
+        "scan_directory",
+        lambda path, progress=None: [book.model_copy(deep=True)],
+    )
+
+    report = doctor.run(tmp_path / "lib")
+
+    assert not any("missing cover" in c.message for c in report.checks), [
+        c.message for c in report.checks
+    ]
+
+
+@pytest.mark.parametrize("stem", ["x" * 300, "é" * 200], ids=["ascii", "multibyte"])
+def test_cover_filename_fits_the_255_byte_limit(tmp_path: Path, stem: str) -> None:
+    output = LibraryOutputConfig(cover_filename=stem)
+    name = sidecar_output_paths(tmp_path, IDENTITY, output)["cover"].name
+    assert name.endswith(".png")
+    assert len(name.encode("utf-8")) <= 255
