@@ -385,6 +385,13 @@ async def test_bookbot_app_with_preloaded_folders_starts_in_scanning_state(
             )
         finally:
             release.set()
+        # Let the scan finish while the app is still mounted; finishing it
+        # during teardown makes the worker query widgets that are gone.
+        for _ in range(200):
+            if app.current_step != "scanning":
+                break
+            await pilot.pause(0.05)
+        assert app.current_step == "scan_complete"
 
 
 @pytest.mark.asyncio
