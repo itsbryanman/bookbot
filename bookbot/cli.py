@@ -3,6 +3,7 @@
 import asyncio
 import json
 import math
+import os
 import shutil
 import sys
 from pathlib import Path
@@ -1741,22 +1742,69 @@ def review(plan_file: Path) -> None:
     _show_plan(plan_file, include_operations=True)
 
 
+def _plan_output_problem(path: Path) -> str | None:
+    """Why ``path`` cannot be (re)written, or None when it can."""
+    directory = path.parent if str(path.parent) else Path(".")
+    nearest = directory
+    while not nearest.exists() and nearest != nearest.parent:
+        nearest = nearest.parent
+    if path.exists() and not os.access(path, os.W_OK):
+        return f"{path} is not writable"
+    if not os.access(nearest, os.W_OK):
+        return f"directory {nearest} is not writable"
+    return None
+
+
 @cli.command("apply")
 @click.argument(
     "plan_file", type=click.Path(exists=True, dir_okay=False, path_type=Path)
 )
 @click.option("--yes", is_flag=True, help="Apply without confirmation")
+@click.option(
+    "--plan-out",
+    type=click.Path(dir_okay=False, path_type=Path),
+    help="Write the applied plan here instead of updating PLAN_FILE",
+)
+@click.option(
+    "--no-update-plan",
+    is_flag=True,
+    help="Do not record the transaction ID in a plan file",
+)
 @click.pass_context
-def apply_plan_file(ctx: click.Context, plan_file: Path, yes: bool) -> None:
+def apply_plan_file(
+    ctx: click.Context,
+    plan_file: Path,
+    yes: bool,
+    plan_out: Path | None = None,
+    no_update_plan: bool = False,
+) -> None:
     """Apply a saved rename plan."""
     config_manager = ctx.obj["config_manager"]
     plan = load_plan(plan_file)
+
+    if plan_out is not None and no_update_plan:
+        click.echo("Error: use either --plan-out or --no-update-plan", err=True)
+        sys.exit(1)
 
     if plan.conflicts:
         click.echo("Plan has conflicts and cannot be applied:", err=True)
         for conflict in plan.conflicts:
             click.echo(f"  - {conflict}", err=True)
         sys.exit(1)
+
+    # The applied plan is written back after the files move. Check that it
+    # can be, before anything moves.
+    plan_target = None if no_update_plan else (plan_out or plan_file)
+    if plan_target is not None:
+        problem = _plan_output_problem(plan_target)
+        if problem is not None:
+            click.echo(
+                f"Error: {problem}; nothing was changed. The applied plan is "
+                "written back after the files move. Pass --plan-out PATH to "
+                "write it elsewhere, or --no-update-plan to skip it.",
+                err=True,
+            )
+            sys.exit(1)
 
     if not yes and not click.confirm(
         f"Apply {len(plan.operations)} operation(s) from {plan_file}?", default=False
@@ -1771,9 +1819,23 @@ def apply_plan_file(ctx: click.Context, plan_file: Path, yes: bool) -> None:
         click.echo(f"Error applying plan: {exc}", err=True)
         sys.exit(1)
 
-    save_plan(plan, plan_file)
     transaction_id = plan.applied_transaction_id or "unknown"
+    if plan_target is not None:
+        try:
+            save_plan(plan, plan_target)
+        except Exception as exc:
+            click.echo(f"Transaction ID: {transaction_id}")
+            click.echo(
+                f"Error: files were changed; plan file not updated ({exc}).",
+                err=True,
+            )
+            click.echo("  Inspect: bookbot history", err=True)
+            click.echo(f"  Revert:  bookbot undo {transaction_id}", err=True)
+            sys.exit(2)
+
     click.echo(f"Plan applied successfully. Transaction ID: {transaction_id}")
+    if plan_out is not None:
+        click.echo(f"Applied plan written to {plan_out}")
 
 
 @cli.group()
@@ -1832,10 +1894,32 @@ def plan_show(plan_file: Path) -> None:
     "plan_file", type=click.Path(exists=True, dir_okay=False, path_type=Path)
 )
 @click.option("--yes", is_flag=True, help="Apply without confirmation")
+@click.option(
+    "--plan-out",
+    type=click.Path(dir_okay=False, path_type=Path),
+    help="Write the applied plan here instead of updating PLAN_FILE",
+)
+@click.option(
+    "--no-update-plan",
+    is_flag=True,
+    help="Do not record the transaction ID in a plan file",
+)
 @click.pass_context
-def plan_apply(ctx: click.Context, plan_file: Path, yes: bool) -> None:
+def plan_apply(
+    ctx: click.Context,
+    plan_file: Path,
+    yes: bool,
+    plan_out: Path | None,
+    no_update_plan: bool,
+) -> None:
     """Apply a plan file."""
-    ctx.invoke(apply_plan_file, plan_file=plan_file, yes=yes)
+    ctx.invoke(
+        apply_plan_file,
+        plan_file=plan_file,
+        yes=yes,
+        plan_out=plan_out,
+        no_update_plan=no_update_plan,
+    )
 
 
 @plan.command("diff")
