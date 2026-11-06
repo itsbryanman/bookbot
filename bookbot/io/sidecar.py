@@ -77,6 +77,16 @@ def _coerce_int(value: Any) -> int | None:
         return None
 
 
+# Keys that carry the same field in the other metadata.json style.
+_METADATA_ALIASES: dict[str, tuple[str, ...]] = {
+    "series": ("seriesIndex",),
+    "narrators": ("narrator",),
+    "narrator": ("narrators",),
+    "publishedYear": ("year",),
+    "year": ("publishedYear",),
+}
+
+
 def split_narrators(value: str | None) -> list[str]:
     """Split a narrator string on ',', ';' and '&'."""
     if not value:
@@ -178,6 +188,7 @@ def sidecar_output_paths(
 
 
 DEFAULT_COVER_STEM = "cover"
+MAX_FILENAME_BYTES = 255
 
 
 def cover_stem(
@@ -209,6 +220,11 @@ def _cover_filename(url: str, stem: str = DEFAULT_COVER_STEM) -> str:
     suffix = Path(urlparse(url).path).suffix.lower()
     if suffix not in {".jpg", ".jpeg", ".png", ".gif", ".webp"}:
         suffix = ".jpg"
+    # Keep the whole name within the common 255-byte component limit.
+    budget = MAX_FILENAME_BYTES - len(suffix.encode("utf-8"))
+    while len(stem.encode("utf-8")) > budget:
+        stem = stem[:-1]
+    stem = stem.rstrip(" .") or DEFAULT_COVER_STEM
     return f"{stem}{suffix}"
 
 
@@ -505,6 +521,11 @@ class SidecarManager:
             raise ValueError(f"Unknown metadata.json style: {style!r}")
 
         data: dict[str, Any] = dict(existing) if existing else {}
+        # The other style's spelling of a field being written would shadow
+        # or contradict the new value when read back; drop it.
+        for key in fields:
+            for alias in _METADATA_ALIASES.get(key, ()):
+                data.pop(alias, None)
         data.update(fields)
 
         path.write_text(

@@ -237,9 +237,18 @@ class LibraryDoctor:
         if quarantine_summary is not None:
             report.add("warn", self._format_quarantine_summary(quarantine_summary))
 
+        self._check_metadata_json_style(report, library_path)
+
         audiobook_sets = self.scanner.scan_directory(library_path)
         if audiobook_sets:
             report.add("ok", f"Detected {len(audiobook_sets)} audiobook set(s)")
+            # Saved review decisions carry the identity that apply used, so
+            # tokenized names (cover_filename "{title} ({year})") match.
+            from .review_store import ReviewDecisionStore, apply_stored_decisions
+
+            apply_stored_decisions(
+                audiobook_sets, ReviewDecisionStore.for_config_dir(self.config_dir)
+            )
         else:
             report.add("warn", "No supported audiobooks detected in library")
             return
@@ -366,6 +375,38 @@ class LibraryDoctor:
             [str(candidate.audiobook_set.source_path) for candidate in group.members]
             for group in groups
         ]
+
+    def _check_metadata_json_style(
+        self, report: DoctorReport, library_path: Path
+    ) -> None:
+        """Warn when ABS-style metadata.json files meet the booklore style.
+
+        A config copied from an older audiobookshelf profile has no
+        metadata_json_style and falls back to "booklore"; applying would then
+        rewrite these files in a shape Audiobookshelf reads only partly.
+        """
+        if self.config.output.metadata_json_style != "booklore":
+            return
+        abs_files = 0
+        for path in iter_files_excluding_quarantine(library_path):
+            if path.name != "metadata.json":
+                continue
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            if isinstance(data, dict) and (
+                isinstance(data.get("series"), list)
+                or isinstance(data.get("narrators"), list)
+            ):
+                abs_files += 1
+        if abs_files:
+            report.add(
+                "warn",
+                f"{abs_files} metadata.json file(s) use the Audiobookshelf "
+                "layout, but output.metadata_json_style is 'booklore'. Run: "
+                "bookbot config set output.metadata_json_style audiobookshelf",
+            )
 
     def _count_missing_covers(self, audiobook_sets: list) -> int:
         from ..io.sidecar import cover_stem

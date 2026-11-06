@@ -107,6 +107,17 @@ class ReviewDecisionStore:
         self.config_manager = config_manager
         self.path = config_manager.config_dir / "review-decisions.json"
 
+    @classmethod
+    def for_config_dir(cls, config_dir: Path) -> ReviewDecisionStore:
+        """A read/write store for ``config_dir`` without a ConfigManager.
+
+        ConfigManager has side effects (it writes default profiles and sets
+        BOOKBOT_CONFIG_DIR), which read-only checks such as doctor avoid.
+        """
+        store = cls.__new__(cls)
+        store.path = config_dir / "review-decisions.json"
+        return store
+
     def review_key(self, audiobook_set: AudiobookSet) -> str:
         """Build a stable key for one scanned audiobook set."""
         source_path = str(audiobook_set.source_path.resolve(strict=False))
@@ -207,6 +218,11 @@ class ReviewDecisionStore:
             if decision.identity is None:
                 return None
             matched_candidate = _snapshot_candidate(decision.identity)
+        elif decision.identity is None:
+            # A decision saved before snapshots existed: the provider still
+            # returns the accepted candidate, so store its identity now and
+            # offline runs can use the decision from here on.
+            self._store_snapshot(audiobook_set, matched_candidate.identity)
         accept_candidate_for_set(audiobook_set, matched_candidate)
         return "accept", matched_candidate
 
@@ -223,16 +239,18 @@ class ReviewDecisionStore:
         audiobook_set.review_skipped = False
         audiobook_set.review_reason = None
 
-        if not candidates:
-            mark_set_needs_review(audiobook_set, "No matches found")
-            return "unmatched", None
-
+        # Saved decisions come first, so an empty provider result does not
+        # discard an accepted snapshot or a skip.
         saved = self.apply_saved_decision(audiobook_set, candidates)
         if saved is not None:
             action, chosen_candidate = saved
             if action == "skip":
-                return "skipped", candidates[0]
+                return "skipped", candidates[0] if candidates else None
             return "accepted_saved", chosen_candidate
+
+        if not candidates:
+            mark_set_needs_review(audiobook_set, "No matches found")
+            return "unmatched", None
 
         best_match = candidates[0]
         auto_accept, reason = auto_accept_candidate(best_match, matching)
@@ -242,6 +260,17 @@ class ReviewDecisionStore:
 
         mark_set_needs_review(audiobook_set, reason or "Review required")
         return "review", best_match
+
+    def _store_snapshot(
+        self, audiobook_set: AudiobookSet, identity: ProviderIdentity
+    ) -> None:
+        decisions = self.load()
+        key = self.review_key(audiobook_set)
+        decision = decisions.get(key)
+        if decision is None or decision.action != "accept":
+            return
+        decisions[key] = decision.model_copy(update={"identity": identity})
+        self.save(decisions)
 
     def carry_decisions_through_plan(
         self,
