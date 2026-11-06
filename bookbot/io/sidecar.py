@@ -77,6 +77,16 @@ def _coerce_int(value: Any) -> int | None:
         return None
 
 
+# Keys that carry the same field in the other metadata.json style.
+_METADATA_ALIASES: dict[str, tuple[str, ...]] = {
+    "series": ("seriesIndex",),
+    "narrators": ("narrator",),
+    "narrator": ("narrators",),
+    "publishedYear": ("year",),
+    "year": ("publishedYear",),
+}
+
+
 def split_narrators(value: str | None) -> list[str]:
     """Split a narrator string on ',', ';' and '&'."""
     if not value:
@@ -475,6 +485,11 @@ class SidecarManager:
             raise ValueError(f"Unknown metadata.json style: {style!r}")
 
         data: dict[str, Any] = dict(existing) if existing else {}
+        # The other style's spelling of a field being written would shadow
+        # or contradict the new value when read back; drop it.
+        for key in fields:
+            for alias in _METADATA_ALIASES.get(key, ()):
+                data.pop(alias, None)
         data.update(fields)
 
         path.write_text(
