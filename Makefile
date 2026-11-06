@@ -1,11 +1,14 @@
 # BookBot Development Makefile
 
-.PHONY: help install install-dev test test-fast lint format type-check clean build docs
+.PHONY: help hooks install install-dev test test-fast lint format type-check clean build docs
 
 help:  ## Show this help message
 	@echo "BookBot Development Commands:"
 	@echo ""
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2}'
+
+hooks:  ## Install git hooks (strips AI attribution trailers from commit messages)
+	git config core.hooksPath scripts/hooks
 
 install:  ## Install BookBot for production use
 	pip install .
