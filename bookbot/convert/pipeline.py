@@ -79,11 +79,15 @@ class ConversionPipeline:
 
         # Scan for audiobooks
         from ..core.discovery import AudioFileScanner
+        from ..core.review_store import ReviewDecisionStore, apply_stored_decisions
 
         scanner = AudioFileScanner()
         audiobook_sets = scanner.scan_directory(source_path)
+        apply_stored_decisions(audiobook_sets, ReviewDecisionStore(self.config_manager))
 
         for audiobook_set in audiobook_sets:
+            if audiobook_set.review_skipped:
+                continue
             output_path = self._build_output_path(audiobook_set, config)
 
             operation = ConversionOperation(audiobook_set, output_path, config)

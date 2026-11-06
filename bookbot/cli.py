@@ -209,24 +209,32 @@ def _match_query_text(audiobook_set: Any) -> str:
     return str(title)
 
 
-def _run_review_session(
+MatchSessionRow = tuple[Any, list[Any], BaseException | None, str | None, Any | None]
+
+
+def _apply_saved_decisions(
+    config_manager: ConfigManager, audiobook_sets: list[Any]
+) -> list[str | None]:
+    """Apply saved review decisions offline (no provider calls)."""
+    from .core.review_store import ReviewDecisionStore, apply_stored_decisions
+
+    return apply_stored_decisions(audiobook_sets, ReviewDecisionStore(config_manager))
+
+
+def _match_sets(
     config_manager: ConfigManager,
-    folder: Path,
+    audiobook_sets: list[Any],
     *,
     limit: int,
-) -> tuple[
-    list[Any], list[tuple[Any, list[Any], BaseException | None, str | None, Any | None]]
-]:
-    """Scan a folder, fetch candidates, and apply saved review decisions."""
+    metadata_from_files: bool = False,
+) -> list[MatchSessionRow]:
+    """Fetch candidates for scanned sets and apply saved review decisions."""
     from .core.review import mark_set_needs_review
     from .core.review_store import ReviewDecisionStore
 
-    scanner = AudioFileScanner(recursive=True, max_depth=5)
-    audiobook_sets = scanner.scan_directory(folder)
-    if not audiobook_sets:
-        return [], []
-
-    provider = _build_matching_provider(config_manager)
+    provider = _build_matching_provider(
+        config_manager, metadata_from_files=metadata_from_files
+    )
     request_timeout = _matching_request_timeout(config_manager)
     raw_results = asyncio.run(
         _inspect_matches(
@@ -239,9 +247,7 @@ def _run_review_session(
 
     store = ReviewDecisionStore(config_manager)
     matching = config_manager.load_config().matching
-    resolved_results: list[
-        tuple[Any, list[Any], BaseException | None, str | None, Any | None]
-    ] = []
+    resolved_results: list[MatchSessionRow] = []
     for audiobook_set, candidates, error in raw_results:
         if error is not None:
             audiobook_set.provider_candidates = []
@@ -253,6 +259,10 @@ def _run_review_session(
             if saved is not None and saved[0] == "skip":
                 resolved_results.append(
                     (audiobook_set, candidates, error, "skipped", None)
+                )
+            elif saved is not None:
+                resolved_results.append(
+                    (audiobook_set, candidates, error, "accepted_saved", saved[1])
                 )
             else:
                 mark_set_needs_review(audiobook_set, str(error))
@@ -269,8 +279,33 @@ def _run_review_session(
         resolved_results.append(
             (audiobook_set, candidates, None, state, selected_candidate)
         )
+    return resolved_results
 
-    return audiobook_sets, resolved_results
+
+def _run_review_session(
+    config_manager: ConfigManager,
+    folder: Path,
+    *,
+    limit: int,
+    metadata_from_files: bool = False,
+) -> tuple[list[Any], list[MatchSessionRow]]:
+    """Scan a folder, fetch candidates, and apply saved review decisions."""
+    scanner = AudioFileScanner(recursive=True, max_depth=5)
+    audiobook_sets = scanner.scan_directory(folder)
+    if not audiobook_sets:
+        return [], []
+    return audiobook_sets, _match_sets(
+        config_manager,
+        audiobook_sets,
+        limit=limit,
+        metadata_from_files=metadata_from_files,
+    )
+
+
+def _candidate_id(candidate: Any) -> str:
+    """Stable id for a candidate: ``provider:external_id``."""
+    identity = candidate.identity
+    return f"{identity.provider}:{identity.external_id}"
 
 
 def _candidate_payload(
@@ -290,6 +325,7 @@ def _candidate_payload(
         )
     return {
         "index": index,
+        "candidate_id": _candidate_id(candidate),
         "confidence": round(candidate.confidence, 4),
         "confidence_level": candidate.confidence_level.value,
         "title": identity.title,
@@ -393,6 +429,7 @@ def _format_candidate_block(
         ),
         f"     Narrator:  {payload['narrator'] or '[none]'}",
         f"     IDs:       {ids_text}",
+        f"     Pick id:   {payload['candidate_id']}",
         f"     Runtime:   {runtime_text}",
         f"     Series:    {series_text}",
         f"     Providers: {', '.join(payload['providers'])}",
@@ -439,6 +476,15 @@ def _local_guess_payload(audiobook_set: Any) -> dict[str, Any]:
     type=click.Path(path_type=Path),
     help="Write a reviewable rename plan to JSON",
 )
+@click.option(
+    "--match",
+    "run_match",
+    is_flag=True,
+    help=(
+        "Look up each set with the metadata providers (like `bookbot match`). "
+        "Without it, only saved review decisions are applied, offline."
+    ),
+)
 @click.option("--lang", type=str, default="en", help="Preferred language")
 @click.option("--cache", type=click.Path(path_type=Path), help="Cache directory")
 @click.option("--log", type=click.Path(path_type=Path), help="Log file path")
@@ -452,6 +498,7 @@ def scan(
     no_tag: bool,
     template: str | None,
     plan_path: Path | None,
+    run_match: bool,
     lang: str,
     cache: Path | None,
     log: Path | None,
@@ -486,6 +533,11 @@ def scan(
             click.echo("No audiobooks found in the specified directory.")
             return
 
+        if run_match:
+            _match_sets(config_manager, audiobook_sets, limit=5)
+        else:
+            _apply_saved_decisions(config_manager, audiobook_sets)
+
         click.echo(f"Found {len(audiobook_sets)} audiobook set(s):")
 
         for i, audiobook_set in enumerate(audiobook_sets, 1):
@@ -499,7 +551,21 @@ def scan(
                 click.echo(f"   Author: {audiobook_set.author_guess}")
             if audiobook_set.asin_guess:
                 click.echo(f"   ASIN: {audiobook_set.asin_guess}")
-            if audiobook_set.needs_review and audiobook_set.review_reason:
+            if audiobook_set.chosen_identity is not None:
+                chosen = audiobook_set.chosen_identity
+                match_line = chosen.title
+                if chosen.authors:
+                    match_line += f" by {', '.join(chosen.authors)}"
+                if chosen.series_name:
+                    match_line += f" ({chosen.series_name}"
+                    if chosen.series_index:
+                        match_line += f" #{chosen.series_index}"
+                    match_line += ")"
+                click.echo(f"   Match: {match_line}")
+            if audiobook_set.review_skipped:
+                skip_reason = audiobook_set.review_reason or "Skipped by reviewer"
+                click.echo(f"   Skipped: {skip_reason}")
+            elif audiobook_set.needs_review and audiobook_set.review_reason:
                 click.echo(f"   Needs review: {audiobook_set.review_reason}")
 
             if audiobook_set.warnings:
@@ -810,14 +876,63 @@ def review_queue(
                 click.echo(line)
 
 
+def _normalize_isbn(value: str | None) -> str:
+    return "".join(ch for ch in (value or "") if ch.isalnum()).upper()
+
+
+def _select_candidate(
+    candidates: list[Any],
+    *,
+    candidate_index: int | None,
+    candidate_id: str | None,
+    asin: str | None,
+    isbn: str | None,
+) -> tuple[int, Any] | str:
+    """Find the candidate named by exactly one selector, or return an error."""
+    if candidate_index is not None:
+        if candidate_index < 1 or candidate_index > len(candidates):
+            return f"candidate index must be between 1 and {len(candidates)}"
+        return candidate_index, candidates[candidate_index - 1]
+
+    for index, candidate in enumerate(candidates, start=1):
+        identity = candidate.identity
+        if candidate_id is not None and _candidate_id(candidate) == candidate_id:
+            return index, candidate
+        if asin is not None and (identity.asin or "").upper() == asin.upper():
+            return index, candidate
+        if isbn is not None and _normalize_isbn(isbn) in {
+            _normalize_isbn(identity.isbn_13),
+            _normalize_isbn(identity.isbn_10),
+        } - {""}:
+            return index, candidate
+
+    if candidate_id is not None:
+        wanted = f"id {candidate_id}"
+    elif asin is not None:
+        wanted = f"ASIN {asin}"
+    else:
+        wanted = f"ISBN {isbn}"
+    return f"No candidate with {wanted} for this set"
+
+
 @cli.command("accept")
 @click.argument("folder", type=click.Path(exists=True, file_okay=False, path_type=Path))
 @click.option(
     "--set", "set_index", type=int, required=True, help="Review queue set index"
 )
 @click.option(
-    "--candidate", "candidate_index", type=int, help="Candidate index to accept"
+    "--candidate",
+    "candidate_index",
+    type=int,
+    help="Candidate index to accept (the order can change between runs)",
 )
+@click.option(
+    "--candidate-id",
+    type=str,
+    help="Candidate id as shown by `match --json` (provider:external_id)",
+)
+@click.option("--asin", type=str, help="Accept the candidate with this ASIN")
+@click.option("--isbn", type=str, help="Accept the candidate with this ISBN-10/13")
 @click.option("--skip", "skip_set", is_flag=True, help="Skip the set from future plans")
 @click.pass_context
 def accept(
@@ -825,13 +940,27 @@ def accept(
     folder: Path,
     set_index: int,
     candidate_index: int | None,
+    candidate_id: str | None,
+    asin: str | None,
+    isbn: str | None,
     skip_set: bool,
 ) -> None:
     """Persist a manual review decision for one queued set."""
     from .core.review_store import ReviewDecisionStore
 
-    if skip_set == (candidate_index is not None):
-        click.echo("Error: choose exactly one of --candidate or --skip", err=True)
+    chosen_selectors = [
+        candidate_index is not None,
+        candidate_id is not None,
+        asin is not None,
+        isbn is not None,
+        skip_set,
+    ]
+    if sum(chosen_selectors) != 1:
+        click.echo(
+            "Error: choose exactly one of --candidate, --candidate-id, --asin, "
+            "--isbn or --skip",
+            err=True,
+        )
         sys.exit(1)
 
     config_manager = ctx.obj["config_manager"]
@@ -868,26 +997,27 @@ def accept(
         click.echo(f"Skipped set {set_index}: {audiobook_set.source_path}")
         return
 
-    if (
-        candidate_index is None
-        or candidate_index < 1
-        or candidate_index > len(candidates)
-    ):
-        click.echo(
-            f"Error: candidate index must be between 1 and {len(candidates)}",
-            err=True,
-        )
+    selection = _select_candidate(
+        candidates,
+        candidate_index=candidate_index,
+        candidate_id=candidate_id,
+        asin=asin,
+        isbn=isbn,
+    )
+    if isinstance(selection, str):
+        click.echo(f"Error: {selection}", err=True)
         sys.exit(1)
 
-    candidate = candidates[candidate_index - 1]
+    chosen_index, candidate = selection
     store.set_accept(
         audiobook_set,
         candidate,
-        candidate_index=candidate_index,
+        candidate_index=chosen_index,
     )
     click.echo(
-        f"Accepted candidate {candidate_index} for set {set_index}: "
-        f"{candidate.identity.title} [{audiobook_set.source_path}]"
+        f"Accepted candidate {chosen_index} for set {set_index}: "
+        f"{candidate.identity.title} ({_candidate_id(candidate)}) "
+        f"[{audiobook_set.source_path}]"
     )
 
 
@@ -1652,6 +1782,7 @@ def plan_create(
         click.echo("No audiobooks found in the specified directory.")
         return
 
+    _apply_saved_decisions(config_manager, audiobook_sets)
     _create_and_save_plan(
         config=config,
         folder=folder,
@@ -2630,6 +2761,7 @@ def organize(
         click.echo("No audiobooks found.")
         return
 
+    _apply_saved_decisions(ctx.obj["config_manager"], audiobook_sets)
     organizer = SmartOrganizer()
     plan = organizer.propose_reorganization(source, target, template, audiobook_sets)
 
@@ -3061,6 +3193,7 @@ def sidecar_write(
         return
 
     ab_set = audiobook_sets[0]
+    _apply_saved_decisions(ctx.obj["config_manager"], [ab_set])
     manager = SidecarManager()
 
     if ab_set.chosen_identity and not from_tags:
