@@ -1345,7 +1345,7 @@ class AudioFileScanner:
             )
         )
 
-        album_series: str | None = None
+        folder_album_series: str | None = None
         if (
             not prefer_folder_title
             and not in_author_title_layout
@@ -1364,7 +1364,7 @@ class AudioFileScanner:
                     "disagree; using the folder as the title and the album as "
                     "the series. Confirm before applying."
                 )
-            album_series = tag_title
+            folder_album_series = tag_title
             tag_title = None
 
         title_guess = (
@@ -1373,16 +1373,14 @@ class AudioFileScanner:
             else tag_title
         )
         author_guess = tag_author or parent_author
-        if album_series is not None:
+        if folder_album_series is not None:
             series_split = self._series_number_title_guess(title_guess)
             if series_split is None:
-                album_name, album_volume = self._album_series_guess(
-                    tracks, title_guess
-                )
+                album_name, album_volume = self._album_series_guess(tracks, title_guess)
                 return (
                     title_guess,
                     author_guess,
-                    album_name or album_series,
+                    album_name or folder_album_series,
                     album_volume or folder_volume,
                 )
 
@@ -1432,9 +1430,7 @@ class AudioFileScanner:
                     author = self._parent_author_guess(parent)
                 if author is None:
                     grandparent_name = self._clean_metadata_name(parent.parent.name)
-                    if grandparent_name and self._looks_like_author(
-                        grandparent_name
-                    ):
+                    if grandparent_name and self._looks_like_author(grandparent_name):
                         author = grandparent_name
         return title, author, series, volume
 

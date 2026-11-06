@@ -370,13 +370,13 @@ def test_sidecar_write_uses_saved_decision(
         config_dir,
         "sidecar",
         "write",
-        str(audiobook_set.source_path),
+        str(library),
         "--format",
         "json",
     )
 
     assert result.exit_code == 0, result.output
-    payload = json.loads((audiobook_set.source_path / "metadata.json").read_text())
+    payload = json.loads((library / "metadata.json").read_text())
     assert payload["title"] == "All Systems Red"
 
 

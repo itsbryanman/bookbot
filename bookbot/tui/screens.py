@@ -923,6 +923,9 @@ class MatchReviewScreen(Static):
                 saved = self.review_store.apply_saved_decision(audiobook_set, [])
                 if saved is not None and saved[0] == "skip":
                     state = "skipped"
+                elif saved is not None:
+                    # The saved identity snapshot works offline.
+                    state = "accepted_saved"
                 else:
                     mark_set_needs_review(audiobook_set, str(result))
                     state = "error"

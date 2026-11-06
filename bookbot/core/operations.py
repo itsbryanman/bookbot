@@ -174,6 +174,14 @@ class TransactionManager:
         temp_operations: list[RenameOperation] = []
         transaction_type = "sidecar" if not plan.operations else "rename"
 
+        from .review_store import ReviewDecisionStore
+
+        review_store = ReviewDecisionStore(self.config_manager)
+        pre_apply_keys = [
+            review_store.review_key(audiobook_set)
+            for audiobook_set in plan.audiobook_sets
+        ]
+
         def persist_journal(status: str = "in_progress") -> None:
             self.record_transaction(
                 transaction_id,
@@ -266,6 +274,18 @@ class TransactionManager:
 
             # Save transaction log for undo
             persist_journal(status="completed")
+
+            # Saved review decisions are keyed by folder + track names; copy
+            # them to the new layout so the next scan still finds them.
+            if plan.operations:
+                try:
+                    review_store.carry_decisions_through_plan(plan, pre_apply_keys)
+                except Exception as exc:  # the files are already in place
+                    logger.warning(
+                        "Could not carry saved review decisions to new paths",
+                        transaction_id=transaction_id,
+                        error=str(exc),
+                    )
 
             # Prune source folders the apply just emptied. Without this the
             # old layout coexists with the new one (visible on multi-disc

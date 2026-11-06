@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from datetime import datetime
+from pathlib import Path
 from typing import Literal
 
 from pydantic import BaseModel
@@ -12,7 +14,13 @@ from pydantic import BaseModel
 from ..config.manager import ConfigManager
 from ..config.models import MatchingConfig
 from .matching import AdvancedMatcher
-from .models import AudiobookSet, MatchCandidate
+from .models import (
+    AudiobookSet,
+    MatchCandidate,
+    MatchConfidence,
+    ProviderIdentity,
+    RenamePlan,
+)
 from .review import (
     accept_candidate_for_set,
     auto_accept_candidate,
@@ -38,9 +46,58 @@ class ReviewDecision(BaseModel):
 
     action: Literal["accept", "skip"]
     candidate: StoredCandidateSelector | None = None
+    # Full snapshot of the accepted identity, so later runs can apply the
+    # decision without asking providers again. Decisions saved before this
+    # field existed only carry ``candidate``.
+    identity: ProviderIdentity | None = None
     candidate_index: int | None = None
     reason: str | None = None
     decided_at: str
+
+
+LEGACY_DECISION_REASON = (
+    "Saved decision has no stored metadata (made by an older BookBot); "
+    "re-accept to refresh saved decision"
+)
+
+
+def _snapshot_candidate(identity: ProviderIdentity) -> MatchCandidate:
+    return MatchCandidate(
+        identity=identity,
+        confidence=1.0,
+        confidence_level=MatchConfidence.HIGH,
+        match_reasons=["Saved review decision"],
+    )
+
+
+def apply_stored_decisions(
+    audiobook_sets: list[AudiobookSet],
+    store: ReviewDecisionStore,
+) -> list[str | None]:
+    """Apply saved decisions to freshly scanned sets without calling providers.
+
+    Returns one state per set: ``"skipped"``, ``"accepted_saved"``,
+    ``"needs_review"`` (an old decision without an identity snapshot) or
+    ``None`` when nothing was saved for the set.
+    """
+    decisions = store.load()
+    states: list[str | None] = []
+    for audiobook_set in audiobook_sets:
+        decision = decisions.get(store.review_key(audiobook_set))
+        if decision is None:
+            states.append(None)
+        elif decision.action == "skip":
+            skip_set_from_plans(audiobook_set, decision.reason or "Skipped by reviewer")
+            states.append("skipped")
+        elif decision.identity is not None:
+            accept_candidate_for_set(
+                audiobook_set, _snapshot_candidate(decision.identity)
+            )
+            states.append("accepted_saved")
+        else:
+            mark_set_needs_review(audiobook_set, LEGACY_DECISION_REASON)
+            states.append("needs_review")
+    return states
 
 
 class ReviewDecisionStore:
@@ -104,6 +161,7 @@ class ReviewDecisionStore:
         decisions[self.review_key(audiobook_set)] = ReviewDecision(
             action="accept",
             candidate=self._selector_from_candidate(candidate),
+            identity=candidate.identity,
             candidate_index=candidate_index,
             decided_at=datetime.now().isoformat(),
         )
@@ -146,7 +204,9 @@ class ReviewDecisionStore:
             return None
         matched_candidate = self._find_candidate(candidates, decision.candidate)
         if matched_candidate is None:
-            return None
+            if decision.identity is None:
+                return None
+            matched_candidate = _snapshot_candidate(decision.identity)
         accept_candidate_for_set(audiobook_set, matched_candidate)
         return "accept", matched_candidate
 
@@ -182,6 +242,56 @@ class ReviewDecisionStore:
 
         mark_set_needs_review(audiobook_set, reason or "Review required")
         return "review", best_match
+
+    def carry_decisions_through_plan(
+        self,
+        plan: RenamePlan,
+        pre_apply_keys: list[str],
+    ) -> int:
+        """Copy decisions to the keys the plan's sets have after apply.
+
+        Keys are built from the set's folder and track names, so an applied
+        plan would orphan them. ``pre_apply_keys`` holds each
+        ``plan.audiobook_sets`` key computed before any file moved. The old
+        key is kept, so ``undo`` lands the book back on a matching key.
+        Returns the number of decisions copied.
+        """
+        decisions = self.load()
+        moves = {
+            operation.old_path.resolve(strict=False): operation.new_path
+            for operation in plan.operations
+        }
+        copied = 0
+        for audiobook_set, old_key in zip(
+            plan.audiobook_sets, pre_apply_keys, strict=True
+        ):
+            decision = decisions.get(old_key)
+            if decision is None:
+                continue
+            new_tracks = [
+                track.model_copy(
+                    update={
+                        "src_path": moves.get(
+                            track.src_path.resolve(strict=False), track.src_path
+                        )
+                    }
+                )
+                for track in audiobook_set.tracks
+            ]
+            parents = {track.src_path.parent for track in new_tracks}
+            if not parents:
+                continue
+            new_root = Path(os.path.commonpath([str(parent) for parent in parents]))
+            moved = audiobook_set.model_copy(
+                update={"source_path": new_root, "tracks": new_tracks}
+            )
+            new_key = self.review_key(moved)
+            if new_key != old_key:
+                decisions[new_key] = decision
+                copied += 1
+        if copied:
+            self.save(decisions)
+        return copied
 
     @staticmethod
     def _selector_from_candidate(
