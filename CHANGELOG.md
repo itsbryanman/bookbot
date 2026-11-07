@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.3.0 - 2026-11-07
 
 Every entry below is covered by a test in `tests/` (file named in brackets).
 
