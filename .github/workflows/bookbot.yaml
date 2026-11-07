@@ -4,13 +4,31 @@ on:
   push:
     tags:
       - "v*"
+  # "Create Release" pushes the tag with GITHUB_TOKEN, and GitHub does not
+  # start workflows from such pushes; it dispatches this workflow on the tag
+  # instead. Run manually with: gh workflow run bookbot.yaml --ref vX.Y.Z
+  workflow_dispatch:
 
 permissions:
   contents: write
   id-token: write
 
 jobs:
+  guard:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require a version tag
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          case "$REF_TYPE:$REF_NAME" in
+            tag:v*) echo "Releasing $REF_NAME" ;;
+            *) echo "Run this workflow on a v* tag, not $REF_TYPE $REF_NAME" >&2; exit 1 ;;
+          esac
+
   test:
+    needs: guard
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
