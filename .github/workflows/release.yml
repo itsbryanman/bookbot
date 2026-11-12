@@ -14,6 +14,7 @@ on:
 
 permissions:
   contents: write
+  actions: write
 
 jobs:
   bump-and-tag:
@@ -96,7 +97,15 @@ jobs:
           git add pyproject.toml bookbot/__init__.py Dockerfile
           git commit -m "Release ${TAG}"
           git tag "$TAG"
-          git push origin main --tags
+          git push origin main "$TAG"
+
+      - name: Start the publish workflow on the tag
+        # A tag pushed with GITHUB_TOKEN does not trigger bookbot.yaml by
+        # itself; workflow_dispatch is the exception GitHub allows.
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.bump.outputs.tag }}
+        run: gh workflow run bookbot.yaml --ref "$TAG"
 
       - name: Summary
         env:
@@ -110,7 +119,7 @@ jobs:
           echo "- **New version:** ${NEW_VERSION}" >> "$GITHUB_STEP_SUMMARY"
           echo "- **Tag:** ${TAG}" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "The tag push will trigger the Release workflow which handles:" >> "$GITHUB_STEP_SUMMARY"
+          echo "The Release workflow (bookbot.yaml) was dispatched on the tag and handles:" >> "$GITHUB_STEP_SUMMARY"
           echo "- Full test matrix (Python 3.10-3.13)" >> "$GITHUB_STEP_SUMMARY"
           echo "- Package build and smoke test" >> "$GITHUB_STEP_SUMMARY"
           echo "- PyPI publish" >> "$GITHUB_STEP_SUMMARY"
