@@ -18,6 +18,7 @@ Every entry below is covered by a test in `tests/` (file named in brackets).
 - `apply --plan-out PATH` and `--no-update-plan` (also on `plan apply`). [test_apply_plan_preflight.py]
 - `dedupe --duration-tolerance PCT` (default 2). [test_dedupe_accuracy.py]
 - `make hooks` installs a commit-msg hook that strips AI co-author trailers. [test_commit_msg_hook.py]
+- CI workflow `Attribution` fails any pushed or PR commit whose author, committer or `Co-authored-by` trailer is Claude or Copilot, or that has the Claude Code footer, including commits made on GitHub. [test_check_ai_attribution.py]
 
 ### Changed
 - Saved review decisions store the full chosen metadata. `scan`, `plan create`, `organize`, `convert` and `sidecar write` apply them without contacting providers. Decisions from older versions mark the book as needing review ("re-accept to refresh saved decision"). [test_stored_decisions.py]

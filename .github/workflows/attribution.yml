@@ -1,0 +1,37 @@
+name: Attribution
+
+# Rejects commits whose author, committer or Co-authored-by trailer is
+# Claude or Copilot, or that carry the "Generated with Claude Code" footer.
+# GitHub lists those identities as contributors. Unlike the local
+# commit-msg hook, this also covers commits made on GitHub (Copilot coding
+# agent, web edits) and on other machines. Make "no-ai-attribution" a
+# required status check on main to block merging them.
+
+on:
+  pull_request:
+  push:
+    branches: ["**"]
+
+permissions:
+  contents: read
+
+jobs:
+  no-ai-attribution:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Check commit authors, committers and trailers
+        env:
+          EVENT: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.sha }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: python scripts/check_ai_attribution.py --from-ci-env
